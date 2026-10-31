@@ -49,6 +49,9 @@ data/cdp_config.json
 data/llm_config.json
 data/persona.json
 data/chrome-profile/
+data/accounts.json
+data/license*.pem
+data/risk_state.json
 
 # gauntlet 工具产物
 .metrics/

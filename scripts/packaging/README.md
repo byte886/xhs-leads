@@ -1,0 +1,48 @@
+# macOS 壳（scripts/packaging）说明
+
+> 本目录集中「壳 + 打包」全部代码：入口、PyInstaller 配置、构建脚本。业务代码在 `backend/`，前端在 `frontend/`。
+
+## 构成（三件套）
+
+| 文件 | 职责 |
+|---|---|
+| `launcher.py` | **应用壳入口**（PyInstaller 入口脚本，也是开发态 CLI） |
+| `xhs_leads.spec` | PyInstaller 打包配置（产物 `dist/XHSLeads.app`，bundle `com.xhsleads.app`） |
+| `build_mac.sh` | 一键构建：前端重建（可跳过）→ venv PyInstaller 打包 |
+
+## launcher.py 职责
+
+1. **数据目录路由**：`XHS_LEADS_DATA` 覆盖 > 打包态 `~/Library/Application Support/xhs-leads/data` > 开发态项目根 `data/`。
+2. **旧目录迁移**：首次启动自动把旧 `~/Library/Application Support/codex-zhuke/data` 复制到新目录（排除 logs/私钥/Chrome 锁文件 `Singleton*`/`RunningChromeVersion`/`LOCK*` 等瞬时文件，整体 try/except 容错——失败仅告警不阻塞启动），保住登录态/数据库/授权。
+3. **环境注入**：`XHS_LEADS_DATA` 写入进程环境，`server/config` 统一读取；开发态把 `backend/` 注入 `sys.path`（`import src.*` 需要父目录，与 spec pathex 语义一致）。
+4. **服务与生命周期**：同进程起 uvicorn（后台线程，端口冲突自动找空闲替代），服务就绪后 `webbrowser` 打开 UI；SIGINT/SIGTERM（cmd+Q / kill）优雅停服；日志重定向到 `data/logs/app.log`（GUI 模式无控制台）。
+
+## xhs_leads.spec 要点
+
+- **pathex=[ROOT/backend]**：`src` 包父目录入 path（**不要**写成 `backend/src`——`import src` 需要父目录；写错会导致 `collect_submodules("src")` 静默返回 0、打包后启动 `ModuleNotFoundError: No module named 'src'`）。
+- **hiddenimports**：全量收集 `src` + `uvicorn` 子模块（防动态导入漏包）。
+- **datas**：`frontend/dist`（前端静态托管）、`extension/lib`（DOM 提取源）、`scripts/browser`（授权代点 AppleScript）+ playwright driver。
+- **console=False**：GUI 应用；日志由 launcher 落盘。
+
+## 构建与冒烟
+
+```bash
+# 构建（默认先重建前端；跳过用 --no-frontend-build）
+bash scripts/packaging/build_mac.sh
+# 产物：dist/XHSLeads.app（bundle com.xhsleads.app，显示名 XHS Leads）
+
+# 冒烟（免开浏览器；CZ_SELF_EXIT_AFTER=N 可自动优雅退出）
+CZ_NO_BROWSER=1 dist/XHSLeads.app/Contents/MacOS/XHSLeads
+# 验证：curl http://127.0.0.1:8791/ → 200，页面标题「XHS Leads · 小红书获客助手」
+# 日志：~/Library/Application Support/xhs-leads/data/logs/app.log
+# 停止：lsof -tiTCP:8791 | xargs kill
+
+# 开发态直跑壳（等效 .app 逻辑，数据目录=项目根 data/）
+backend/.venv/bin/python scripts/packaging/launcher.py
+```
+
+## 已知边界
+
+- **前端产物不入库**：`frontend/dist/` 在 .gitignore，交付物为本地构建；克隆仓库后需 `cd frontend && npm install && npm run build`。
+- **迁移不覆盖已存在数据**：新数据目录已存在则跳过迁移（幂等）。
+- Windows（C 批）未开工：当前壳仅 macOS（`uname -s` 为 Darwin 时可用）。

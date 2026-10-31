@@ -1,62 +1,49 @@
 # xhs-leads
 
-小红书「低粉爆文」采集/克隆/发布本地工具（FastAPI + Vue3 + 外部 Chrome CDP）。
+小红书「低粉爆文」采集 / 克隆 / 发布本地工具（FastAPI 后端 + Vue3 前端 + 外部 Chrome CDP，macOS 壳）。
 
-## 这是什么
+**核心产品目标**：帮助个人创业者 / 小商家寻找高价值可参考的低粉爆文笔记进行模仿。
 
-**核心产品目标：帮助用户寻找高价值可参考的低粉爆文笔记进行模仿，一切功能服务于此。**
-
-- **采集**：按关键词采集小红书笔记 → 详情/互动数据补全 → 评分（低粉爆款 4 维权重：like_fan_ratio 40% / low_fan 25% / interaction_health 20% / freshness 15%）
-- **作者榜**：作者价值聚合视图（P2）
-- **一键克隆**：拉取爆款笔记 + 封面优先/去重提取图片 → 生成可编辑新稿（标题/正文/标签/图片可调整、追加、拖拽排序）
-- **客户库**：笔记互动用户价值视图（P4）
+- **采集**：按关键词采集小红书笔记 → 详情/互动数据补全 → 低粉爆款 4 维评分（like_fan_ratio 40% / low_fan 25% / interaction_health 20% / freshness 15%）
+- **一键克隆**：拉取爆款笔记 + 封面优先/去重提取图片 → 生成可编辑新稿（标题/正文/标签/图片可调）
+- **客户库**：笔记互动用户价值视图（评论区线索 → 意向分级 → 聚合 → 去联系）
 - **草稿 / 发布**：保存草稿后可再编辑再发布；**发布永远手动（红线）**
-- **登录**：外部 Chrome CDP（9223 + 独立 profile `~/.xhs-leads-profile`），扫码登录 + 读 Chrome Cookie 库；生产环境由内置脚本引导用户自助开启远程调试
-
-## 架构（v2.0 定稿，无 Docker）
-
-```
-外部 Google Chrome（CDP 9223 + ~/.xhs-leads-profile，小红书登录态）
-        ↓ ① CDP + 读 Cookie 库
-FastAPI 业务壳 :8791（采集/评分/克隆/客户库/草稿/发布护栏）
-        ↓ ② 静态托管
-Vue3 前端（npm run build → app/web）
-```
-
-- 已移除 Docker（采集/发布不再走 xhs-mcp 容器）
-- 生产交付无豆包/无 AI 环境：CDP 仅调试；生产靠 `app/scripts/setup_chrome.py` / `pick_chrome.py` 引导用户自助
-
-## 目录结构
-
-- `docs/` — PRD、调研方案、需求约束、质检报告
-- `docs/research/` — 生财 MCP + Google/GitHub 调研（step1-6b，带来源）
-- `docs/project/` — 开发对齐机制、待办事项、**需求约束清单**、资产清单、**新机器部署手册**
-- `app/src/src/` — 业务代码（server.py / browser_client.py / collect_pipeline.py / score.py / cookie_reader.py）
-- `app/frontend/` — Vue3 前端源码（npm run build → `app/web/`）
-- `app/scripts/` — 生产引导脚本（setup_chrome.py / pick_chrome.py）
-- `tests/` — 9 个测试文件 173 个测试
-
-## 状态（2026-10-28）
-
-- ✅ P1 采集/评分 / P2 作者榜 / P4 客户库 / 一键克隆（图片提取增强）/ 草稿 / 筛选透传
-- ✅ 六维质检全绿：测试 173 EXIT=0、覆盖率 85%、圈复杂度全项目 ≤8、CRAP 数值真实、变异存活 0、DRY 0 候选
-- ✅ 提交链：`0a74046`（挂起根治+85%）→ `8bfb681`（质检六维全绿收尾）
-- ⏳ 平台限流中（10-28 仍 captcha），解除后跑真实链路验证；发布永远手动
-- 📋 待办与开放项见 `docs/project/待办事项.md`、`docs/project/需求约束清单.md`
+- **登录**：外部 Chrome CDP（独立 profile `~/.xhs-leads-profile`），扫码登录 + 读 Chrome Cookie 库
 
 ## 快速开始
 
-**→ 先读 `docs/project/新机器部署手册.md`（v2.0：Python 业务壳 + Vue3 构建 + CDP 登录 + 测试/质检 + 纪律红线全覆盖）。**
+> **完整目录地图、命名规范与路径语义见 [`docs/project-structure.md`](docs/project-structure.md)**（唯一路径总览）。
 
 ```bash
-# 后端
-cd app && python3 -m venv .venv && source .venv/bin/activate
-pip install fastapi "uvicorn[standard]" pydantic httpx pytest pytest-cov pytest-timeout coverage import-linter radon
-python3 -m uvicorn src.server:app --host 127.0.0.1 --port 8791 --app-dir app/src &
+# 后端（PYTHONPATH=backend，勿写成 backend/src）
+PYTHONPATH=backend backend/.venv/bin/python -m uvicorn src.server:app --host 127.0.0.1 --port 8791
 
-# 前端（改动后必须重建）
-cd app/frontend && npm install && npm run build
+# 前端（改动后必须重建 → frontend/dist/）
+cd frontend && npm install && npm run build
 
-# 测试
-PYTHONPATH=app/src app/.venv/bin/python -m pytest -q --no-header -p no:cacheprovider -W ignore
+# 测试（非登录态基线 100 passed / 8 deselected）
+cd backend && .venv/bin/python -m pytest
+
+# macOS 壳打包 → dist/XHSLeads.app
+bash scripts/packaging/build_mac.sh
 ```
+
+## 文档索引
+
+| 主题 | 位置 |
+|---|---|
+| 目录地图 / 命名规范 / 路径总览 | [`docs/project-structure.md`](docs/project-structure.md) |
+| 后端模块与测试 | [`backend/README.md`](backend/README.md) |
+| 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
+| macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |
+| UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
+| PRD / 调研 / 质检历史 | `docs/`（含 `research/`、`project/`） |
+
+## 状态（2026-10-31）
+
+- ✅ 命名与目录结构重构批完成（提交 `8d4f432` + `08a963f`）；仓库改名 `byte886/xhs-leads`（PUBLIC）
+- ✅ 后端 A 批非登录态回归全绿：**100 passed / 8 deselected**
+- ✅ 前端重建成功（`frontend/dist/`）；`.app` 重打包冒烟通过（HTTP 200，标题「XHS Leads · 小红书获客助手」）
+- ✅ UI 回归 t 系列：**PASS=9 / FAIL=0 / SKIP=2**（数据依赖自动跳过）
+- ⏳ e1 真实链路六场景待补跑（需 9223 可见 Chrome + 小红书已登录；登录失效为外部阻塞）
+- ⏳ push 待 e1 全绿后执行（成功前不 push）；C 批 Windows 打包未开工

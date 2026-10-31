@@ -3,7 +3,7 @@
 
 要点：
 - 入口 scripts/launcher.py（起 uvicorn + 开浏览器 + 优雅退出）。
-- pathex 含 backend/src，使 `src.*` 可被收集。
+- pathex 含 backend（src 包父目录），使 `src.*` 可被收集。
 - datas 打包前端构建产物 frontend/dist（server 静态托管）+ playwright driver（引擎 node 子进程）。
 - hiddenimports 全量收集 src / uvicorn 子模块，避免动态导入漏包。
 - console=False：GUI 应用；launcher 已将 stdout/stderr 重定向到数据目录 logs/app.log。
