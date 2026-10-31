@@ -49,6 +49,7 @@ data/cdp_config.json
 data/llm_config.json
 data/persona.json
 data/chrome-profile/
+data/profile/   # 引擎无头持久化 profile（dev 态 data/profile、打包态 App 内 data/profile）——登录态/全部运行时状态
 data/accounts.json
 data/license*.pem
 data/risk_state.json

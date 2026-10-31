@@ -41,6 +41,7 @@
 4. **状态提示条**：后端任务状态接口扩展动作文案（当前动作 + 进度），前端全局状态条轮询显示；审计日志（logger.py）保持不变，两者并存不混淆。
 5. **e1 基建**：引擎带 `--remote-debugging-port=<固定端口>` 启动供 e1 连接；9223 外部 Chrome 测试路径退役。
 6. **运行模式（dev/prod）**：打包进壳后改码必须重打包、日志落盘、前端静态——不便调试；故显式区分（`XHS_LEADS_MODE=dev|prod`，缺省 auto：PyInstaller 打包态→prod、源码→dev）。dev=源码直跑（vite HMR 5173 + 控制台日志，t/e1 回归所在）；prod=壳内交付形态（静态托管 + app.log，只做壳冒烟验收）。详见 `scripts/packaging/README.md` 运行模式节。
+7. **壳内 UI 载体 = pywebview 内嵌窗口（R 批最终定稿，替代 webbrowser.open）**：launcher 起 uvicorn 就绪后 `webview.create_window("XHS Leads", url, 1280x800)` 内嵌 WKWebView 呈现前端——打开 `.app` 后工具 UI 与小红书登录镜像小窗**都在壳窗口内**、外部零 Chrome 窗口（根因：旧 launcher 用 `webbrowser.open` 弹系统浏览器，已全文件重写移除）。`window.events.closed` 关窗优雅停服；`CZ_NO_BROWSER=1` 保留无窗口事件循环（自动化冒烟）；spec `hiddenimports += collect_submodules("webview")`；退出通道 = 关窗 / cmd+Q / `CZ_SELF_EXIT_AFTER` / `CZ_EXIT_ON_FILE`（GUI 主循环下 Python 信号 handler 延迟为已知边界，见 packaging README「退出方式」）。
 
 ## 四、批次编排（R 批 — App 内呈现形态）
 
