@@ -44,7 +44,7 @@ function startTimers() {
         emit('close')
       }
     } catch { /* 后端未就绪静默 */ }
-  }, 3000)
+  }, 1000)
 }
 
 function stopTimers() {

@@ -14,6 +14,7 @@
     page = await engine_pool.pool.get("collect_a").new_page()
 """
 import asyncio
+import json
 import os
 import time
 
@@ -161,6 +162,24 @@ class AccountEngine:
                     await self._context.add_init_script(_STEALTH_SRC)
                 except Exception as se:  # noqa: BLE001
                     log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
+                # 登录态重启保留（R-6.6）：Chrome 磁盘 Cookies 经钥匙串加密，无头环境
+                # 重启后内存为空（CDP 读不到）；以 data/cookies.json（注入时明文持久化）
+                # 为权威源，启动即回注——登录态跨重启/重打包保留，守卫可秒回 APP。
+                # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存
+                # （read_cookies 走 CDP 会话，启动期可能挂起；且启动后内存本就为空）。
+                try:
+                    saved = []
+                    cf = self.cookie_file
+                    if cf.exists():
+                        data = json.loads(cf.read_text())
+                        saved = data.get("cookies", data) if isinstance(data, dict) else data
+                    if saved:
+                        await self._context.add_cookies(saved)
+                        log.info("账号 %s 回注持久化 Cookie %d 条", self.account_id, len(saved))
+                    else:
+                        log.info("账号 %s 无持久化 Cookie 可回注", self.account_id)
+                except Exception as re:  # noqa: BLE001
+                    log.warning("账号 %s 回注持久化 Cookie 失败: %s", self.account_id, re)
                 xlog.audit(self.account_id, action="engine_start", ok=True,
                            detail=f"dir={config.home_relative(self.user_data_dir)}")
                 return self._context

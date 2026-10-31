@@ -88,6 +88,17 @@ def main() -> int:
         if str(backend) not in sys.path:
             sys.path.insert(0, str(backend))
 
+    os.environ["XHS_LEADS_DATA"] = str(data_dir)  # 全局注入：server/config 统一读取
+    # 注意：必须在 import config 之前注入——config 模块级 DATA_DIR 常量在 import 时定格，
+    # 注入晚了会退化为 ROOT/data（打包态 = .app 内），引擎 profile/持久化 Cookie 全跑进
+    # .app 包内，重打包即丢登录态（R-6.6 实测定位的顺序回归）。
+
+    # 开发态：确保 backend（src 包父目录）在 sys.path（打包态由 spec pathex 提供）
+    if not getattr(sys, "_MEIPASS", None):
+        backend = pathlib.Path(__file__).resolve().parents[2] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+
     from src import config, server  # noqa: PLC0415（先注入环境再 import）
 
     # 运行模式（R 批）：dev=源码直跑默认保留控制台（改码即生效、日志即时可见）；
@@ -97,13 +108,6 @@ def main() -> int:
         keep_console = "1" if config.is_dev() else "0"
     if keep_console != "1":
         _redirect_logs(data_dir)
-    os.environ["XHS_LEADS_DATA"] = str(data_dir)  # 全局注入：server/config 统一读取
-
-    # 开发态：确保 backend（src 包父目录）在 sys.path
-    if not getattr(sys, "_MEIPASS", None):
-        backend = pathlib.Path(__file__).resolve().parents[2] / "backend"
-        if str(backend) not in sys.path:
-            sys.path.insert(0, str(backend))
 
     port = config.find_free_port(8791)
     print(f"[xhs-leads] 运行模式: {config.mode()}")
@@ -298,10 +302,16 @@ def main() -> int:
             r0 = _post_json("/api/auth/login_begin", {})
             if r0 and r0.get("already_logged_in"):
                 return  # 已登录：无需守卫
+            # R-6.6 提速：login_begin 依赖 30s 缓存，重启后缓存空会误报未登录 → 导航登录页。
+            # 引擎实时判定兜底（login_status 会走引擎 CDP 真实判定）：已登录则秒回 APP 首页。
+            ls = _get_json("/api/login_status")
+            if ls and ls.get("logged_in"):
+                print("[xhs-leads] 引擎已登录，跳过登录页")
+                return
             if not r0 or not r0.get("ok"):
                 print(f"[xhs-leads] login_begin 未就绪: {(r0 or {}).get('error', '重试')}")
             in_login = False
-            while not stop.wait(2.0):
+            while not stop.wait(0.5):
                 if in_login:
                     continue  # 正在登录页（局部轮询控制），此处等待退出
                 st = _get_json("/api/auth/login_begin_state")
@@ -342,9 +352,10 @@ def main() -> int:
                         for c in (cs or []) for m in c.values()
                     )
                     if has_id:
-                        # 真登录态已现：注入引擎（节流 8s）；注入成功后 break 回 APP。
-                        # 注入未通过（极少见）也不拉回——登录态存在，等待下一次注入判定收敛。
-                        if _t.monotonic() - _t_last_import >= 8.0:
+                        # 真登录态已现：快速注入引擎（R-6.6 提速：节流 2s——id_token 是
+                        # 真实登录标志，无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。
+                        # 注入成功后 break 回 APP；未通过（极少见）也不拉回，等待下次判定。
+                        if _t.monotonic() - _t_last_import >= 2.0:
                             _t_last_import = _t.monotonic()
                             r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
                             if r and r.get("logged_in"):
@@ -372,11 +383,28 @@ def main() -> int:
                             except Exception:  # noqa: BLE001
                                 pass
                             _inject_force_login()
-                    stop.wait(3.0)
+                    stop.wait(1.0)
                 in_login = False
                 if ok:
-                    # 仅真登录成功回前端（强制登录：失败/中途退出不回，保持登录页置顶）
-                    window.load_url(f"{base}/")
+                    # 仅真登录成功回前端（强制登录：失败/中途退出不回，保持登录页置顶）。
+                    # R-6.6 提速：load_url + evaluate_js 双保险（打包态 cocoa load_url 曾
+                    # 静默失效——历史「登录成功却回不去」的最后一跳隐患），确保一次切回。
+                    for _attempt in range(3):
+                        try:
+                            window.load_url(f"{base}/")
+                        except Exception:  # noqa: BLE001
+                            pass
+                        try:
+                            window.evaluate_js("window.location.href = '%s'" % f"{base}/")
+                        except Exception:  # noqa: BLE001
+                            pass
+                        try:
+                            cur = window.get_current_url() or ""
+                            if cur.startswith(base):
+                                break  # 已切回 APP
+                        except Exception:  # noqa: BLE001
+                            pass
+                        stop.wait(1.0)
 
         window = webview.create_window(
             APP_TITLE, url, width=_WINDOW_W, height=_WINDOW_H, min_size=(1024, 700)
