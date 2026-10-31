@@ -16,7 +16,7 @@
 2. **旧目录迁移**：首次启动自动把旧 `~/Library/Application Support/codex-zhuke/data` 复制到新目录（排除 logs/私钥/Chrome 锁文件 `Singleton*`/`RunningChromeVersion`/`LOCK*` 等瞬时文件，整体 try/except 容错——失败仅告警不阻塞启动），保住登录态/数据库/授权。
 3. **环境注入**：`XHS_LEADS_DATA` 写入进程环境，`server/config` 统一读取；开发态把 `backend/` 注入 `sys.path`（`import src.*` 需要父目录，与 spec pathex 语义一致）。
 4. **服务与生命周期**：同进程起 uvicorn（后台线程，端口冲突自动找空闲替代），服务就绪后**pywebview 内嵌 WKWebView 窗口呈现 UI**（打开 `.app` 后工具 UI 与小红书登录页都在壳窗口内、外部零 Chrome 窗口；R 批需求变更，替代旧 `webbrowser.open` 系统浏览器）；`CZ_NO_BROWSER=1` 走无窗口事件循环（自动化冒烟路径）。退出：关窗 / cmd+Q / `CZ_SELF_EXIT_AFTER` 测试钩子 / `CZ_EXIT_ON_FILE` 外部退出文件 → 优雅停服（见「退出方式」）。
-5. **登录守卫（R-6.5）**：`_login_guard` 后台线程——前端「前往登录」触发 `/api/auth/login_begin` 置 pending → 守卫轮询到 pending 后**壳窗口内真实导航小红书登录页**（`load_url` + `evaluate_js` 双保险，打包态 cocoa `load_url` 曾静默失效）→ 用户原生扫码/手机号+验证码/微信完成（验证码真实走「获取验证码」）→ 守卫 `get_cookies()` 捕获 `web_session`（含 HttpOnly）→ `POST /api/auth/import_cookies` 注入引擎独立 profile → 引擎真实判定通过后回前端；**注入未通过（占位 web_session）留在登录页继续轮询**（15s 节流），仅真登录成功或 30 分钟超时才回 APP；`CZ_SKIP_LOGIN_GUARD=1` 跳过守卫。
+5. **登录守卫（R-6.5/R-6.6 强制登录）**：`_login_guard` 后台线程——**启动即强制**：服务就绪主动 `POST /api/auth/login_begin`（不依赖前端按钮）→ 守卫轮询到 pending 后**壳窗口内真实导航小红书整页登录页** `xiaohongshu.com/login?redirectPath=…`（`load_url` + `evaluate_js` 双保险，打包态 cocoa `load_url` 曾静默失效）→ 用户原生扫码/手机号+验证码/微信完成（验证码真实走「获取验证码」）→ 守卫 `get_cookies()` 捕获 cookie，**只认 `id_token`**（登录成功专属令牌；未登录态 `web_session` 是占位值，以其触发会注入无效会话并被 URL 锁死覆盖真实会话）→ `POST /api/auth/import_cookies` 注入引擎独立 profile → 引擎判定（`id_token` 主判定 + 页面 `xhsIsLoggedIn` 辅助）通过后回前端；**强制语义**：未登录无 `id_token` 时窗口永远停留在登录页（URL 锁死 `/login`，域内 explore 自由浏览也会被拉回；无超时），仅登录成功才回 APP；`CZ_SKIP_LOGIN_GUARD=1` 跳过守卫。
 6. **运行模式（dev/prod）**：见下节——日志去向、前端入口随模式切换。
 
 ## 运行模式（dev / prod）——打包进壳后不便调试，故显式区分

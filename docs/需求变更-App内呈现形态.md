@@ -56,8 +56,9 @@
 | R-4 | 前端：设置→调试视图（按需镜像入口） | R-2/R-3 | ✅（10-31 实施完成：设置页调试视图卡片=引擎镜像按需开、可交互点击转发，登录自动开/调试手动开/平时关） |
 | R-5 | e1 基建改造（连引擎调试端口）+ t 系列/A 批回归重跑 | R-1~R-4 | ✅（10-31 实施完成：引擎带 --remote-debugging-port=9223（config.engine_port）；25 脚本 9333→9223 统一连引擎实例；run_all.sh 改引擎就绪检查+拉起、旧外部 headless 9333/9223 路径退役；t 系列 PASS=9/FAIL=0/SKIP=2；后端回归 EXIT=0） |
 | R-6 | e1 六场景真实态补跑（最终形态）→ 全绿 | R-5 | ⏳ 待引擎 profile 有效登录态（前置修复已完成：login_status 改引擎真实判定——CDP web_session + 页面 xhsIsLoggedIn 双重确认，旧 cookies.json 纸面判定停用留档；实测 stale cookie 假阳性已消除） |
-| R-6.5 | **登录形态升级（用户拍板）：截图镜像 → 壳内真实登录页 + Cookie 注入引擎** | R-2/R-5 | ✅ 工程完成（10-31 验收：打包态壳窗口内真实打开小红书登录首页，r65b_login.png 铁证；详见「R-6.5 附注」）。⏳ 真实登录闭环待人工闸口（用户扫码/手机号+验证码一次） |
-| R-7 | 文档归档 + **push**（重构批 3 提交 + R 批提交） | R-6/R-6.5 | ⏳ |
+| R-6.5 | **登录形态升级（用户拍板）：截图镜像 → 壳内真实登录页 + Cookie 注入引擎** | R-2/R-5 | ✅ 工程完成（10-31 验收：打包态壳窗口内真实打开小红书登录首页，r65b_login.png 铁证）。✅ 真实登录闭环已通（10-31 用户手机号+验证码登录 → id_token 捕获 → 引擎注入 → `login_status`=logged_in → 窗口自动回 APP，r70_now.png 铁证；详见「R-6.5/R-6.6 附注」） |
+| R-6.6 | **强制登录升级（用户两轮拍板）：整页登录页 + URL 锁死（无弹层叉、无域内自由浏览）** | R-6.5 | ✅（10-31 实施 + 验收：启动即强制导航 `xiaohongshu.com/login?redirectPath=…` 整页登录页（全屏登录界面、无浏览内容、无弹层叉可点）；URL 锁死 `/login`——未登录离开立即拉回；后端判定升级 id_token 主判定。详见「R-6.6 附注」） |
+| R-7 | 文档归档 + **push**（重构批 3 提交 + R 批提交） | R-6/R-6.5/R-6.6 | ⏳ |
 
 **顺序原则**：先引擎（R-1）→ 后登录/镜像（R-2）→ 再 UI（R-3/R-4）→ 基建与回归（R-5）→ 真实态（R-6）→ 归档推送（R-7）。人工闸口：R-6 需用户提供有效登录态；R-6.5 真实登录需用户实际操作一次。
 
@@ -67,6 +68,12 @@
 - **LoginModal.vue**：重写为登录引导版（「前往登录」→ 触发守卫导航；成功自动关）。
 - **判定修复**：`extension/lib/extract.js` 的 `xhsIsLoggedIn()` 收紧——未登录态小红书 explore 同样渲染推荐流，旧「推荐流兜底 → true」会假阳性；现改为显式未登录 UI 特征（顶栏登录按钮/「登录探索更多内容」）→ false，仅头像/用户菜单 → true。
 - **打包态验收**：壳窗口内真实登录页（r65b_login.png）、登录页稳定停留 18s 不拉回、引擎独立 profile 正常启动无锁冲突、`login_status` 未登录态判定正确（raw: `web_session=有 页面登录=否`）；后端回归 250 passed EXIT=0。
+
+**R-6.6 附注（强制登录升级：整页登录页 + URL 锁死）**：用户两轮否决后的最终形态——①弹层版（explore + 登录弹层 + JS 隐藏 close）被否决：**叉可点掉、域内可自由浏览永远回不去**；②拍板**独立整页登录页**：`https://www.xiaohongshu.com/login?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F`（headless Playwright 实测：title「小红书 - 你的生活兴趣社区」，全屏登录界面含 +86/输入手机号/输入验证码/获取验证码/登录/协议勾选/新用户可直接登录/小红书或微信扫码，**无推荐流内容**；登录成功自动跳 redirectPath→首页并种 web_session+id_token）。工程落地：
+- **launcher.py `_login_guard`（R-6.6 现行）**：启动即 `login_begin` 主动置 pending（不依赖前端按钮——实测打包态按钮点击偶发不触发后端请求）；主轮询进登录页后：**只认 `id_token`**（登录成功专属令牌，未登录不种；web_session 未登录也种占位值，以它触发会注入无效会话并与 URL 锁死互相打架——拉回 login 页会把壳窗口真实会话 cookie 覆盖成占位，形成「注入恒未通过」死循环，10-31 实测定位）；id_token 出现 → 8s 节流 `import_cookies` 注入引擎 → 判定 true 才 `load_url` 回 APP；**URL 锁死**：无 id_token 且 URL 不含 `/login` → 立即拉回（域内 explore 浏览也会被拉回）；无超时、注入未通过留在登录页/登录态已现则不拉回；force_login_js 保留防御性兜底（整页登录页本身无 close 可点）。
+- **server.py `_engine_login_state` 判定升级**：id_token 存在 → 直接判已登录（**修复假阴性**：引擎 headless 页面渲染偶发空白/滞后，`xhsIsLoggedIn()` 恒 false——实测注入后引擎 cookie 含 id_token(len=136)+unread，页面却空白）；否则回退 web_session + 页面 xhsIsLoggedIn 双判定（保留防占位假阳性）。
+- **LoginModal.vue（强制版）**：打开即自动 `goLogin()`（无按钮依赖）、无「稍后再说/关闭」按钮、纯引导文案 + 登录态轮询自动关。
+- **闭环验收（10-31 用户真实手机号+验证码）**：登录 → id_token 捕获 → 引擎注入 → `login_status`=logged_in（raw: `web_session=有 页面登录=是`）→ 窗口自动回 APP 首页（r70_now.png 铁证）；风险自动解除（risk_resolve）。后端回归 250 passed EXIT=0。
 
 
 ## 五、验收口径

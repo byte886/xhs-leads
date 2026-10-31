@@ -25,8 +25,13 @@ import time
 
 APP_TITLE = "XHS Leads"  # 壳窗口标题（pywebview 内嵌 UI）
 _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一致）
-# 真实登录页（R-6.5）：壳窗口内打开小红书首页，用户在窗口内原生完成扫码/手机号+验证码登录。
-XHS_LOGIN_URL = "https://www.xiaohongshu.com/explore"
+# 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**（login?redirectPath 重定向到首页）。
+# 独立登录页 = 全屏登录界面（扫码/手机号+验证码/微信），无推荐流浏览内容、无弹层叉可点；
+# 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
+XHS_LOGIN_URL = (
+    "https://www.xiaohongshu.com/login"
+    "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
+)
 
 
 def _redirect_logs(data_dir: pathlib.Path) -> None:
@@ -200,14 +205,16 @@ def main() -> int:
                 pass
 
         def _login_guard(window: "webview.Window", base_url: str, stop: "threading.Event") -> None:
-            """登录守卫（R-6.5 真实登录页方案，替代截图镜像登录）。
+            """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录）。
 
-            链路：前端引导「前往登录」→ 后端 login_begin 置 pending → 本守卫轮询到
-            pending → 窗口 load_url(小红书真实登录页)（用户在壳窗口内原生完成扫码 /
-            手机号+获取验证码，验证码真实走「获取验证码」流程）→ 守卫轮询
-            get_cookies() 出现 web_session（HttpOnly 亦可得）→ POST /api/auth/import_cookies
-            注入无头引擎独立 profile（幂等）→ 引擎真实判定登录 → 窗口回 APP 前端。
-            不主动打扰：未登录且用户未点「前往登录」时不导航。
+            链路：服务就绪即主动 login_begin（未登录置 pending，无需用户点击）→ 守卫
+            轮询到 pending → 窗口 load_url(小红书真实登录页)（用户在壳窗口内原生完成扫码 /
+            手机号+获取验证码，验证码真实走「获取验证码」流程）→ 注入强制登录 JS
+            （隐藏登录弹层关闭按钮，用户无法跳过）→ 轮询 get_cookies() 出现 web_session
+            （HttpOnly 亦可得）→ POST /api/auth/import_cookies 注入无头引擎独立 profile
+            （幂等）→ 引擎真实判定登录 → 窗口回 APP 前端。
+            强制语义（用户拍板）：未登录时窗口永远停在登录页（无「稍后再说/关闭」路径），
+            注入未通过/URL 漂移均留在登录页；仅登录成功才回 APP，无超时回退。
             CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化/不想被导航时）。
             """
             if os.environ.get("CZ_SKIP_LOGIN_GUARD"):
@@ -216,6 +223,27 @@ def main() -> int:
             import urllib.request  # noqa: PLC0415
 
             base = base_url.rstrip("/")  # 防双斜杠（base_url 形如 http://127.0.0.1:8800/）
+
+            # 强制登录 JS（R-6.6）：防御性锁定——登录页若渲染出任何 close/关闭类元素一律隐藏
+            # （整页登录页本身无可点浏览内容；弹层模式遗留的 MutationObserver 保留兜底）。
+            force_login_js = (
+                "(function(){"
+                "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
+                "var st=document.createElement('style');st.id='xhs-leads-lock';"
+                "st.textContent='[class*=\"close\"]{display:none!important}.close{display:none!important}';"
+                "document.head.appendChild(st);"
+                "new MutationObserver(function(){"
+                "var a=document.querySelectorAll('[class*=\"close\"],[class*=\"icon-close\"]');"
+                "for(var i=0;i<a.length;i++){a[i].style.display='none';a[i].removeAttribute('onclick');}"
+                "}).observe(document.body,{childList:true,subtree:true});})();"
+            )
+
+            def _inject_force_login() -> None:
+                """注入/重注强制登录 JS（页面重渲染或导航后 style/observer 可能丢失，循环内周期补注）。"""
+                try:
+                    window.evaluate_js(force_login_js)
+                except Exception as e:  # noqa: BLE001（页面未就绪等，下轮重试）
+                    print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}")
 
             def _get_json(path: str):
                 try:
@@ -265,6 +293,13 @@ def main() -> int:
                 window.events.loaded.wait(timeout=60)  # webview.start 后窗口就绪
             except Exception:  # noqa: BLE001
                 pass
+            # 启动即强制（R-6.6）：服务就绪主动置登录态检查，未登录直接进入登录页导航流程，
+            # 不再依赖前端「前往登录」按钮（实测打包态按钮点击偶发不触发后端请求）。
+            r0 = _post_json("/api/auth/login_begin", {})
+            if r0 and r0.get("already_logged_in"):
+                return  # 已登录：无需守卫
+            if not r0 or not r0.get("ok"):
+                print(f"[xhs-leads] login_begin 未就绪: {(r0 or {}).get('error', '重试')}")
             in_login = False
             while not stop.wait(2.0):
                 if in_login:
@@ -290,35 +325,58 @@ def main() -> int:
                 ok = False
                 import time as _t  # noqa: PLC0415
                 _t_last_import = 0.0
-                for _ in range(600):  # 最长 ~30 分钟等待用户完成登录
-                    if stop.is_set():
-                        break
+                _t_last_inject = 0.0
+                # 强制语义（R-6.6）：无超时——未登录期间窗口永远停留在小红书整页登录页；
+                # 仅 stop（退出）或登录成功才离开。整页登录页无浏览内容，URL 漂移即拉回。
+                while not stop.is_set():
+                    # 只认 id_token（R-6.6 修复）：web_session 未登录态也会种占位值，
+                    # 以它为触发会注入无效会话 + 与 URL 锁死互相打架（拉回 login 会覆盖
+                    # 壳窗口真实会话 cookie）。id_token 是登录成功专属令牌（未登录不种），
+                    # 它出现 = 用户已真实登录，才值得注入引擎。
                     try:
-                        cs = window.get_cookies()  # 窗口当前 URL 域（登录页）过滤
+                        cs = window.get_cookies()  # 窗口当前 URL 域过滤
                     except Exception:  # noqa: BLE001
                         cs = None
-                    has_ws = any(
-                        m.key == "web_session"
+                    has_id = any(
+                        m.key == "id_token"
                         for c in (cs or []) for m in c.values()
                     )
-                    if has_ws and (_t.monotonic() - _t_last_import >= 15.0):
-                        # 节流：占位 web_session（未登录态小红书也会种）会被误捕，
-                        # 注入引擎后以其真实判定为准；未通过则留在登录页继续轮询，
-                        # 绝不把正在扫码的用户拉回 APP。
-                        _t_last_import = _t.monotonic()
-                        r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
-                        if r and r.get("logged_in"):
-                            print("[xhs-leads] 登录成功，Cookie 已注入引擎，返回 APP")
-                            ok = True
-                            break
-                        print(
-                            "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
-                            (r or {}).get("error", "未知原因（继续等待用户完成登录）"),
-                        )
+                    if has_id:
+                        # 真登录态已现：注入引擎（节流 8s）；注入成功后 break 回 APP。
+                        # 注入未通过（极少见）也不拉回——登录态存在，等待下一次注入判定收敛。
+                        if _t.monotonic() - _t_last_import >= 8.0:
+                            _t_last_import = _t.monotonic()
+                            r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
+                            if r and r.get("logged_in"):
+                                print("[xhs-leads] 登录成功，Cookie 已注入引擎，返回 APP")
+                                ok = True
+                                break
+                            print(
+                                "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
+                                (r or {}).get("error", "未知原因（等待下次判定）"),
+                            )
+                        # 节流窗口内：不拉回（登录态已现，放行等注入判定）
+                    else:
+                        # 未登录（无 id_token）：必须停在整页登录页——URL 锁死 + 周期补注 JS
+                        if _t.monotonic() - _t_last_inject >= 10.0:
+                            _t_last_inject = _t.monotonic()
+                            _inject_force_login()
+                        try:
+                            cur = window.get_current_url() or ""
+                        except Exception:  # noqa: BLE001
+                            cur = ""
+                        if cur and "/login" not in cur:
+                            print(f"[xhs-leads] 离开登录页（{cur[:70]}），强制拉回登录页")
+                            try:
+                                window.load_url(XHS_LOGIN_URL)
+                            except Exception:  # noqa: BLE001
+                                pass
+                            _inject_force_login()
                     stop.wait(3.0)
                 in_login = False
-                # 仅真登录成功（ok）或 30 分钟超时回前端；注入未通过期间窗口保持登录页
-                window.load_url(f"{base}/")  # 无论成败回前端（成功=已登录，失败=用户可重试）
+                if ok:
+                    # 仅真登录成功回前端（强制登录：失败/中途退出不回，保持登录页置顶）
+                    window.load_url(f"{base}/")
 
         window = webview.create_window(
             APP_TITLE, url, width=_WINDOW_W, height=_WINDOW_H, min_size=(1024, 700)

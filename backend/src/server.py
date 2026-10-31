@@ -257,20 +257,31 @@ def _expires_ok(exps: list) -> bool:
 
 
 async def _engine_login_state(eng) -> tuple[bool, bool]:
-    """引擎真实登录态（R 批 v1.5）：返回 (web_session 存在?, 页面登录?)。
+    """引擎真实登录态（R 批 v1.5；R-6.6 判定升级）：返回 (web_session 存在?, 登录判定)。
 
     只读、不清 cookie、不新建浏览器实例（复用引擎现有小红书页，无则开 explore）：
-    ① CDP 读引擎内存 cookie → web_session 是否存在；
-    ② 页面注入 extract.js → xhsIsLoggedIn() 双重确认。
+    ① CDP 读引擎内存 cookie → web_session / id_token 是否存在；
+    ② 页面注入 extract.js → xhsIsLoggedIn()（仅作辅助判定）。
 
-    背景：web_session 存在 ≠ 会话有效（小红书可种入已失效 cookie，页面仍弹登录框，实测见 R-6）。
+    背景：
+    - web_session 存在 ≠ 会话有效（小红书未登录也会种占位 web_session，页面仍弹登录框，
+      实测见 R-6，故 R-6.5 引入页面 xhsIsLoggedIn 双判定消除假阳性）。
+    - **id_token 是登录成功专属令牌**（未登录会话不种，实测打包态引擎注入后 cookie 含
+      id_token len=136 + unread），而引擎页面渲染可能滞后/失败（headless 偶发空白，
+      实测注入后 reload 页面空白 → xhsIsLoggedIn 恒 false 造成假阴性，见 R-6.6）。
+      因此：id_token 存在 → 直接判已登录（页面判定不阻塞）；否则回退
+      web_session + 页面判定。
     """
     from src import browser_client
 
     mem = await eng.read_cookies()
     has_ws = any(c.get("name") == "web_session" for c in mem)
+    has_id_token = any(c.get("name") == "id_token" for c in mem)
     page_logged_in = False
-    if has_ws:
+    if has_id_token:
+        # id_token = 登录成功专属令牌：直接判定通过（页面渲染滞后/空白不阻塞，避免假阴性）
+        page_logged_in = True
+    elif has_ws:
         ctx = await eng.context()
         page = None
         for p in ctx.pages:
