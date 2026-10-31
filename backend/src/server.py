@@ -214,10 +214,14 @@ _LOGIN_CACHE = {"t": 0.0, "data": None}
 _LOGIN_CACHE_TTL = 30.0
 
 def _read_cookie_status(p: Path) -> tuple[bool, str, bool]:
-    """读本地 cookies.json 判定登录态：返回 (logged_in, web_session 摘要, expires 是否有效)。
+    """【R 批 v1.5 已停用留档】读本地 cookies.json 判定登录态（方案 A「读系统 Chrome 落盘副本」遗留）。
 
+    R 批口径：登录态只存引擎独立 profile（引擎 CDP 内存判定，见 login_status / _require_real_login）；
+    本函数不再被 login_status 调用，保留供回溯与旧链路测试参考。
+    返回 (logged_in, web_session 摘要, expires 是否有效)。
     expires=None 是会话级 Cookie（浏览器会话内一直有效，Chrome 导出不携带过期时间）
-    → 视为有效；有 expires 且在未来才有效。"""
+    → 视为有效；有 expires 且在未来才有效。
+    """
     if not p.exists():
         return False, "", True
     ws, exp_ok = _parse_web_session(p)
@@ -247,12 +251,51 @@ def _expires_ok(exps: list) -> bool:
     return any(e is None or (e or 0) >= now_ts for e in exps)
 
 
+async def _engine_login_state(eng) -> tuple[bool, bool]:
+    """引擎真实登录态（R 批 v1.5）：返回 (web_session 存在?, 页面登录?)。
+
+    只读、不清 cookie、不新建浏览器实例（复用引擎现有小红书页，无则开 explore）：
+    ① CDP 读引擎内存 cookie → web_session 是否存在；
+    ② 页面注入 extract.js → xhsIsLoggedIn() 双重确认。
+
+    背景：web_session 存在 ≠ 会话有效（小红书可种入已失效 cookie，页面仍弹登录框，实测见 R-6）。
+    """
+    from src import browser_client
+
+    mem = await eng.read_cookies()
+    has_ws = any(c.get("name") == "web_session" for c in mem)
+    page_logged_in = False
+    if has_ws:
+        ctx = await eng.context()
+        page = None
+        for p in ctx.pages:
+            if not p.is_closed() and "xiaohongshu" in (p.url or ""):
+                page = p
+                break
+        if page is None:
+            page = await eng.new_page()
+            await page.goto(
+                "https://www.xiaohongshu.com/explore",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            await asyncio.sleep(3)
+        await page.evaluate(browser_client._EXTRACT_SRC)
+        page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()"))
+    return has_ws, page_logged_in
+
+
 @app.get("/api/login_status")
 async def login_status():
-    """登录态检测（轻量版）：只读本地已保存 cookies.json——存在且含未过期的 web_session 即视为已登录。
+    """登录态检测（R 批 v1.5：读引擎独立 profile 真实登录态）。
 
-    刻意【不拉独立浏览器】：避免登录轮询/页面打开时反复拉起 9223（Dock 图标/窗口干扰）。
-    浏览器深度校验（explore 真实判定）仅在导入 Cookie / 读取 Chrome / 采集前置等按需动作中进行。
+    改造背景：旧实现只读本地 cookies.json（方案 A「读系统 Chrome 落盘副本」产物）——
+    R 批拍板「登录态只存引擎独立 profile、不依赖系统 Chrome」后，该副本与引擎真实会话
+    脱节：副本未过期而引擎早已失效（或反之），造成假阳性/假阴性。本接口改为
+    **引擎 CDP 内存 Cookie 判定**（web_session 存在即视为有效，与 _require_real_login 同源）。
+
+    - 引擎 headless 无窗口（R2），拉取无 Dock/窗口干扰；30s 缓存兜底登录轮询频率。
+    - 旧 cookies.json 链路已停用留档（函数体保留可回溯，见 _read_cookie_status）。
     """
     import time
 
@@ -261,21 +304,25 @@ async def login_status():
         return _LOGIN_CACHE["data"]
 
     try:
-        logged_in, ws, exp_ok = _read_cookie_status(DATA_DIR / "cookies.json")
+        from src import engine_pool
+
+        eng = await engine_pool.pool.get("default")
+        has_ws, page_logged_in = await _engine_login_state(eng)
+        logged_in = has_ws and page_logged_in
         result = {
             "status": "logged_in" if logged_in else "not_logged_in",
             "logged_in": logged_in,
             "nickname": "",
-            "raw": f"local-cookie web_session={'有' if ws else '无'} expires={'未来' if exp_ok else '过期'}",
+            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'}",
         }
-        # 登录恢复闭环：纸面 Cookie 有效（用户已重新扫码/导入）→ 自动解除该账号软风控
+        # 登录恢复闭环：引擎真实登录态有效 → 自动解除该账号软风控
         if logged_in:
             try:
-                risk.resolve("default", reason="登录态有效（login_status）")
+                risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
             except Exception:  # noqa: BLE001
                 pass
-    except Exception as e:
-        result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"本地判定失败: {str(e)[:80]}"}
+    except Exception as e:  # noqa: BLE001
+        result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
 
     _LOGIN_CACHE["t"] = now
     _LOGIN_CACHE["data"] = result

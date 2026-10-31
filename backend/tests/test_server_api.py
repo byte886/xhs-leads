@@ -24,10 +24,26 @@ class TestApiSmoke:
         assert b"<!DOCTYPE html" in r.content or b"<div" in r.content
 
     def test_login_status(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_read_cookie_status", lambda p: (True, "abc", True))
+        # R 批 v1.5：登录态 = 引擎 CDP web_session 存在 且 页面登录（xhsIsLoggedIn），
+        # 两条件任一不满足即未登录（web_session 存在但会话失效=假阳性场景，实测见 R-6）
+        async def fake_get(*a, **k):
+            return object()  # 假引擎实例：仅用于传入 _engine_login_state
+
+        monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
-        r = client.get("/api/login_status")
-        assert r.json()["logged_in"] is True
+
+        async def state_ok(eng):
+            return True, True
+
+        async def state_stale(eng):
+            return True, False  # stale cookie：web_session 有但页面未登录
+
+        monkeypatch.setattr(server, "_engine_login_state", state_ok)
+        assert client.get("/api/login_status").json()["logged_in"] is True
+
+        monkeypatch.setattr(server, "_engine_login_state", state_stale)
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 重置 30s 缓存
+        assert client.get("/api/login_status").json()["logged_in"] is False
 
     def test_cookie_info_empty(self, client, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "BASE", tmp_path)

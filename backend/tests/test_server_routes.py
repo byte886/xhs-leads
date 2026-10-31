@@ -24,13 +24,17 @@ def client(monkeypatch, tmp_path):
     async def fake_cleanup_tabs():
         return None
 
-    # 真实登录链路（目标 Chrome Cookie 库 + 日常 Chrome 钥匙串恢复）由 test_real_login.py 专门覆盖；
-    # 本模块纯逻辑验证一律 mock 为已登录，不依赖真实浏览器/钥匙串（Chrome 运行中 Cookie 库被锁或
-    # pytest 进程无钥匙串授权都会导致 403 误报——见 10-29 E1 回归修复记录）。
+    # 真实登录链路（引擎 CDP+页面深度校验）由 test_real_login.py 专门覆盖；
+    # 本模块纯逻辑验证一律 mock 为已登录，不依赖真实浏览器/引擎（pytest 进程无登录态、
+    # 引擎 profile 被真实验证实例占用会 403 误报 / unknown 误放——见 R-5 回归修复记录）。
     async def fake_real_login():
         return {"ok": True, "code": "test_mock", "note": "fixture mock 已登录"}
 
+    async def fake_login_status():
+        return {"status": "logged_in", "logged_in": True, "nickname": "", "raw": "fixture mock 已登录"}
+
     monkeypatch.setattr(server, "_require_real_login", fake_real_login)
+    monkeypatch.setattr(server, "login_status", fake_login_status)
     monkeypatch.setattr(browser_client, "cleanup_tabs", fake_cleanup_tabs)
     monkeypatch.setattr(server, "_cleanup_orphan_images", lambda: 0)
     monkeypatch.setattr(server, "_startup_cleanup", lambda: None)
@@ -40,7 +44,6 @@ def client(monkeypatch, tmp_path):
     (tmp_path / "images").mkdir(exist_ok=True)
     monkeypatch.setattr(server, "BASE", tmp_path)
     monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
-    monkeypatch.setattr(server, "_read_cookie_status", lambda p: (True, "abc", True))
     from src.server import app
     with TestClient(app) as c:
         yield c
@@ -139,7 +142,11 @@ class TestSearch:
         assert r.json()["added"] == 0 and "未返回结果" in r.json()["note"]
 
     def test_search_not_logged_in(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_read_cookie_status", lambda p: (False, "", False))
+        # R 批 v1.5：登录态判定改引擎真实链路（login_status），未登录 → 403 引导登录小窗
+        async def fake_not_logged_in():
+            return {"status": "not_logged_in", "logged_in": False, "nickname": "", "raw": "engine-cdp 未登录"}
+
+        monkeypatch.setattr(server, "login_status", fake_not_logged_in)
         r = client.post("/api/search", json={"keyword": "x"})
         assert r.status_code == 403 and "登录态已失效" in r.json()["detail"]
 
