@@ -85,10 +85,15 @@ def _mark_collect_done(account_id: str = "default") -> None:
 
 @app.on_event("startup")
 async def _startup_cleanup():
-    """启动时清理：残留任务 tab + 无引用本地图片。best-effort 不阻塞启动。"""
+    """启动时清理：残留任务 tab + 无引用本地图片。best-effort 不阻塞启动。
+
+    仅清理「已运行」引擎的残留 tab；引擎未启动时跳过——启动清理不应有
+    拉起引擎的副作用（打包态冷启动慢，dev 态回归也依赖本钩子不拉引擎）。
+    """
     try:
-        from src import browser_client
-        await asyncio.wait_for(browser_client.cleanup_tabs(), timeout=15)
+        from src import browser_client, engine_pool
+        if engine_pool.pool.peek("default") is not None:
+            await asyncio.wait_for(browser_client.cleanup_tabs(), timeout=15)
     except Exception:  # noqa: BLE001
         pass
     try:

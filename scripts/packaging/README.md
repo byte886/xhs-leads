@@ -15,7 +15,30 @@
 1. **数据目录路由**：`XHS_LEADS_DATA` 覆盖 > 打包态 `~/Library/Application Support/xhs-leads/data` > 开发态项目根 `data/`。
 2. **旧目录迁移**：首次启动自动把旧 `~/Library/Application Support/codex-zhuke/data` 复制到新目录（排除 logs/私钥/Chrome 锁文件 `Singleton*`/`RunningChromeVersion`/`LOCK*` 等瞬时文件，整体 try/except 容错——失败仅告警不阻塞启动），保住登录态/数据库/授权。
 3. **环境注入**：`XHS_LEADS_DATA` 写入进程环境，`server/config` 统一读取；开发态把 `backend/` 注入 `sys.path`（`import src.*` 需要父目录，与 spec pathex 语义一致）。
-4. **服务与生命周期**：同进程起 uvicorn（后台线程，端口冲突自动找空闲替代），服务就绪后 `webbrowser` 打开 UI；SIGINT/SIGTERM（cmd+Q / kill）优雅停服；日志重定向到 `data/logs/app.log`（GUI 模式无控制台）。
+4. **服务与生命周期**：同进程起 uvicorn（后台线程，端口冲突自动找空闲替代），服务就绪后 `webbrowser` 打开 UI；SIGINT/SIGTERM（cmd+Q / kill）优雅停服。
+5. **运行模式（dev/prod）**：见下节——日志去向、前端入口随模式切换。
+
+## 运行模式（dev / prod）——打包进壳后不便调试，故显式区分
+
+| | dev（源码直跑，测试/开发） | prod（打包进壳，交付形态） |
+|---|---|---|
+| 判定 | 源码运行（无 `_MEIPASS`）；`XHS_LEADS_MODE=dev` 可显式覆盖 | PyInstaller 打包态（`_MEIPASS` 存在）；`XHS_LEADS_MODE=prod` 可显式覆盖 |
+| 数据目录 | 项目根 `data/`（`XHS_LEADS_DATA` 可覆盖） | `~/Library/Application Support/xhs-leads/data` |
+| 前端入口 | **vite dev server** `http://127.0.0.1:5173`（HMR 热改，`/api` 已由 vite proxy 反代到后端） | 后端同源托管 `frontend/dist`（`http://127.0.0.1:8791/`） |
+| 日志 | **默认控制台**（改码即生效、日志即时可见） | 默认落盘 `data/logs/app.log`（GUI 无控制台） |
+| 调试 | 改后端直接重启/uvicorn；改前端 HMR 即生效 | 改代码必须重新 `build_mac.sh` 重打包；日志查 app.log |
+
+**环境变量开关**（launcher 语义，均向后兼容）：
+
+| 变量 | 含义 |
+|---|---|
+| `XHS_LEADS_MODE` | `dev`/`prod` 强制指定运行模式（缺省 auto 判定） |
+| `XHS_LEADS_DATA` | 数据目录覆盖（打包/开发两态通用） |
+| `CZ_KEEP_CONSOLE` | `1` 保留控制台（不落盘）/ `0` 强制落盘；缺省跟随模式（dev 保留、prod 落盘） |
+| `CZ_NO_BROWSER` | `1` 跳过打开浏览器（自动化冒烟） |
+| `CZ_SELF_EXIT_AFTER` | 秒数：N 秒后自动优雅退出（无信号环境/壳冒烟测试钩子） |
+
+**分工约定**：功能测试/回归（t 系列、e1 补跑、A 批）在 **dev 态**跑（快改快验）；壳态只做「交付形态冒烟」（打开壳 → UI 呈现 → 登录小窗 → 状态条 → 无 Chrome 窗口）。
 
 ## xhs_leads.spec 要点
 

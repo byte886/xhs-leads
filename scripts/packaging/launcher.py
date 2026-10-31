@@ -67,7 +67,14 @@ def main() -> int:
     data_dir = _data_dir()
     _migrate_legacy_data(data_dir)  # 旧 codex-zhuke 数据目录首次迁移（仅打包态生效）
     data_dir.mkdir(parents=True, exist_ok=True)
-    if not os.environ.get("CZ_KEEP_CONSOLE"):
+    from src import config, server  # noqa: PLC0415（先注入环境再 import）
+
+    # 运行模式（R 批）：dev=源码直跑默认保留控制台（改码即生效、日志即时可见）；
+    # prod=打包进壳默认落盘 data/logs/app.log。CZ_KEEP_CONSOLE=1/0 可显式强制。
+    keep_console = os.environ.get("CZ_KEEP_CONSOLE")
+    if keep_console is None:
+        keep_console = "1" if config.is_dev() else "0"
+    if keep_console != "1":
         _redirect_logs(data_dir)
     os.environ["XHS_LEADS_DATA"] = str(data_dir)  # 全局注入：server/config 统一读取
 
@@ -77,9 +84,8 @@ def main() -> int:
         if str(backend) not in sys.path:
             sys.path.insert(0, str(backend))
 
-    from src import config, server  # noqa: PLC0415（先注入环境再 import）
-
     port = config.find_free_port(8791)
+    print(f"[xhs-leads] 运行模式: {config.mode()}")
     print(f"[xhs-leads] 数据目录: {data_dir}")
     print(f"[xhs-leads] 服务端口: {port}")
 
@@ -91,16 +97,33 @@ def main() -> int:
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()
 
-    for _ in range(100):  # 最多 ~10s 等端口就绪
+    # 服务就绪：uvicorn started 信号 + HTTP 200 双确认。
+    # 只等 srv.started 可能过早（startup 钩子未完成）；HTTP 200 才是真就绪。
+    import urllib.request  # noqa: PLC0415
+
+    ok = False
+    for _ in range(450):  # 最多 ~45s（startup 清理/引擎冷启动可能耗时）
         if srv.started:
-            break
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.0) as r:
+                    if r.status == 200:
+                        ok = True
+                        break
+            except Exception:  # noqa: BLE001（尚未就绪，继续轮询）
+                pass
         time.sleep(0.1)
-    if not srv.started:
+    if not ok:
         print("[xhs-leads] 服务启动超时，请查看日志", file=sys.stderr)
         return 1
 
     url = f"http://127.0.0.1:{port}/"
     print(f"[xhs-leads] 已启动: {url}")
+    if config.is_dev():
+        print(
+            "[xhs-leads] dev 模式提示: 前端热改请访问 "
+            f"{config.frontend_base_url()}/（vite HMR，/api 反代到本服务）；"
+            "该 URL 为本后端 API 入口。"
+        )
     if not os.environ.get("CZ_NO_BROWSER"):  # 自动化冒烟可跳过开浏览器
         webbrowser.open(url)
 

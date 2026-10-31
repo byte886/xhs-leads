@@ -18,6 +18,7 @@ import json
 import os
 import pathlib
 import socket
+import sys
 import time
 import uuid
 
@@ -161,6 +162,44 @@ def chrome_path() -> str:
     cfg = get_config()
     p = cfg.get("chrome_path") or _read_json(DATA_DIR / "cdp_config.json").get("chrome_path") or ""
     return expand(p) if p else ""
+
+
+# ---------------------------------------------------------------------------
+# 运行模式（R 批：dev / prod 区分）
+# ---------------------------------------------------------------------------
+# 打包进壳（PyInstaller）后改代码必须重打包、日志落盘、前端为静态产物——不便调试；
+# 故显式区分：dev = 源码直跑（vite HMR + 控制台日志，改码即生效）；prod = 壳内交付形态。
+# 优先级：XHS_LEADS_MODE 环境变量 > auto 判定（PyInstaller 打包态 → prod，否则 dev）。
+_MODE_ENV = os.environ.get("XHS_LEADS_MODE", "").strip().lower()
+
+
+def mode() -> str:
+    """当前运行模式：'dev' 或 'prod'。XHS_LEADS_MODE=dev|prod 可显式覆盖。"""
+    if _MODE_ENV in ("dev", "prod"):
+        return _MODE_ENV
+    return "prod" if getattr(sys, "_MEIPASS", None) else "dev"
+
+
+def is_dev() -> bool:
+    """是否开发/测试态（源码直跑，方便调试）。"""
+    return mode() == "dev"
+
+
+def is_prod() -> bool:
+    """是否生产/交付态（打包进壳，静态产物）。"""
+    return mode() == "prod"
+
+
+def frontend_base_url() -> str:
+    """前端访问入口（URL 前缀，供启动提示/调试文档使用）：
+    - dev：vite dev server（HMR 热改，/api 已由 vite proxy 反代到本后端端口）
+    - prod：空 = 后端同源托管 frontend/dist（壳内呈现，外部零浏览器窗口）
+    """
+    return f"http://127.0.0.1:{FRONTEND_DEV_PORT}" if is_dev() else ""
+
+
+# vite dev server 固定端口（frontend/vite.config.ts server.port；与后端 front_port 无关）
+FRONTEND_DEV_PORT = 5173
 
 
 # ---------------------------------------------------------------------------

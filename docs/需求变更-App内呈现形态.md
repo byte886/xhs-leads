@@ -40,6 +40,7 @@
 3. **独立 profile**：登录态落 `~/Library/Application Support/xhs-leads/data/profile`（打包态）/ `ROOT/data/profile`（开发态）；重启后登录态保留（无头持久化上下文）；不读系统 Chrome 库。
 4. **状态提示条**：后端任务状态接口扩展动作文案（当前动作 + 进度），前端全局状态条轮询显示；审计日志（logger.py）保持不变，两者并存不混淆。
 5. **e1 基建**：引擎带 `--remote-debugging-port=<固定端口>` 启动供 e1 连接；9223 外部 Chrome 测试路径退役。
+6. **运行模式（dev/prod）**：打包进壳后改码必须重打包、日志落盘、前端静态——不便调试；故显式区分（`XHS_LEADS_MODE=dev|prod`，缺省 auto：PyInstaller 打包态→prod、源码→dev）。dev=源码直跑（vite HMR 5173 + 控制台日志，t/e1 回归所在）；prod=壳内交付形态（静态托管 + app.log，只做壳冒烟验收）。详见 `scripts/packaging/README.md` 运行模式节。
 
 ## 四、批次编排（R 批 — App 内呈现形态）
 
