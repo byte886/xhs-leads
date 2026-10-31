@@ -6,7 +6,7 @@
   1) 首次：生成 RSA 密钥对 + 把公钥内嵌到 license.py
      python scripts/gen_license.py --genkey
      → 私钥写入 data/license_private.pem（gitignore，勿外传）
-     → 打印公钥 PEM，需粘贴进 app/src/codex_xhs/license.py 的 _PUBLIC_KEY_PEM
+     → 打印公钥 PEM，需粘贴进 app/src/src/license.py 的 _PUBLIC_KEY_PEM
 
   2) 每次给客户发码：对客户机器码签发（默认 365 天）
      python scripts/gen_license.py --issue <客户机器码> [--days 365]
@@ -59,7 +59,7 @@ def genkey() -> None:
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
     ).decode("ascii")
     print(f"[ok] 私钥已写入：{PRIV}（已 gitignore，勿外传）")
-    print("[公钥] 请将下方内容内嵌到 app/src/codex_xhs/license.py 的 _PUBLIC_KEY_PEM：")
+    print("[公钥] 请将下方内容内嵌到 app/src/src/license.py 的 _PUBLIC_KEY_PEM：")
     print(pub_pem)
 
 

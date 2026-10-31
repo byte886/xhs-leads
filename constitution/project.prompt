@@ -1,0 +1,16 @@
+# Project Constitution — xhs-leads
+
+本文件是项目宪法入口，优先级最高。所有 Agent 必须先读本文件，再按序读下属文件；下属文件冲突时，靠前的文件优先。
+
+1. `constitution/project.prompt`（本文件 — 项目规则，最高）
+2. `constitution/engineering.prompt`（工程规则）
+3. `constitution/workflow.prompt`（工作流规则）
+
+## 项目规则
+
+- 本项目使用确定性质量关卡体系：CRAP（复杂度）、变异测试、覆盖率、架构约束（quality-gates/）；
+- 流水线：specifier → coder → cleaner → architect → hardender → QA（roles/ 定义各角色边界）；
+- specifier 产出的 Gherkin 与 QA 程序必须经人工审批后才能进入流水线；
+- QA 的最终结果回传所有角色，卡片置 Done；
+- 业务语义（核心路径/反例/边界/验收标准）由人钉死并转成可执行测试，Agent 不得自行脑补业务需求；
+- 禁止为了"看起来快"跳过任何质量关卡。

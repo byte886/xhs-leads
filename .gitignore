@@ -16,13 +16,13 @@ __pycache__/
 .DS_Store
 
 # --- 本地环境（新机器部署） ---
-app/.venv/
-app/target/
-app/src/codex_xhs/data/
+backend/.venv/
+backend/target/
+backend/src/data/
 
 # --- 前端工程 ---
-app/frontend/node_modules/
-app/frontend/dist/
+frontend/node_modules/
+frontend/dist/
 
 # --- PyInstaller 打包产物（B 批壳，不入库；产物为本地交付物） ---
 build/

@@ -10,7 +10,7 @@
 import os, json, urllib.request
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.expanduser('~/Desktop/codex-zhuke')
+ROOT = os.path.expanduser('~/Desktop/xhs-leads')
 
 def api_try(cookie_text):
     req = urllib.request.Request('http://127.0.0.1:8791/api/import_cookie',

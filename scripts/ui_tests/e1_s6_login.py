@@ -27,7 +27,7 @@ BACKUP = '/tmp/cookies_backup_e1s6.json'
 def restart_backend():
     # B 方案新架构：先 SIGTERM 引擎主 Chrome（优雅关闭落盘登录态），再收 uvicorn。
     # 禁止 pkill -9 直杀 uvicorn（绕过 shutdown 钩子会让引擎变孤儿、登录态不落盘，已实证）。
-    profile = str(pathlib.Path.home() / '.codex-xhs-profile')
+    profile = str(pathlib.Path.home() / '.xhs-leads-profile')
     subprocess.run(['bash', '-c',
                     f'ENGINE_PID=$(pgrep -f "user-data-dir={profile}" | head -1); '
                     f'[ -n "$ENGINE_PID" ] && kill -TERM $ENGINE_PID'], check=False)
@@ -35,7 +35,7 @@ def restart_backend():
     subprocess.run(['pkill', '-9', '-f', 'uvicorn'], check=False)
     time.sleep(1)
     proc = subprocess.Popen(
-        ['nohup', f'{ROOT}/app/.venv/bin/python', '-m', 'uvicorn', 'codex_xhs.server:app',
+        ['nohup', f'{ROOT}/app/.venv/bin/python', '-m', 'uvicorn', 'src.server:app',
          '--host', '127.0.0.1', '--port', '8791', '--app-dir', f'{ROOT}/app/src'],
         cwd=str(ROOT), stdout=open('/tmp/uvicorn.log', 'w'), stderr=subprocess.STDOUT)
     time.sleep(3)

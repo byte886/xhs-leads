@@ -47,7 +47,7 @@ with sync_playwright() as p:
     n = imgs.count()
     print('4) 拖拽前图片数:', n)
     import os as _os
-    _base = _os.path.join(_os.path.expanduser('~'), 'Desktop/codex-zhuke/data/images')
+    _base = _os.path.join(_os.path.expanduser('~'), 'Desktop/xhs-leads/data/images')
     _pics = [_os.path.join(_base, f'6ab8f4560000000002028056_p{i}.jpg') for i in range(6)]
     if all(_os.path.exists(_p) for _p in _pics):
         _before = set(_os.listdir(_base))  # 记录上传前目录，结尾清理本次上传残留

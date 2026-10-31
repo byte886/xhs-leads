@@ -8,7 +8,7 @@
 import os, json, time, urllib.request
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.expanduser('~/Desktop/codex-zhuke')
+ROOT = os.path.expanduser('~/Desktop/xhs-leads')
 CODE = open('/tmp/b07_code.txt').read().strip()
 LIC_PATH = os.path.join(ROOT, 'data/license.json')
 

@@ -45,7 +45,7 @@
 |---|---|
 | 打包 | PyInstaller/py2app 打包 `.app`，嵌入前端构建产物（app/web） |
 | 服务管理 | 应用内自动起 uvicorn、自动打开浏览器、退出清理 |
-| 数据目录 | 迁移到 `~/Library/Application Support/codex-zhuke`（路径可移植、旧 data 迁移） |
+| 数据目录 | 迁移到 `~/Library/Application Support/xhs-leads`（路径可移植、旧 data 迁移） |
 | 端口冲突 | 端口占用探测与替换 |
 | 脚本 | 一键打包脚本 + .spec 配置 |
 

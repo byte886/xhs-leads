@@ -1,7 +1,7 @@
 # coverage 配置：核心模块门（score/cookie_reader/server ≥80%）
 # 集成层（browser_client Playwright 驱动、collect_pipeline CLI 装配）按人工冒烟口径豁免
 [run]
-omit = */codex_xhs/browser_client.py, */codex_xhs/collect_pipeline.py
+omit = */src/browser_client.py, */src/collect_pipeline.py
 
 [report]
 fail_under = 80
