@@ -26,6 +26,14 @@ log = xlog.get("engine")
 _pw = None
 _pw_lock: asyncio.Lock | None = None
 
+# 无头模式 UA（R 批 v1.4）：Chrome 无头 UA 带 HeadlessChrome 特征（风控指纹），
+# 无头启动时覆盖为有头 UA。版本随本机 Chrome 漂移：低版本 UA 仅指纹差异不影响可用性，
+# 升级 Chrome 时顺手更新版本号即可。
+_HEADLESS_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+)
+
 # 防自动化检测 stealth（小红书等风控会检测 navigator.webdriver / chrome 对象 /
 # plugins / languages 等特征；注入后引擎与普通 Chrome 观感一致）。
 # 保持轻量、无外部依赖；后续如风控升级可在不换机制前提下补充特征。
@@ -122,11 +130,26 @@ class AccountEngine:
                 os.makedirs(self.user_data_dir, exist_ok=True)
                 # 关键：launch_persistent_context（内部 stdio 管道，无 TCP 调试端口，
                 # 从机制上不触发「允许远程调试」授权流程；解密在浏览器进程内部，免钥匙串）
-                self._context = await pw.chromium.launch_persistent_context(
-                    self.user_data_dir,
+                # R 批 v1.4：headless 无头化（外部零 Chrome 窗口）+ stealth 强化
+                #  - viewport 1280x800：桌面宽屏布局（小红书桌面版），登录小窗/调试镜像同尺寸
+                #  - user_agent：无头时覆盖 HeadlessChrome 特征（风控指纹）
+                #  - AutomationControlled：关掉 CDP 来源的 webdriver 标记（与 init script 双保险）
+                #  - headless=False 兜底档：风控敏感环节可临时切后台可见窗口（config.headless）
+                cfg = config.get_config()
+                headless = bool(cfg.get("headless", True))
+                launch_kwargs = dict(
                     channel="chrome",
-                    headless=False,
-                    args=["--no-first-run", "--no-default-browser-check"],
+                    headless=headless,
+                    viewport={"width": 1280, "height": 800},
+                    args=[
+                        "--no-first-run", "--no-default-browser-check",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                )
+                if headless:
+                    launch_kwargs["user_agent"] = _HEADLESS_UA
+                self._context = await pw.chromium.launch_persistent_context(
+                    self.user_data_dir, **launch_kwargs
                 )
                 # stealth：隐藏自动化特征（webdriver 等），降低被风控识别概率
                 try:

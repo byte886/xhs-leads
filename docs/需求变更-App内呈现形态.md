@@ -47,8 +47,8 @@
 
 | 子任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
-| R-0 | 文档同步与排期（本文档 + 四类文档登记 + 任务清单） | — | 本批（进行中） |
-| R-1 | 引擎无头化 + 独立 profile 归一（engine_pool/browser_client/config） | R-0 | ⏳ |
+| R-0 | 文档同步与排期（本文档 + 四类文档登记 + 任务清单） | — | ✅（10-31，commit d44f0cf） |
+| R-1 | 引擎无头化 + 独立 profile 归一（engine_pool/browser_client/config） | R-0 | ✅（10-31 实施完成：config/engine_pool/server.py 已改，250 passed 回归 + 无头冒烟通过；代码随 R 批统一提交 push） |
 | R-2 | 登录链路改造：cookie_reader 下线、登录小窗后端（CDP 桥：截图流+事件转发） | R-1 | ⏳ |
 | R-3 | 前端：登录小窗组件（完整登录页镜像）+ 全局状态提示条 | R-2 | ⏳ |
 | R-4 | 前端：设置→调试视图（按需镜像入口） | R-2/R-3 | ⏳ |

@@ -32,8 +32,8 @@ DATA_DIR = pathlib.Path(_APP_DATA).expanduser() if _APP_DATA else ROOT / "data"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 CONFIG_FILE = DATA_DIR / "config.json"
 
-# 默认账号目录（沿用历史独立 profile 目录，兼容老数据）
-DEFAULT_ACCOUNT_DIR_NAME = ".xhs-leads-profile"
+# 默认账号目录（R 批 v1.4：归一为数据目录内 profile；历史 ~/.xhs-leads-profile 保留兼容）
+DEFAULT_ACCOUNT_DIR_NAME = "profile"
 # 多账户统一根目录
 ACCOUNTS_ROOT = "~/.xhs-leads/accounts"
 
@@ -71,6 +71,7 @@ _DEFAULTS = {
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
     "browser_mode": "engine",     # engine=独立引擎（B 方案）/ daily=连日常 Chrome（调试遗留）
+    "headless": True,             # 引擎无头化（R 批 v1.4）：无头无窗口；False=后台可见窗口兜底
     "chrome_path": "",            # 用户自定义 Chrome 路径（~ 相对）
     "profile_dir": "",            # 兼容字段：default 账号 user_data_dir 旧配置
     "collect_min_interval": 90.0, # 采集节流（每账号，秒）
@@ -182,14 +183,18 @@ def active_account() -> str:
 
 
 def default_user_data_dir() -> str:
-    """default 账号的 user_data_dir：XHS_PROFILE_DIR > 旧 cdp_config > 默认目录。"""
+    """default 账号的 user_data_dir：XHS_PROFILE_DIR > 旧 cdp_config > 默认目录。
+
+    R 批（v1.4）归一：默认 = 数据目录内 profile（打包态 ~/Library/Application Support/xhs-leads/data/profile，
+    开发态 ROOT/data/profile）；历史 ~/.xhs-leads-profile 数据保留不动（登录态已失效，R 批重扫走新目录）。
+    """
     env = os.environ.get("XHS_PROFILE_DIR")
     if env:
         return expand(env)
     old = _read_json(DATA_DIR / "cdp_config.json").get("profile_dir")
     if old:
         return expand(old)
-    return os.path.expanduser("~/.xhs-leads-profile")
+    return str(DATA_DIR / "profile")
 
 
 def get_account(account_id: str) -> dict | None:

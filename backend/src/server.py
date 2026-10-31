@@ -32,6 +32,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+# ---- 统一日志（审计账本） ----
+from src import logger as _log
+
+log = _log.get("server")
+
 # ---- 路径 ----
 # 安装根与数据根分离（壳 B 批）：打包态下数据目录由 launcher 注入 XHS_LEADS_DATA
 # （~/Library/Application Support/xhs-leads/data），静态资源仍取自安装根。
