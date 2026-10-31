@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parents[2]  # 仓库根（scripts/ui_tests/ → 上两级）
 
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+    b = p.chromium.connect_over_cdp("http://127.0.0.1:9223")
     ctx = b.contexts[0]
     pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None)
 

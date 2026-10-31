@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 
 res = []
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
     pg = b.contexts[0].new_page()
     pg.set_viewport_size({'width':1360,'height':920})
     pg.goto('http://127.0.0.1:8791/?stage=pick')

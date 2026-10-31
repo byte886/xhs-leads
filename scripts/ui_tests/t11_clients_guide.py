@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 lines = []
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+    b = p.chromium.connect_over_cdp("http://127.0.0.1:9223")
     ctx = b.contexts[0]
     pg = ctx.new_page()
     pg.set_viewport_size({"width": 1440, "height": 900})

@@ -33,7 +33,7 @@ def license_mode(port):
 write_license('{"schema_version":1,"mode":"free"}')
 
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
     ctx = b.contexts[0]
 
     # ---- F5 free 实例 8791 ----

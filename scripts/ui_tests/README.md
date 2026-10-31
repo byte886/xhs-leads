@@ -1,4 +1,4 @@
-# UI 自动化测试（headless Chrome + Playwright）
+# UI 自动化测试（连引擎调试端口 + Playwright）
 
 一键回归：`bash scripts/ui_tests/run_all.sh`
 
@@ -6,7 +6,7 @@
 
 - 后端已启动在 `127.0.0.1:8791`（见仓库 README「后端启停」）
 - Python venv `backend/.venv`（含 playwright）
-- 本机装有 Google Chrome（macOS 标准路径自动探测；也可 `CHROME=/path/chrome` 指定）
+- 引擎已启动（后端引擎池自动拉起；**R 批 v1.5 起引擎带 `--remote-debugging-port=9223`**）
 
 ## 运行
 
@@ -35,23 +35,23 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | t09 | t09_clients_agg.py | 客户库聚合：意向分布/属地 TOP/近7天产出 | clients 有数据（否则 SKIP） |
 | t10 | t10_clients_list.py | 客户线索列表：总数/联系方式命中/导出 CSV | clients 有数据（否则 SKIP） |
 | t11 | t11_clients_guide.py | 获客指引风险卡（不做话术：私信限额/导流词/被动回复） | clients 有数据（否则 SKIP） |
-| e1-s1 | e1_s1_filters.py | **真实态筛选**：select 数量/选项、排序+时间→已选筛选行、collect_start 请求体完整、低频真实采集 | 9223 可见 Chrome + 已登录（数据会落库） |
-| e1-s2 | e1_s2_clone.py | **真实态克隆**：badge-note 选图文卡→hover 克隆（非 off）→/api/clone→创作 tab 激活→标题/异步补图 | 9223 + 已登录 + 有已采集图文卡 |
-| e1-s3 | e1_s3_qc_images.py | **真实态质检+图片+草稿**：质检四项、违规词命中、lightbox 看全图、删/追加图、草稿保存/恢复 | 9223 + 已登录 + 图文卡（草稿数会变） |
-| e1-s4 | e1_s4_clients.py | **真实采集客户**：hover 图文卡→采集客户→互动用户落库→自动切客户 tab | 9223 + 已登录 + 图文卡（低频，风控窗口内） |
-| e1-s5 | e1_s5_settings.py | **真实态设置三卡**：AI Key 保存/掩码/灰态解除、CDP 区、人设 toast、清除配置复原 | 9223（会临时写入/清除测试 Key） |
-| e1-s6 | e1_s6_login.py | **登录态闭环**：清 cookie→未登录弹窗→立即读取→恢复→已登录（自带备份恢复，会重启后端） | 9223 + 日常 Chrome（读取失败走扫码属预期） |
+| e1-s1 | e1_s1_filters.py | **真实态筛选**：select 数量/选项、排序+时间→已选筛选行、collect_start 请求体完整、低频真实采集 | 引擎 9223 + 引擎 profile 已登录（数据会落库） |
+| e1-s2 | e1_s2_clone.py | **真实态克隆**：badge-note 选图文卡→hover 克隆（非 off）→/api/clone→创作 tab 激活→标题/异步补图 | 引擎 9223 + 已登录 + 有已采集图文卡 |
+| e1-s3 | e1_s3_qc_images.py | **真实态质检+图片+草稿**：质检四项、违规词命中、lightbox 看全图、删/追加图、草稿保存/恢复 | 引擎 9223 + 已登录 + 图文卡（草稿数会变） |
+| e1-s4 | e1_s4_clients.py | **真实采集客户**：hover 图文卡→采集客户→互动用户落库→自动切客户 tab | 引擎 9223 + 已登录 + 图文卡（低频，风控窗口内） |
+| e1-s5 | e1_s5_settings.py | **真实态设置三卡**：AI Key 保存/掩码/灰态解除、CDP 区、人设 toast、清除配置复原 | 引擎 9223（会临时写入/清除测试 Key） |
+| e1-s6 | e1_s6_login.py | **登录态闭环**：清 cookie→未登录弹窗→登录小窗镜像→恢复→已登录（自带备份恢复，会重启后端） | 引擎 9223 + 登录小窗（扫码/手机号人工操作属预期） |
 
-## E1 真实链路系列（连 9223 可见 Chrome）
+## E1 真实链路系列（连引擎调试端口 9223）
 
-- **与 t 系列（headless 9333 回归）不同**：E1 连 `9223` 可见 Chrome（独立 profile + 真实登录态），验证真实交互链路，**不加入 run_all.sh 一键跑**（依赖登录态与真实数据，且采集/客户为低频风控敏感操作）。
-- 单独运行：`backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：9223 Chrome 已启动且小红书已登录、后端 8791）。
+- **与 t 系列（引擎 9223 回归）同实例**：E1 连 `9223` 引擎（引擎独立 profile + 真实登录态），验证真实交互链路，**不加入 run_all.sh 一键跑**（依赖登录态与真实数据，且采集/客户为低频风控敏感操作）。
+- 单独运行：`backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：引擎已启动且小红书已登录（引擎独立 profile）、后端 8791）。
 - 铁律：**低频单次**——关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），采集/客户不连环重试；e1-s3 的本地追加图路径可移植（仓库 data/images 兜底 /tmp）；e1-s6 自带 cookies 备份/恢复 + 后端重启（清 30s 登录缓存），异常也会恢复。
-- 踩坑记录（已写入各脚本头注释）：真实态比 headless 多一个「采集方式」select（排序 select[1]/时间 select[3]）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
+- 踩坑记录（已写入各脚本头注释）：真实态比 t 系列多一个「采集方式」select（排序 select[1]/时间 select[3]）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
 
 ## 说明
 
-- 脚本统一连接外部 headless Chrome（`--remote-debugging-port=9333`），由 run_all.sh 负责启停清理，脚本自身不启动/杀 Chrome
+- 脚本统一连接引擎调试端口（`--remote-debugging-port=9223`，R 批 v1.5 起引擎自带；旧外部 headless 9333/可见 9223 路径退役），run_all.sh 负责就绪检查与拉起（经 /api/mirror/open 触发引擎），脚本自身不启动/杀 Chrome
 - SKIP 语义：依赖测试数据的脚本（评分/去重/客户/发布日志）在无数据时以退出码 2 报告 SKIP，不误报回归失败；`run_all.sh` 统计时 SKIP 不计入失败
 - DB 路径均用 `Path(__file__).resolve().parents[2] / 'data' / 'xhs_notes.db'` 可移植写法（scripts/ui_tests/ 向上 2 级到仓库根），无 `/Users/<用户名>` 硬编码
 

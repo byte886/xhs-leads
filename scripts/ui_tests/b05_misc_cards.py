@@ -7,7 +7,7 @@
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
     ctx = b.contexts[0]
     pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None) or ctx.new_page()
 

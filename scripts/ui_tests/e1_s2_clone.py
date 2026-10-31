@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 reqs, errs = [], []
 
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')  # B 方案新架构：9333 headless 测试实例（旧 9223 已弃）
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')  # R 批 v1.5：连引擎调试端口（引擎带 --remote-debugging-port=9223；旧外部 Chrome 测试路径退役）
     ctx = b.contexts[0]
     pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None)
     if pg is None:

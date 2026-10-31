@@ -40,7 +40,7 @@ assert s3 == 200 and j3.get('ok') is True and j3.get('count', 0) > 0
 
 # ---- UI 层：空输入 + 无效文本提示 ----
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
     ctx = b.contexts[0]
     pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None) or ctx.new_page()
     pg.goto('http://127.0.0.1:8791/?stage=pick', timeout=20000)

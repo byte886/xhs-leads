@@ -53,7 +53,7 @@ def main():
 
         # 2) 刷新 APP → 未登录状态 + 弹窗
         with sync_playwright() as p:
-            b = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+            b = p.chromium.connect_over_cdp("http://127.0.0.1:9223")
             ctx = b.contexts[0]
             pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None)
             if pg is None:
@@ -89,7 +89,7 @@ def main():
         time.sleep(1)
         # 5) 验证已登录恢复
         with sync_playwright() as p:
-            b = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+            b = p.chromium.connect_over_cdp("http://127.0.0.1:9223")
             ctx = b.contexts[0]
             pg = next((x for x in ctx.pages if '8791' in (x.url or '')), None)
             if pg is None:

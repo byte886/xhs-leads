@@ -6,7 +6,7 @@ if not sqlite3.connect(Path(__file__).resolve().parents[2] / 'data' / 'xhs_notes
     raise SystemExit(2)
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp('http://127.0.0.1:9333')
+    b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
     pg = b.new_page()
     pg.goto('http://127.0.0.1:8791/?stage=pick', timeout=20000)
     pg.wait_for_selector('.card', timeout=15000)

@@ -137,6 +137,10 @@ class AccountEngine:
                 #  - headless=False 兜底档：风控敏感环节可临时切后台可见窗口（config.headless）
                 cfg = config.get_config()
                 headless = bool(cfg.get("headless", True))
+                # R 批 v1.5：引擎带固定 CDP 调试端口（config.engine_port()，默认 9223）供
+                # e1/t 系列 UI 测试 connect_over_cdp 连接（同一实例=同一登录态 profile）；
+                # 旧「9223 外部可见 Chrome」测试路径退役。Playwright 经 stdio 管道控制不受影响。
+                eng_port = config.engine_port()
                 launch_kwargs = dict(
                     channel="chrome",
                     headless=headless,
@@ -144,6 +148,7 @@ class AccountEngine:
                     args=[
                         "--no-first-run", "--no-default-browser-check",
                         "--disable-blink-features=AutomationControlled",
+                        f"--remote-debugging-port={eng_port}",
                     ],
                 )
                 if headless:
