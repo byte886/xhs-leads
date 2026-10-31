@@ -5,7 +5,7 @@
 ## 前置
 
 - 后端已启动在 `127.0.0.1:8791`（见仓库 README「后端启停」）
-- Python venv `app/.venv`（含 playwright）
+- Python venv `backend/.venv`（含 playwright）
 - 本机装有 Google Chrome（macOS 标准路径自动探测；也可 `CHROME=/path/chrome` 指定）
 
 ## 运行
@@ -45,7 +45,7 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 ## E1 真实链路系列（连 9223 可见 Chrome）
 
 - **与 t 系列（headless 9333 回归）不同**：E1 连 `9223` 可见 Chrome（独立 profile + 真实登录态），验证真实交互链路，**不加入 run_all.sh 一键跑**（依赖登录态与真实数据，且采集/客户为低频风控敏感操作）。
-- 单独运行：`app/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：9223 Chrome 已启动且小红书已登录、后端 8791）。
+- 单独运行：`backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：9223 Chrome 已启动且小红书已登录、后端 8791）。
 - 铁律：**低频单次**——关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），采集/客户不连环重试；e1-s3 的本地追加图路径可移植（仓库 data/images 兜底 /tmp）；e1-s6 自带 cookies 备份/恢复 + 后端重启（清 30s 登录缓存），异常也会恢复。
 - 踩坑记录（已写入各脚本头注释）：真实态比 headless 多一个「采集方式」select（排序 select[1]/时间 select[3]）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
 

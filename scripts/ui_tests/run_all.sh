@@ -7,7 +7,7 @@
 #
 # 依赖：
 #   - 后端已启动在 127.0.0.1:8791（详见 README「后端启停」）
-#   - Python venv 在 app/.venv（无则自动回退系统 python3 并提示装 playwright）
+#   - Python venv 在 backend/.venv（无则自动回退系统 python3 并提示装 playwright）
 #   - Google Chrome（默认标准安装路径；可用 CHROME 环境变量指定）
 #
 # 退出码：全部 PASS（无 FAIL）→ 0；有 FAIL → 1（SKIP 不计失败）
@@ -33,7 +33,7 @@ if [ -z "$CHROME" ]; then
 fi
 
 # ---- Python 解释器 ----
-PY=app/.venv/bin/python
+PY=backend/.venv/bin/python
 if [ ! -x "$PY" ]; then
   PY=python3
   python3 -c "import playwright" 2>/dev/null || { echo "✗ 缺 venv 且系统 python3 无 playwright"; exit 1; }
@@ -62,7 +62,7 @@ for f in scripts/ui_tests/t[0-9]*.py; do
     done
     [ "$hit" = "1" ] || continue
   fi
-  if PYTHONPATH=app/src "$PY" "$f" >/tmp/ui_out.$$ 2>&1; then
+  if PYTHONPATH=backend/src "$PY" "$f" >/tmp/ui_out.$$ 2>&1; then
     PASS=$((PASS+1)); echo "PASS  $name"
   else
     code=$?
