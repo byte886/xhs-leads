@@ -485,7 +485,7 @@ async def _launch_cdp_chrome(port: int, profile_dir: str, browser_client):
     # B 方案（引擎模式）：无需远程调试端口，打开登录页即完成
     await browser_client.launch_profile_chrome()
     return {"ok": True, "status": "ready",
-            "note": "已打开小红书登录页（引擎自动管理，无需远程调试配置）。请扫码登录后返回继续。"}
+            "note": "已打开小红书登录页（引擎自动管理，无需远程调试配置）。请在 app 内登录小窗完成登录（扫码/手机号/微信任一途径）。"}
 
 
 @app.post("/api/cdp_pick_chrome")
@@ -513,29 +513,70 @@ async def cdp_open_inspect():
     if browser_client.chrome_executable() is None:
         return {"ok": False, "note": "未找到 Chrome，请填写 Chrome 路径或先安装 Google Chrome"}
     await browser_client.open_inspect_remote_debugging()
-    return {"ok": True, "note": "已打开小红书登录页（引擎自动管理调试能力，无需远程调试设置）。扫码登录后返回本页继续"}
+    return {"ok": True, "note": "已打开小红书登录页（引擎自动管理调试能力，无需远程调试设置）。请在 app 内登录小窗完成登录后返回本页继续"}
 
 
 @app.get("/api/qrcode")
 async def qrcode():
-    """Cookie 失效时前端引导扫码：新架构（Docker 已退役）下登录发生在外部 Chrome 内，
-    本接口负责在 Chrome 中打开小红书首页让用户直接扫码，并返回引导信息。
+    """Cookie 失效时前端引导登录（R 批 v1.4）：登录在 app 内登录小窗完成（引擎独立 profile，
+    镜像=截图流+事件转发，途径不限）。本接口确保引擎打开小红书登录页并返回引导信息。
     前端配合轮询 /api/login_status 直到登录成功。"""
-    import subprocess
-
-    # 在 Chrome 中打开小红书首页（前台标签，用户可直接扫码）——经常驻 Playwright 连接，不额外弹窗
     try:
-        from src import browser_client
-        await browser_client.open_front()
+        from src import mirror
+        await mirror.open_login("default")
         return {
             "ok": True,
-            "guide": "请在打开的 Chrome 小红书首页中扫码登录；登录成功后点「我已扫码完成」检测。",
+            "guide": "app 内登录小窗已打开：请扫码、或手机号+验证码、或微信登录（任一途径），登录成功后自动继续。",
             "url": "https://www.xiaohongshu.com/explore",
             "expires_in": 300,
         }
     except Exception as e:
-        return {"ok": False, "error": f"打开 Chrome 小红书首页失败：{str(e)[:100]}"}
+        return {"ok": False, "error": f"打开小红书登录页失败：{str(e)[:100]}"}
 
+
+# ================= 镜像层（R 批 v1.4：登录小窗 / 调试视图共用） =================
+# 后端 CDP 桥：截图流（captureScreenshot）+ 事件转发（click/type/drag/scroll）。
+# 口径（用户对齐）：镜像=「画面+输入转发」不是 AI 看图；登录自动开 / 调试手动开 / 平时关；
+# 不落盘（区别于审计日志）。前端实现见 R3/R4。
+
+class MirrorEventReq(BaseModel):
+    """事件转发请求：type 支持 click{ x,y } / type{ text } / scroll{ dx,dy } / drag{ x1,y1,x2,y2 }。"""
+    account: str = "default"
+    type: str
+    x: int = 0
+    y: int = 0
+    x1: int = 0
+    y1: int = 0
+    x2: int = 0
+    y2: int = 0
+    dx: int = 0
+    dy: int = 0
+    text: str = ""
+
+
+@app.post("/api/mirror/open")
+async def mirror_open(account_id: str = "default"):
+    """登录小窗打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪）。"""
+    from src import mirror
+    return await mirror.open_login(account_id)
+
+
+@app.get("/api/mirror/screenshot")
+async def mirror_screenshot(account_id: str = "default"):
+    """登录小窗 / 调试视图画面：引擎镜像页 JPEG（轮询显示；不落盘）。"""
+    from src import mirror
+    data = await mirror.screenshot_jpeg(account_id)
+    return Response(
+        content=data, media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/mirror/event")
+async def mirror_event(req: MirrorEventReq):
+    """事件转发：click/type/scroll/drag（坐标相对镜像视口 CSS 像素；type 前需先 click 聚焦）。"""
+    from src import mirror
+    return await mirror.send_event(req.account, req.model_dump())
 
 
 class SearchReq(BaseModel):
@@ -551,6 +592,12 @@ class SearchReq(BaseModel):
     fast: bool = False
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
     account_id: str = ""
+
+
+# ====== R 批 v1.4 下线留档（方案 A/B 旧链路，不删除、保留可回溯） ======
+# 以下函数均属「读系统/目标 Chrome Cookie 库自动续命」旧链路（方案 A 遗留）。
+# R 批拍板：登录态 100% 只依赖引擎独立 profile（R2），不再读系统 Chrome。
+# 函数保留仅供回溯与测试参照，正式链路不调用（见 _require_real_login R 批版）。
 
 
 def _target_chrome_cookie_db(profile_dir: str) -> str | None:
@@ -614,6 +661,11 @@ def _has_valid_web_session(cookies: list[dict], now_us: int) -> bool:
 
 
 async def _check_target_or_daily(browser_client, cookie_reader, profile_dir: str, now_us: int) -> dict | None:
+    """【R 批 v1.4 已下线留档】旧链路 ②：目标 Chrome（独立 Profile）真实校验。
+
+    不再被 _require_real_login 调用（R 批改走引擎独立 profile 单链路）。
+    仅保留供回溯与测试参照。
+    """
     """① 目标 Chrome（独立 Profile）真实校验；非独立 Profile 模式直接校验日常 Chrome。
 
     返回命中结果 dict；都未命中返回 None（继续走恢复链路）。
@@ -633,7 +685,11 @@ async def _check_target_or_daily(browser_client, cookie_reader, profile_dir: str
 
 
 async def _try_restore_daily(browser_client, cookie_reader, now_us: int) -> dict | None:
-    """② 自动恢复：读日常 Chrome（用户已登录账号）→ 落盘 → 注入目标浏览器。"""
+    """【R 批 v1.4 已下线留档】旧链路 ③：自动读日常 Chrome 恢复登录态。
+
+    不再被 _require_real_login 调用（R 批改走引擎独立 profile 单链路）。
+    仅保留供回溯与测试参照。
+    """
     try:
         daily = cookie_reader.read_chrome_cookies()
         if _has_valid_web_session(daily, now_us):
@@ -657,49 +713,36 @@ async def _try_restore_daily(browser_client, cookie_reader, now_us: int) -> dict
 async def _require_real_login() -> dict:
     """真实登录校验（采集/搜索前置，解决「纸面登录」空跑问题）。
 
-    纸面登录态（本地 cookies.json 副本）≠ 目标 Chrome 内真实会话有效：
+    纸面登录态（本地 cookies.json 副本）≠ 引擎独立 profile 内真实会话有效：
     小红书 Cookie 有效期短（数小时~数天），副本可能「未过期」而真实会话早已失效，
     导致采集打开页面停在登录界面、一条都采不到。
 
-    校验/恢复链路（B 方案引擎优先）：
-    ① 引擎 CDP（登录发生在引擎内，内存 Cookie 最实时）→ 有有效 web_session → OK；
-    ② 目标 Chrome（独立 Profile）磁盘 Cookie 库 → 有有效 web_session → OK；
-    ③ 无 → 自动读取日常 Chrome（用户已登录账号）的有效 Cookie，
-       落盘 cookies.json 并注入目标浏览器 → 恢复成功（方案 A 自动化，无需扫码）；
-    ④ 都没有 → 拦截，提示扫码/导入。
-    """
-    from src import browser_client, cookie_reader, engine_pool
+    校验链路（R 批 v1.4 改造版：登录态 100% 只依赖引擎独立 profile，不读系统 Chrome）：
+    ① 引擎 CDP（登录发生在引擎独立 profile 内，内存 Cookie 最实时）→ 有有效 web_session → OK；
+    ② 无 → 拦截，提示在 app 内登录小窗完成登录（扫码/手机号/微信途径不限）。
 
-    # ① 引擎 CDP（B 方案）：引擎内存 Cookie 最实时，无需等 SQLite 落盘
+    旧链路（方案 A/B 遗留，R 批下线留档，代码保留可回溯）：
+    - ② 目标 Chrome（独立 Profile）磁盘 Cookie 库校验 → _check_target_or_daily()
+    - ③ 自动读日常 Chrome（用户已登录账号）恢复 → _try_restore_daily()
+    均不再使用：避免依赖用户日常 Chrome 登录态（隐私 + 「完全独立」口径）。
+    """
+    from src import engine_pool
+
+    # ① 引擎 CDP：独立 profile 内存 Cookie 最实时（R 批唯一登录态来源）
     try:
         eng = await engine_pool.pool.get("default")
         mem = await eng.read_cookies()
         if any(c.get("name") == "web_session" for c in mem):
             r = await _verify_cookies_or_raise(mem, "default")
             if r.get("logged_in"):
-                return {"ok": True, "code": "ok", "note": "引擎真实登录有效（CDP）"}
+                return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP）"}
     except Exception as e:  # noqa: BLE001
         log.warning("引擎 CDP 真实校验失败（走文件链路）: %s", e)
 
-    try:
-        _, profile_dir = browser_client._profile_settings()
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "code": "cfg_fail", "note": f"读取 CDP 配置失败: {str(e)[:80]}"}
-    profile_dir = os.path.expanduser(profile_dir)
-    now_us = int(time.time() * 1_000_000)
-
-    hit = await _check_target_or_daily(browser_client, cookie_reader, profile_dir, now_us)
-    if hit:
-        return hit
-
-    restored = await _try_restore_daily(browser_client, cookie_reader, now_us)
-    if restored:
-        return restored
-
-    # ③ 都没有 → 拦截
+    # ② 无有效登录态 → 拦截（R 批：不再读目标/日常 Chrome Cookie 库，登录走 app 内登录小窗）
     return {
         "ok": False, "code": "not_logged_in",
-        "note": "目标 Chrome 与日常 Chrome 均无有效小红书登录态：请扫码登录，或导入有效 Cookie 后重试",
+        "note": "独立 profile 无有效小红书登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）",
     }
 
 
@@ -739,7 +782,7 @@ async def _require_login(account_id: str = "default"):
 
     ① 风控状态：该账号处于熔断/需人工（manual）时直接拦截并说明原因；
     ② 本地导入 Cookie（纸面）；
-    ③ default 账号追加真实会话校验（目标引擎/日常 Chrome 恢复链，防空跑）。
+    ③ default 账号追加真实会话校验（引擎独立 profile 单链路，R 批）。
     任一明确失效即拦截并给出恢复指引。
     """
     blocked, reason = risk.is_blocked(account_id)
@@ -749,12 +792,12 @@ async def _require_login(account_id: str = "default"):
     if st.get("status") == "not_logged_in":
         raise HTTPException(
             403,
-            "小红书登录态已失效：请导入有效 Cookie（左侧面板「导入 Cookie」）或去 Chrome 扫码登录后重试",
+            "小红书登录态已失效：请在 app 内登录小窗完成登录（扫码/手机号/微信任一途径）后重试",
         )
     if account_id == "default":
         real = await _require_real_login()
         if not real.get("ok"):
-            raise HTTPException(403, real.get("note", "目标 Chrome 未登录小红书，请先扫码登录或导入 Cookie"))
+            raise HTTPException(403, real.get("note", "独立 profile 未登录小红书，请先在 app 内登录小窗完成登录"))
 
 
 @app.post("/api/search")
@@ -1560,7 +1603,11 @@ def _save_cookies_file(cookies: list[dict]):
 
 
 def _read_chrome_cookies() -> tuple[list | None, dict | None]:
-    """读 .xhs-leads-profile 的 Chrome Cookie 库（钥匙串解密）。返回 (cookies, 错误响应)；成功时错误为 None。"""
+    """【R 批 v1.4 已下线留档】读 .xhs-leads-profile 的 Chrome Cookie 库（钥匙串解密）。
+
+    不再被任何正式接口调用（refresh_cookie_from_chrome 已改走引擎独立 profile 单链路）。
+    仅保留供回溯与测试参照；返回 (cookies, 错误响应)；成功时错误为 None。
+    """
     profile_dir = os.environ.get("XHS_PROFILE_DIR") or os.path.join(
         os.path.expanduser("~"), ".xhs-leads-profile"
     )
@@ -1582,15 +1629,16 @@ def _read_chrome_cookies() -> tuple[list | None, dict | None]:
 
 @app.post("/api/refresh_cookie_from_chrome")
 async def refresh_cookie_from_chrome(account_id: str = "default"):
-    """登录态自动续期（B 方案引擎优先）：读引擎内存 Cookie（CDP，最实时）→ 校验 → 落盘 → 自动解除风控。
+    """登录态自动续期（R 批 v1.4：引擎独立 profile 单链路，不再读系统 Chrome）。
 
-    ① 引擎 CDP：登录发生在引擎内（扫码页就是引擎打开的），内存 Cookie 立即可读，
-       成功后 risk.resolve(account_id) —— 软风控 manual/cooldown 自动解锁（现象 3 闭环）；
-    ② 回退磁盘：引擎未运行/未登录时，读引擎 profile 磁盘 Cookie 库（钥匙串解密，
-       跨平台无 CDP 依赖），成功同样自动解锁；
-    ③ 都没有 → 返回引导信息（扫码或手动导入）。
+    ① 引擎 CDP：登录发生在引擎独立 profile 内，内存 Cookie 立即可读（扫码/手机号/
+       微信登录后即生效），成功后 risk.resolve(account_id) —— 软风控自动解锁；
+    ② 引擎未运行/未登录 → 返回引导：在 app 内登录小窗完成登录（R3）。
+
+    旧链路（方案 A 遗留，R 批下线留档）：读 .xhs-leads-profile/引擎 profile 磁盘
+    Cookie 库（钥匙串解密）自动续命 → 不再使用（依赖系统 Chrome 登录态，违背独立口径）。
     """
-    from src import browser_client, cookie_reader, engine_pool, risk
+    from src import engine_pool, risk
 
     account_id = account_id or "default"
     # ① 引擎内存 Cookie（CDP，登录后立即可用）
@@ -1608,42 +1656,12 @@ async def refresh_cookie_from_chrome(account_id: str = "default"):
                     "raw": f"url={r.get('url')} hasLoginUi={r.get('hasLoginUi')}",
                 }
     except Exception as e:  # noqa: BLE001
-        log.warning("引擎 CDP 读 Cookie 失败（回退磁盘）: %s", e)
+        log.warning("引擎 CDP 读 Cookie 失败: %s", e)
 
-    # ② 回退：读引擎 profile 磁盘 Cookie 库（钥匙串解密，跨平台无 CDP 依赖）
-    chrome_cookies, err = _read_chrome_cookies()
-    if chrome_cookies is None:
-        return err
-
-    if not chrome_cookies:
-        return {"ok": False, "need_auth": False,
-                "error": "Chrome 中未找到小红书 Cookie（可能未在小红书网页版登录），请先登录或手动导入 Cookie。"}
-
-    cookies = _parse_cookie_text(cookie_reader.cookies_to_text(chrome_cookies))
-    if not cookies:
-        return {"ok": False, "need_auth": False, "error": "从 Chrome 解析 Cookie 失败"}
-
-    r = await _verify_cookies_or_raise(cookies, account_id)
-
-    if not r.get("logged_in"):
-        return {
-            "ok": False,
-            "valid": False,
-            "error": "Chrome 中的 Cookie 无效或已过期（登录态检测未通过）。请去 Chrome 扫码登录后重试，或手动导入 Cookie。",
-            "count": len(cookies),
-            "raw": f"url={r.get('url')} hasLoginUi={r.get('hasLoginUi')}",
-        }
-
-    _save_cookies_file(cookies)
-    risk.resolve(account_id, reason="引擎登录恢复（磁盘库）")  # 软风控自动解锁
-    ws = next((c["value"] for c in cookies if c["name"] == "web_session"), "")
+    # ② 引擎未登录 → 引导 app 内登录（R 批：不再读系统/目标 Chrome 磁盘库自动续命）
     return {
-        "ok": True,
-        "valid": True,
-        "count": len(cookies),
-        "account": (ws[:8] + "…") if ws else "已登录",
-        "source": "chrome",
-        "note": "已自动读取登录态并保存（引擎 CDP / 磁盘库），软风控已自动解除。",
+        "ok": False, "valid": False,
+        "error": "独立 profile 无有效登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）后重试。",
     }
 
 
@@ -1680,7 +1698,7 @@ async def import_cookie(req: ImportCookieReq):
         return {
             "ok": False,
             "valid": False,
-            "error": "Cookie 无效或已过期（登录态检测未通过）。请确认 Cookie 来自最近登录的小红书账号，或直接去 Chrome 扫码登录。",
+            "error": "Cookie 无效或已过期（登录态检测未通过）。请确认 Cookie 来自最近登录的小红书账号，或直接在 app 内登录小窗扫码/手机号/微信登录。",
             "count": len(cookies),
             "raw": f"url={r.get('url')} hasLoginUi={r.get('hasLoginUi')}",
         }
@@ -1693,7 +1711,7 @@ async def import_cookie(req: ImportCookieReq):
         "valid": True,
         "count": len(cookies),
         "account": (ws[:8] + "…") if ws else "已登录",
-        "note": "Cookie 有效并已保存。独立浏览器（生产 APP 环境）将直接使用该账号；当前调试环境仍以日常 Chrome 登录态为准。",
+        "note": "Cookie 有效并已保存。独立引擎（app 内呈现形态）将直接使用该账号；登录态只存引擎独立 profile，不依赖系统 Chrome。",
     }
 
 

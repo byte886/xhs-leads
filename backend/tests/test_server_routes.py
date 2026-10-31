@@ -92,24 +92,25 @@ class TestStartupCleanup:
 
 class TestQrcode:
     def test_qrcode_ok(self, client, monkeypatch):
-        from src import browser_client
+        # R 批 v1.4：登录引导改走 app 内镜像（引擎独立 profile），不再拉起外部 Chrome
+        from src import mirror
 
-        async def fake_open_front():
-            return None
+        async def fake_open_login(account="default"):
+            return {"ok": True}
 
-        monkeypatch.setattr(browser_client, "open_front", fake_open_front)
+        monkeypatch.setattr(mirror, "open_login", fake_open_login)
         r = client.get("/api/qrcode")
-        assert r.json()["ok"] is True and "扫码登录" in r.json()["guide"]
+        assert r.json()["ok"] is True and "登录小窗" in r.json()["guide"]
 
     def test_qrcode_fail(self, client, monkeypatch):
-        from src import browser_client
+        from src import mirror
 
-        async def boom():
-            raise RuntimeError("Chrome 未启动")
+        async def boom(account="default"):
+            raise RuntimeError("引擎未启动")
 
-        monkeypatch.setattr(browser_client, "open_front", boom)
+        monkeypatch.setattr(mirror, "open_login", boom)
         r = client.get("/api/qrcode")
-        assert r.json()["ok"] is False and "Chrome 未启动" in r.json()["error"]
+        assert r.json()["ok"] is False and "引擎未启动" in r.json()["error"]
 
 
 class TestSearch:
