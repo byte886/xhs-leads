@@ -1,13 +1,62 @@
 <script setup lang="ts">
 // SettingsPanel v1.5：设置 Tab（AI 模型 Key 门控 / CDP 连接 / 账号人设）
 // 三卡收敛一页；配置后通过 appState.sys 全局状态条即时反映（共享观察）
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
   apiCdpStatus, apiCdpSetup, apiCdpOpenInspect, apiCdpPickChrome,
   apiLicenseStatus, apiLicenseActivate,
+  apiMirrorOpen, apiMirrorScreenshotUrl, apiMirrorEvent,
 } from '../api'
+
+// ---- R 批 v1.4：调试视图（引擎镜像，按需开启） ----
+// 口径：登录自动开 / 调试手动开 / 平时关；镜像=截图流+事件转发（可交互，点击画面即操作）；
+// 不落盘（区别于审计日志）。
+const dbgOpen = ref(false)
+const dbgShot = ref('')
+const dbgImg = ref<HTMLImageElement | null>(null)
+const dbgFailed = ref('')
+let dbgTimer: ReturnType<typeof setInterval> | null = null
+
+async function openDebug() {
+  dbgOpen.value = true
+  dbgFailed.value = ''
+  try {
+    const r = await apiMirrorOpen()
+    if (!r.ok) {
+      dbgFailed.value = '引擎镜像打开失败：' + ((r as any).error || '引擎未就绪')
+      return
+    }
+    refreshDebugShot()
+    if (dbgTimer) clearInterval(dbgTimer)
+    dbgTimer = setInterval(refreshDebugShot, 2000)
+  } catch (e) {
+    dbgFailed.value = '引擎镜像打开失败：' + (e as Error).message
+  }
+}
+
+function refreshDebugShot() {
+  if (!dbgOpen.value) return
+  dbgShot.value = apiMirrorScreenshotUrl()
+}
+
+function closeDebug() {
+  dbgOpen.value = false
+  dbgShot.value = ''
+  if (dbgTimer) { clearInterval(dbgTimer); dbgTimer = null }
+}
+
+function onDbgClick(e: MouseEvent) {
+  const img = dbgImg.value
+  if (!img) return
+  const scale = img.naturalWidth > 0 ? img.naturalWidth / img.clientWidth : 1
+  const x = Math.round(e.offsetX * scale)
+  const y = Math.round(e.offsetY * scale)
+  apiMirrorEvent({ type: 'click', x, y }).catch(() => {})
+}
+
+onBeforeUnmount(() => { if (dbgTimer) { clearInterval(dbgTimer); dbgTimer = null } })
 
 // ---- 授权状态（薄层：free 恒放行，展示模式/功能清单/指纹摘要） ----
 const lic = ref<{ mode: string; features: string[]; machine_fingerprint: string; has_activation: boolean }>()
@@ -273,6 +322,31 @@ onMounted(async () => {
           <button class="btn primary" :disabled="personaSaving || !personaLoaded" @click="savePersona">{{ personaSaving ? '保存中…' : '保存人设' }}</button>
         </div>
       </div>
+
+      <!-- 调试视图（R 批 v1.4：引擎镜像监控，按需开启） -->
+      <div class="set-card">
+        <div class="set-card-h">调试视图（引擎镜像）</div>
+        <p class="set-hint">查看引擎当前实时画面（采集/登录过程一目了然）。点击画面即可操作（交互转发，与登录小窗同一 CDP 桥）；镜像不落盘、不留痕。口径：登录自动开 / 调试手动开 / 平时关。</p>
+        <div class="set-actions">
+          <button v-if="!dbgOpen" class="btn primary" @click="openDebug">打开调试视图</button>
+          <button v-else class="btn danger" @click="closeDebug">关闭调试视图</button>
+        </div>
+        <div v-if="dbgOpen" class="dbg-frame">
+          <img
+            ref="dbgImg"
+            v-if="dbgShot"
+            :src="dbgShot"
+            alt="引擎镜像画面"
+            class="dbg-img"
+            draggable="false"
+            @click="onDbgClick"
+            @error="dbgFailed = '镜像画面加载失败（引擎可能未就绪）'"
+          />
+          <div v-else class="dbg-empty">画面加载中…</div>
+          <p class="dbg-hint">← 点击画面即可操作引擎当前页面（2s 自动刷新一帧）</p>
+          <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -327,4 +401,12 @@ input {
   margin-top: 10px;
 }
 .gate-msg.ok { background: #F2FBF5; border-color: #BFE8D0; color: #1a7f4c; }
+.dbg-frame {
+  border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden;
+  background: #f7f7f7; text-align: center; margin-top: 8px;
+}
+.dbg-img { width: 100%; max-height: 360px; object-fit: contain; cursor: crosshair; display: block; user-select: none; }
+.dbg-empty { padding: 60px 0; color: #999; font-size: 13px; }
+.dbg-hint { font-size: 11px; color: #aaa; padding: 4px 0; margin: 0; }
+.dbg-fail { font-size: 12px; color: #c0392b; margin: 4px 0 0; text-align: left; }
 </style>

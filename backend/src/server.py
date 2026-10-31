@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1042,6 +1042,27 @@ async def collect_start(req: SearchReq):
     state["task"] = asyncio.create_task(worker())
     return {"ok": True, "task_id": tid, "keyword": req.keyword, "limit": req.limit,
             "account_id": account_id}
+
+
+@app.get("/api/status_now")
+async def status_now():
+    """全局状态提示条（R 批 v1.4）：实时播报「正在干什么」，不落盘。
+
+    数据源：采集任务注册表（_COLLECT_TASKS）→ 进行中则聚合动作文案+进度；否则空闲。
+    与审计日志（logger.py 落盘账本）区分：本接口只服务前端实时播报。
+    """
+    running = [st for st in _COLLECT_TASKS.values() if st.get("status") == "running"]
+    if running:
+        st = running[0]
+        return {
+            "action": "正在采集",
+            "detail": st.get("note") or "",
+            "collected": st.get("collected", 0),
+            "limit": st.get("limit", 0),
+            "keyword": st.get("keyword", ""),
+            "collecting": True,
+        }
+    return {"action": "空闲", "detail": "", "collecting": False}
 
 
 @app.get("/api/collect_progress")

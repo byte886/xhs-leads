@@ -177,6 +177,42 @@ export async function apiQrcode(): Promise<{ ok: boolean; guide?: string; url?: 
   return j(await fetch(`${BASE}/api/qrcode`))
 }
 
+// ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----
+export interface MirrorEventPayload {
+  type: 'click' | 'type' | 'scroll' | 'drag'
+  x?: number; y?: number
+  x1?: number; y1?: number; x2?: number; y2?: number
+  dx?: number; dy?: number
+  text?: string
+}
+
+/** 登录小窗/调试视图打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪） */
+export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string }> {
+  return j(await fetch(`${BASE}/api/mirror/open?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
+}
+
+/** 引擎镜像页画面（JPEG；带时间戳防缓存，<img> 轮询刷新显示） */
+export function apiMirrorScreenshotUrl(account = 'default'): string {
+  return `${BASE}/api/mirror/screenshot?account_id=${encodeURIComponent(account)}&t=${Date.now()}`
+}
+
+/** 事件转发：click/type/scroll/drag（坐标相对镜像视口；type 前需先 click 聚焦） */
+export async function apiMirrorEvent(payload: MirrorEventPayload, account = 'default'): Promise<{ ok: boolean; error?: string }> {
+  return j(await fetch(`${BASE}/api/mirror/event`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account, ...payload }),
+  }))
+}
+
+/** 全局状态提示条（R 批 v1.4）：实时播报「正在干什么」，不落盘（区别于审计日志） */
+export async function apiStatusNow(): Promise<{
+  action: string; detail: string; collecting: boolean
+  collected?: number; limit?: number; keyword?: string
+}> {
+  return j(await fetch(`${BASE}/api/status_now`))
+}
+
 /** 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积） */
 export async function apiCleanupImages(): Promise<{ ok: boolean; removed: number }> {
   return j(await fetch(`${BASE}/api/cleanup_images`, { method: 'POST' }))

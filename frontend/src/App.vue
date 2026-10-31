@@ -10,7 +10,8 @@ import PublishPage from './components/PublishPage.vue'
 import ClientsPanel from './components/ClientsPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import LoginModal from './components/LoginModal.vue'
-import { apiLoginStatus, apiRefreshCookieFromChrome, apiCleanupImages, apiNotes } from './api'
+import StatusBar from './components/StatusBar.vue'
+import { apiLoginStatus, apiCleanupImages, apiNotes } from './api'
 
 // v1.5 工作流 4-Tab：采集 / 创作 / 客户 / 设置（创作、客户、设置用 v-show 保持状态）
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
@@ -99,28 +100,15 @@ function fmtTime(s: number) {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
 }
 
-// 启动/刷新时自动检测登录态（生产 profile 模式：独立 Chrome 自动拉起+自动注入，无 CDP 授权弹窗代价）。
-// 未登录 → 自动尝试方案 A（读日常 Chrome Cookie + 钥匙串解密 + 校验落盘）：
-//   成功 → 登录态恢复、弹窗不出现；失败 → 弹登录引导（含登录链接 + 刷新自动恢复提示）。
-// 用户在小红书完成登录后切回本页刷新，即重走本链路完成恢复。
+// 启动/刷新时自动检测登录态（R 批 v1.4：引擎独立 profile 无头化，无外部 Chrome 窗口）。
+// 未登录 → 自动弹出登录小窗（镜像打开引擎登录页，完整登录页画面 + 事件转发，扫码/手机号/微信任一途径）。
 onMounted(async () => {
   let lg: any = null
   try { lg = await apiLoginStatus() } catch { lg = null }
   const loggedIn = !!(lg && lg.logged_in)
   appState.login = { logged_in: loggedIn, nickname: (lg && lg.nickname) || '' }
-  if (!loggedIn) {
-    // 先弹登录引导（用户立即可见），后台同时自动尝试方案 A 读取日常 Chrome：
-    // 成功 → 自动关闭弹窗并恢复；失败 → 弹窗保持，按引导「登录 → 回来刷新」完成恢复
-    if (!appState.collecting) loginOpen.value = true
-    try {
-      const r = await apiRefreshCookieFromChrome()
-      if (r && r.ok) {
-        appState.login = { logged_in: true, nickname: r.account || '已登录' }
-        appState.cookieRefreshTick += 1
-        loginOpen.value = false
-        toast(r.note || '已自动从 Chrome 恢复登录态')
-      }
-    } catch { /* 后台读取失败：弹窗引导保持 */ }
+  if (!loggedIn && !appState.collecting) {
+    loginOpen.value = true
   }
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
@@ -146,6 +134,7 @@ onMounted(async () => {
 <template>
   <div>
     <FlowBar />
+    <StatusBar />
 
     <!-- 采集 Tab：左侧面板 + 采集主区 -->
     <div v-show="appState.tab === 'collect'" class="workbench">
