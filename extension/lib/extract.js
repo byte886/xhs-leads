@@ -271,17 +271,21 @@ function xhsExtractComments(root = document) {
 }
 
 // 登录态检测：页面特征（不依赖签名 API）
+// 判定收紧（R-6.5 修复）：未登录态小红书 explore 同样渲染推荐流，
+// 旧「推荐流兜底 → true」会把未登录页误判为已登录（占位 web_session 注入后假阳性）。
+// 现规则：显式命中未登录 UI 特征 → false；仅顶栏头像/用户菜单 → true。
 function xhsIsLoggedIn(root = document) {
-  // 未登录特征：出现登录弹层/登录按钮/被重定向到登录页
-  const t = root.body ? root.body.innerText : '';
   const url = location.href;
-  if (/website-login|login|captcha/i.test(url)) return false;
+  if (/website-login|captcha|login/i.test(url)) return false;
   if (root.querySelector('.login-container, .login-modal, [class*="login-modal"]')) return false;
-  // 已登录特征：头像/用户菜单
-  if (root.querySelector('.avatar, .user-menu, [class*="user-avatar"], header img[class*="avatar"]')) return true;
-  // 兜底：推荐流正常渲染且无登录弹层 → 视为可采集
-  if (root.querySelector('section.note-item, .feeds-container, .feed')) return true;
-  return t.includes('登录') && t.includes('注册') ? false : true;
+  // 顶栏「登录」按钮 / 登录表单区
+  if (root.querySelector('header [class*="login"], [class*="login-button"], [class*="login-btn"]')) return false;
+  const t = root.body ? root.body.innerText : '';
+  // 未登录标配：搜索栏占位文案「登录探索更多内容」/ 登录+注册引导
+  if (t.includes('登录探索更多内容')) return false;
+  if (t.includes('登录') && t.includes('注册')) return false;
+  // 已登录特征：头像/用户菜单（唯一 true 来源）
+  return !!root.querySelector('.avatar, .user-menu, [class*="user-avatar"], header img[class*="avatar"], [class*="user-info"]');
 }
 
 if (typeof window !== 'undefined') {

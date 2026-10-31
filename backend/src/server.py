@@ -334,6 +334,107 @@ async def login_status():
     return result
 
 
+# ================= 真实登录页方案（R-6.5）=================
+# 用户拍板：登录交互改为「壳窗口内打开真实小红书登录页」（原生扫码/手机号+获取验证码），
+# 登录后 Cookie 注入无头引擎独立 profile（两套会话闭环：WebView 登录 → CDP 注入 → 引擎复用）。
+# 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫轮询到 pending →
+#       窗口 load_url(小红书登录页) → 守卫轮询 get_cookies 出现 web_session →
+#       import_cookies 注入引擎 → 真实判定登录态 → 回 APP 前端。
+_LOGIN_GATE = {"pending": False}
+
+
+class ImportCookiesReq(BaseModel):
+    cookies: list[dict]  # WebView SimpleCookie 转 dict：name/value/domain/path/expires/secure/httpOnly/sameSite
+
+
+@app.post("/api/auth/login_begin")
+async def login_begin():
+    """前端请求打开真实登录页（窗口导航由 launcher 守卫执行）。已登录则直接返回无需导航。"""
+    cache = _LOGIN_CACHE["data"]
+    if cache and cache.get("logged_in"):
+        return {"ok": True, "already_logged_in": True}
+    _LOGIN_GATE["pending"] = True
+    return {"ok": True, "already_logged_in": False}
+
+
+@app.get("/api/auth/login_begin_state")
+async def login_begin_state():
+    """壳 launcher 守卫轮询：是否有待处理的登录请求（pending 由登录成功清除）。"""
+    return {"pending": _LOGIN_GATE["pending"]}
+
+
+@app.post("/api/auth/import_cookies")
+async def import_cookies(req: ImportCookiesReq):
+    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
+    from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
+
+    pw = []
+    for c in req.cookies:
+        dom = str(c.get("domain", ""))
+        if "xiaohongshu" not in dom and "xhscdn" not in dom:
+            continue
+        item = {
+            "name": str(c.get("name", "")),
+            "value": str(c.get("value", "")),
+            "domain": dom,
+            "path": str(c.get("path", "/")),
+        }
+        exp = c.get("expires")
+        if exp is not None:
+            try:
+                item["expires"] = float(exp)
+            except (TypeError, ValueError):
+                pass  # 解析失败则 session cookie（不持久）
+        if c.get("secure"):
+            item["secure"] = True
+        if c.get("httpOnly"):
+            item["httpOnly"] = True
+        ss = c.get("sameSite")
+        if ss in ("Lax", "Strict", "None"):
+            item["sameSite"] = ss
+        pw.append(item)
+    if not pw:
+        return {"ok": False, "error": "未捕获到小红书域 Cookie"}
+
+    eng = await engine_pool.pool.get("default")
+    ok = await eng.inject_cookies(pw)
+    if not ok:
+        return {"ok": False, "error": "注入引擎失败"}
+
+    # 刷新引擎小红书页使登录态生效（无则开 explore）
+    try:
+        ctx = await eng.context()
+        page = None
+        for p in ctx.pages:
+            if not p.is_closed() and "xiaohongshu" in (p.url or ""):
+                page = p
+                break
+        if page is None:
+            page = await eng.new_page()
+            await page.goto("https://www.xiaohongshu.com/explore",
+                            wait_until="domcontentloaded", timeout=30000)
+        await page.reload(wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(3)
+    except Exception as e:  # noqa: BLE001
+        log.warning("注入后刷新引擎页面失败（不影响判定）: %s", e)
+
+    try:
+        has_ws, page_logged_in = await _engine_login_state(eng)
+    except Exception as e:  # noqa: BLE001（引擎页面刷新/判定时序异常：返回未通过，守卫留在登录页重试）
+        log.warning("注入后引擎登录判定异常（不中断，按未通过处理）: %s", e)
+        has_ws, page_logged_in = False, False
+    logged_in = has_ws and page_logged_in
+    _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
+    if logged_in:
+        _LOGIN_GATE["pending"] = False
+    return {
+        "ok": True,
+        "logged_in": logged_in,
+        "status": "logged_in" if logged_in else "not_logged_in",
+        "raw": f"注入后 engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'}",
+    }
+
+
 # ================= CDP 自动化配置 =================
 # 交付模式：APP 自动/半自动配置外部 Chrome 的远程调试（普通客户无需懂 CDP）。
 # 方案（谷歌/官方调研）：Chrome 启动参数 --remote-debugging-port + 独立 profile（--user-data-dir）。

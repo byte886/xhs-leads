@@ -56,9 +56,18 @@
 | R-4 | 前端：设置→调试视图（按需镜像入口） | R-2/R-3 | ✅（10-31 实施完成：设置页调试视图卡片=引擎镜像按需开、可交互点击转发，登录自动开/调试手动开/平时关） |
 | R-5 | e1 基建改造（连引擎调试端口）+ t 系列/A 批回归重跑 | R-1~R-4 | ✅（10-31 实施完成：引擎带 --remote-debugging-port=9223（config.engine_port）；25 脚本 9333→9223 统一连引擎实例；run_all.sh 改引擎就绪检查+拉起、旧外部 headless 9333/9223 路径退役；t 系列 PASS=9/FAIL=0/SKIP=2；后端回归 EXIT=0） |
 | R-6 | e1 六场景真实态补跑（最终形态）→ 全绿 | R-5 | ⏳ 待引擎 profile 有效登录态（前置修复已完成：login_status 改引擎真实判定——CDP web_session + 页面 xhsIsLoggedIn 双重确认，旧 cookies.json 纸面判定停用留档；实测 stale cookie 假阳性已消除） |
-| R-7 | 文档归档 + **push**（重构批 3 提交 + R 批提交） | R-6 | ⏳ |
+| R-6.5 | **登录形态升级（用户拍板）：截图镜像 → 壳内真实登录页 + Cookie 注入引擎** | R-2/R-5 | ✅ 工程完成（10-31 验收：打包态壳窗口内真实打开小红书登录首页，r65b_login.png 铁证；详见「R-6.5 附注」）。⏳ 真实登录闭环待人工闸口（用户扫码/手机号+验证码一次） |
+| R-7 | 文档归档 + **push**（重构批 3 提交 + R 批提交） | R-6/R-6.5 | ⏳ |
 
-**顺序原则**：先引擎（R-1）→ 后登录/镜像（R-2）→ 再 UI（R-3/R-4）→ 基建与回归（R-5）→ 真实态（R-6）→ 归档推送（R-7）。人工闸口：R-6 需用户提供有效登录态。
+**顺序原则**：先引擎（R-1）→ 后登录/镜像（R-2）→ 再 UI（R-3/R-4）→ 基建与回归（R-5）→ 真实态（R-6）→ 归档推送（R-7）。人工闸口：R-6 需用户提供有效登录态；R-6.5 真实登录需用户实际操作一次。
+
+**R-6.5 附注（登录形态升级）**：用户明确否决截图镜像登录（交互不便、手机号验证码无法真实获取）——拍板「APP 壳内直接打开小红书真实登录页（扫码/手机号+验证码/微信原生完成，验证码走『获取验证码』），登录后 Cookie 由 pywebview 拿到注入无头采集引擎独立 profile」。技术 PoC 实测通过（pywebview 6.2.1 cocoa `get_cookies()` 含 HttpOnly、按窗口当前 URL 域过滤；`create_window` 必须本地起步、start 后 `load_url` 切换，直接外链会 `Main window failed to start`）。工程落地：
+- **server.py**：`_LOGIN_GATE` + `/api/auth/login_begin`（已登录直接返回）/`login_begin_state`（pending）/`import_cookies`（过滤 xiaohongshu/xhscdn 域 → SimpleCookie/Morsel → `inject_cookies()` 幂等注入 → reload → `_engine_login_state` 真实判定 → 清 30s 缓存）。
+- **launcher.py**：`_login_guard` 守卫线程——轮询 pending → 壳窗口 `load_url` + `evaluate_js` 双保险导航登录页 → 循环 `get_cookies()` 找 `web_session` → 注入引擎 → 仅真登录成功/30 分钟超时回前端；**注入未通过留在登录页继续轮询**（15s 节流，修复占位 web_session 误捕拉回抖动）；`CZ_SKIP_LOGIN_GUARD=1` 跳过开关。
+- **LoginModal.vue**：重写为登录引导版（「前往登录」→ 触发守卫导航；成功自动关）。
+- **判定修复**：`extension/lib/extract.js` 的 `xhsIsLoggedIn()` 收紧——未登录态小红书 explore 同样渲染推荐流，旧「推荐流兜底 → true」会假阳性；现改为显式未登录 UI 特征（顶栏登录按钮/「登录探索更多内容」）→ false，仅头像/用户菜单 → true。
+- **打包态验收**：壳窗口内真实登录页（r65b_login.png）、登录页稳定停留 18s 不拉回、引擎独立 profile 正常启动无锁冲突、`login_status` 未登录态判定正确（raw: `web_session=有 页面登录=否`）；后端回归 250 passed EXIT=0。
+
 
 ## 五、验收口径
 

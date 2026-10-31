@@ -18,6 +18,11 @@ export async function apiLoginStatus(): Promise<LoginStatus> {
   return j(await fetch(`${BASE}/api/login_status`))
 }
 
+// R-6.5：请求打开真实登录页（壳窗口导航由 launcher 登录守卫执行，登录后 Cookie 注入引擎自动返回）
+export async function apiLoginBegin(): Promise<{ ok: boolean; already_logged_in?: boolean }> {
+  return j(await fetch(`${BASE}/api/auth/login_begin`, { method: 'POST' }))
+}
+
 export async function apiLicenseStatus(): Promise<{ ok: boolean; status: LicenseStatus }> {
   return j(await fetch(`${BASE}/api/license_status`))
 }
