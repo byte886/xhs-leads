@@ -153,6 +153,10 @@ class AccountEngine:
                         f"--remote-debugging-port={eng_port}",
                     ],
                 )
+                # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出独立小窗，
+                # 实时可见采集/登录操作过程（替代「截图映射」）；窗口 960x720 小窗。
+                if not headless:
+                    launch_kwargs["args"].append("--window-size=960,720")
                 # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
                 # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
                 # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；

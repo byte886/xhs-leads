@@ -214,6 +214,15 @@ export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean;
   return j(await fetch(`${BASE}/api/mirror/open?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
 }
 
+/** 调试实时窗口开关（R-6.15）：on=引擎独立小窗实时可见操作；off=回无头（引擎重启生效） */
+export async function apiMirrorWindow(on: boolean, account = 'default'): Promise<{ ok: boolean; window?: boolean; note?: string; error?: string }> {
+  return j(await fetch(`${BASE}/api/mirror/window`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ on, account_id: account }),
+  }))
+}
+
 /** 引擎镜像页画面（JPEG；带时间戳防缓存，<img> 轮询刷新显示） */
 export function apiMirrorScreenshotUrl(account = 'default'): string {
   return `${BASE}/api/mirror/screenshot?account_id=${encodeURIComponent(account)}&t=${Date.now()}`

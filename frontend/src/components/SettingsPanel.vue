@@ -7,7 +7,7 @@ import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
   apiCdpStatus, apiCdpSetup, apiCdpOpenInspect, apiCdpPickChrome,
   apiLicenseStatus, apiLicenseActivate,
-  apiMirrorOpen, apiMirrorScreenshotUrl, apiMirrorEvent,
+  apiMirrorWindow,
   apiLoginStatus, apiLoginBegin, apiCookieInfo, apiImportCookieText,
 } from '../api'
 import type { CookieItem } from '../api'
@@ -83,53 +83,34 @@ async function doImport() {
   }
 }
 
-// ---- R 批 v1.4：调试视图（引擎镜像，按需开启） ----
-// 口径：登录自动开 / 调试手动开 / 平时关；镜像=截图流+事件转发（可交互，点击画面即操作）；
-// 不落盘（区别于审计日志）。
+// ---- R 批 v1.4 / R-6.15：调试视图（引擎实时窗口） ----
+// 口径：登录自动开 / 调试手动开 / 平时关。
+// R-6.15 用户需求：调试视图从「截图映射」改为「引擎独立小窗」——开关切换引擎
+// 为有头小窗（headless=False，960x720），实时可见采集/登录操作过程；不再截图轮询。
 const dbgOpen = ref(false)
-const dbgShot = ref('')
-const dbgImg = ref<HTMLImageElement | null>(null)
+const dbgNote = ref('')
+const dbgBusy = ref(false)
 const dbgFailed = ref('')
-let dbgTimer: ReturnType<typeof setInterval> | null = null
 
-async function openDebug() {
-  dbgOpen.value = true
+async function toggleDebug() {
+  if (dbgBusy.value) return
+  dbgBusy.value = true
   dbgFailed.value = ''
+  const target = !dbgOpen.value
   try {
-    const r = await apiMirrorOpen()
+    const r = await apiMirrorWindow(target)
     if (!r.ok) {
-      dbgFailed.value = '引擎镜像打开失败：' + ((r as any).error || '引擎未就绪')
+      dbgFailed.value = '切换失败：' + (r.error || '引擎未就绪')
       return
     }
-    refreshDebugShot()
-    if (dbgTimer) clearInterval(dbgTimer)
-    dbgTimer = setInterval(refreshDebugShot, 2000)
+    dbgOpen.value = target
+    dbgNote.value = r.note || ''
   } catch (e) {
-    dbgFailed.value = '引擎镜像打开失败：' + (e as Error).message
+    dbgFailed.value = '切换失败：' + (e as Error).message
+  } finally {
+    dbgBusy.value = false
   }
 }
-
-function refreshDebugShot() {
-  if (!dbgOpen.value) return
-  dbgShot.value = apiMirrorScreenshotUrl()
-}
-
-function closeDebug() {
-  dbgOpen.value = false
-  dbgShot.value = ''
-  if (dbgTimer) { clearInterval(dbgTimer); dbgTimer = null }
-}
-
-function onDbgClick(e: MouseEvent) {
-  const img = dbgImg.value
-  if (!img) return
-  const scale = img.naturalWidth > 0 ? img.naturalWidth / img.clientWidth : 1
-  const x = Math.round(e.offsetX * scale)
-  const y = Math.round(e.offsetY * scale)
-  apiMirrorEvent({ type: 'click', x, y }).catch(() => {})
-}
-
-onBeforeUnmount(() => { if (dbgTimer) { clearInterval(dbgTimer); dbgTimer = null } })
 
 // ---- 授权状态（薄层：free 恒放行，展示模式/功能清单/指纹摘要） ----
 const lic = ref<{ mode: string; features: string[]; machine_fingerprint: string; has_activation: boolean }>()
@@ -439,29 +420,20 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 调试视图（R 批 v1.4：引擎镜像监控，按需开启） -->
+      <!-- 调试视图（R 批 v1.4 / R-6.15：引擎实时窗口） -->
       <div class="set-card">
-        <div class="set-card-h">调试视图（引擎镜像）</div>
-        <p class="set-hint">查看引擎当前实时画面（采集/登录过程一目了然）。点击画面即可操作（交互转发，与登录小窗同一 CDP 桥）；镜像不落盘、不留痕。口径：登录自动开 / 调试手动开 / 平时关。</p>
+        <div class="set-card-h">调试视图（引擎实时窗口）</div>
+        <p class="set-hint">开关切换引擎为独立小窗（真实浏览器窗口，960×720），采集/登录时实时可见每一步操作过程（滚动、点击、跳页）——不是截图。切换会重启引擎一次（登录态自动保留）。口径：调试手动开 / 平时关。</p>
         <div class="set-actions">
-          <button v-if="!dbgOpen" class="btn primary" @click="openDebug">打开调试视图</button>
-          <button v-else class="btn danger" @click="closeDebug">关闭调试视图</button>
+          <button v-if="!dbgOpen" class="btn primary" :disabled="dbgBusy" @click="toggleDebug">打开实时引擎窗口</button>
+          <button v-else class="btn danger" :disabled="dbgBusy" @click="toggleDebug">关闭实时窗口（回无头）</button>
         </div>
-        <div v-if="dbgOpen" class="dbg-frame">
-          <img
-            ref="dbgImg"
-            v-if="dbgShot"
-            :src="dbgShot"
-            alt="引擎镜像画面"
-            class="dbg-img"
-            draggable="false"
-            @click="onDbgClick"
-            @error="dbgFailed = '镜像画面加载失败（引擎可能未就绪）'"
-          />
-          <div v-else class="dbg-empty">画面加载中…</div>
-          <p class="dbg-hint">← 点击画面即可操作引擎当前页面（2s 自动刷新一帧）</p>
+        <div v-if="dbgOpen" class="dbg-open">
+          <p class="dbg-note">✔ 实时窗口已打开：桌面可见引擎小窗（Chrome for Testing），正在实时展示引擎页面操作。可拖动/缩放/最小化，采集开始后即可观察全过程。</p>
+          <p v-if="dbgNote" class="dbg-note">{{ dbgNote }}</p>
           <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
         </div>
+        <p v-if="dbgFailed && !dbgOpen" class="dbg-fail">{{ dbgFailed }}</p>
       </div>
     </div>
   </div>

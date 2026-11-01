@@ -786,6 +786,21 @@ async def mirror_event(req: MirrorEventReq):
     return await mirror.send_event(req.account, req.model_dump())
 
 
+class MirrorWindowReq(BaseModel):
+    on: bool = True
+    account_id: str = "default"
+
+
+@app.post("/api/mirror/window")
+async def mirror_window(req: MirrorWindowReq):
+    """调试实时窗口开关（R-6.15）：有头小窗 ↔ 无头（引擎重启生效，登录态保留）。
+
+    用户需求：调试视图不再是「截图映射」，而是引擎独立小窗实时可见采集操作过程。
+    """
+    from src import mirror
+    return await mirror.set_window(req.account_id, req.on)
+
+
 class SearchReq(BaseModel):
     keyword: str
     limit: int = 20
