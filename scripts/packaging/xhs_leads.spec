@@ -71,10 +71,10 @@ app = BUNDLE(
     icon=None,
     bundle_identifier="com.xhsleads.app",
     info_plist={
-        # 品牌名统一为「XHS Leads」（带空格）：窗口标题/前端已是，Dock/菜单栏/Finder
-        # 由 CFBundleName+CFBundleDisplayName 决定（原为连写 XHSLeads，用户反馈标题不对）。
+        # 品牌名统一为「XHS Leads · 小红书获客助手」（用户拍板：保留英文品牌 + 中文副标题）：
+        # CFBundleName=短名（菜单栏 App 菜单），CFBundleDisplayName=完整名（Dock/Finder）。
         "CFBundleName": "XHS Leads",
-        "CFBundleDisplayName": "XHS Leads",
+        "CFBundleDisplayName": "XHS Leads 小红书获客助手",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundleVersion": "0.1.0",
         "NSHighResolutionCapable": True,

@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 
-APP_TITLE = "XHS Leads"  # 壳窗口标题（pywebview 内嵌 UI）
+APP_TITLE = "XHS Leads · 小红书获客助手"  # 壳窗口标题（pywebview 内嵌 UI；用户拍板品牌+中文副标题）
 _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一致）
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**（login?redirectPath 重定向到首页）。
 # 独立登录页 = 全屏登录界面（扫码/手机号+验证码/微信），无推荐流浏览内容、无弹层叉可点；
