@@ -14,13 +14,31 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function apiLoginStatus(): Promise<LoginStatus> {
-  return j(await fetch(`${BASE}/api/login_status`))
+export async function apiLoginStatus(timeoutMs = 8000): Promise<LoginStatus> {
+  // 超时保护：后端/引擎启动慢时不让 fetch 无限挂起（挂起会导致 App.vue onMounted
+  // 卡在 await、强制登录弹窗永远不弹）。超时抛错，由调用方决定重试/兜底。
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    return await j(await fetch(`${BASE}/api/login_status`, { signal: ctl.signal }))
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // R-6.5：请求打开真实登录页（壳窗口导航由 launcher 登录守卫执行，登录后 Cookie 注入引擎自动返回）
-export async function apiLoginBegin(): Promise<{ ok: boolean; already_logged_in?: boolean }> {
-  return j(await fetch(`${BASE}/api/auth/login_begin`, { method: 'POST' }))
+// 登录 UI 改版：force=true 强制登录（启动未登录/被踢、采集异常被踢、APP 强制登录对话框「去登录」）
+// ——登录页无叉不可关闭；force=false 主动重登（设置页「重新登录」）——登录页带叉可关闭回 APP。
+export async function apiLoginBegin(force = false): Promise<{ ok: boolean; already_logged_in?: boolean; force?: boolean }> {
+  return j(await fetch(`${BASE}/api/auth/login_begin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  }))
+}
+
+export async function apiLoginCancel(): Promise<{ ok: boolean }> {
+  return j(await fetch(`${BASE}/api/auth/login_cancel`, { method: 'POST' }))
 }
 
 export async function apiLicenseStatus(): Promise<{ ok: boolean; status: LicenseStatus }> {
@@ -172,7 +190,7 @@ export async function apiRefreshCookieFromChrome(): Promise<ImportCookieResult> 
   return j(await fetch(`${BASE}/api/refresh_cookie_from_chrome`, { method: 'POST' }))
 }
 
-export interface CookieItem { name: string; value: string; domain: string }
+export interface CookieItem { name: string; value: string; domain: string; expires?: number | null }
 
 export async function apiCookieInfo(): Promise<{ ok: boolean; count: number; saved_at: string; cookies: CookieItem[] }> {
   return j(await fetch(`${BASE}/api/cookie_info`))

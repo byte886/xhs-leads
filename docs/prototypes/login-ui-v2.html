@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录与设置 UI 改版原型 · XHS Leads</title>
+<style>
+  :root{
+    --red:#ff2442; --red-d:#e11c3a; --bg:#f5f6f7; --card:#fff; --line:#e8eaec;
+    --txt:#333; --sub:#888; --ok:#16a34a; --warn:#d97706; --bad:#dc2626;
+    --r:10px; --shadow:0 1px 3px rgba(0,0,0,.08), 0 4px 14px rgba(0,0,0,.05);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--txt);}
+  button{font:inherit; cursor:pointer; border:none; border-radius:8px;}
+  button:disabled{opacity:.5; cursor:not-allowed}
+  .btn{background:#fff; border:1px solid var(--line); padding:6px 14px; color:var(--txt);}
+  .btn:hover{border-color:#ccc}
+  .btn.primary{background:var(--red); color:#fff; border:none;}
+  .btn.primary:hover{background:var(--red-d)}
+  .btn.sm{padding:3px 10px; font-size:12px}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+
+  /* ── 顶栏 FlowBar ── */
+  .flowbar{height:52px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:center; padding:0 18px; gap:16px; position:sticky; top:0; z-index:40;}
+  .brand{font-weight:700; font-size:15px; display:flex; align-items:center; gap:8px;}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--red),#ff7a8c); display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800}
+  .login-pill{margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; border:1px solid var(--line); border-radius:999px; padding:4px 12px; background:#fafbfc;}
+  .login-pill .st{width:8px;height:8px;border-radius:50%; display:inline-block}
+  .login-pill.in .st{background:var(--ok)} .login-pill.out .st{background:var(--bad)} .login-pill.kick .st{background:var(--warn)}
+  .tabs{display:flex; gap:4px; background:#f0f1f2; padding:3px; border-radius:9px;}
+  .tabs button{border:none; background:transparent; padding:6px 18px; border-radius:7px; color:var(--sub); font-size:13px;}
+  .tabs button.on{background:#fff; color:var(--red); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .devbar{position:fixed; right:14px; bottom:14px; z-index:300; background:#fff; border:1px dashed #c4c9d1; border-radius:10px; padding:10px 12px; box-shadow:var(--shadow); font-size:12px; max-width:250px;}
+  .devbar b{color:#666; font-size:11px; display:block; margin-bottom:6px}
+  .devbar .row{display:flex; gap:6px; flex-wrap:wrap;}
+
+  /* ── 主区 ── */
+  .view{display:none; max-width:1280px; margin:18px auto; padding:0 18px;}
+  .view.on{display:block}
+  .workbench{display:flex; gap:16px; align-items:flex-start;}
+  .left{width:264px; flex:0 0 264px; background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:14px; box-shadow:var(--shadow);}
+  .main{flex:1; background:var(--card); border:1px solid var(--line); border-radius:var(--r); min-height:520px; padding:18px; box-shadow:var(--shadow);}
+  .panel-h{font-size:13px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:6px}
+  .panel-h .tag{font-size:11px; font-weight:400; color:var(--ok); background:#e8f8ee; padding:1px 8px; border-radius:99px}
+
+  .f-label{display:block; font-size:12px; color:var(--sub); margin:10px 0 4px}
+  input[type=text],input[type=number],textarea,select{width:100%; border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; background:#fff; color:var(--txt)}
+  textarea{resize:vertical; min-height:64px}
+  .row2{display:flex; gap:10px}
+  .row2>*{flex:1}
+
+  /* 设置卡片 */
+  .set-card{background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:16px; margin-bottom:14px; box-shadow:var(--shadow);}
+  .set-card-h{font-size:14px; font-weight:700; margin-bottom:4px}
+  .set-card .desc{font-size:12px; color:var(--sub); margin-bottom:10px}
+  .set-actions{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap}
+  .set-hint{font-size:12px; color:var(--sub); margin-top:8px}
+  .cdp-row{display:flex; gap:8px} .cdp-row input{flex:1}
+  .cdp-status{font-size:12px; margin-top:8px}
+  .cdp-status .ok,.cdp-status .warn{font-weight:500}
+
+  /* 账号与登录区块 */
+  .acct-line{display:flex; align-items:center; gap:10px; padding:10px 12px; background:#fafbfc; border:1px solid var(--line); border-radius:8px; margin-bottom:12px;}
+  .acct-line .st{width:10px;height:10px;border-radius:50%}
+  .acct-line .st.in{background:var(--ok)} .acct-line .st.out{background:var(--bad)} .acct-line .st.kick{background:var(--warn)}
+  .acct-line .who{font-weight:600}
+  .acct-line .hint{font-size:12px; color:var(--sub)}
+  .relogin{display:flex; align-items:center; gap:10px; margin:6px 0 4px}
+  .relogin .note{font-size:12px; color:var(--sub)}
+  .cookie-box{border:1px solid var(--line); border-radius:8px; margin-top:12px; overflow:hidden;}
+  .cookie-head{display:flex; align-items:center; gap:8px; padding:9px 12px; background:#fafbfc; font-size:13px; cursor:pointer; user-select:none}
+  .cookie-head .tri{transition:transform .15s}
+  .cookie-box.open .tri{transform:rotate(90deg)}
+  .cookie-head .meta{font-size:12px; color:var(--sub); margin-left:auto}
+  .cookie-body{display:none; padding:10px 12px;}
+  .cookie-box.open .cookie-body{display:block}
+  .cookie-table{width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,Menlo,monospace}
+  .cookie-table th{text-align:left; color:var(--sub); font-weight:500; padding:5px 8px; border-bottom:1px solid var(--line); font-family:inherit}
+  .cookie-table td{padding:5px 8px; border-bottom:1px solid #f0f1f2; word-break:break-all; vertical-align:top}
+  .cookie-table .val-mask{color:#999}
+  .hide-toggle{font-size:12px; color:var(--sub); margin-top:8px; display:flex; align-items:center; gap:6px}
+  .import-box{margin-top:12px; padding-top:10px; border-top:1px dashed var(--line)}
+  .import-box .ttl{font-size:12px; color:var(--sub); margin-bottom:6px}
+
+  /* ── 未登录强制页（整页覆盖，无关闭） ── */
+  .force{position:fixed; inset:0; z-index:100; background:#f5f6f7; display:none; align-items:center; justify-content:center;}
+  .force.on{display:flex}
+  .force .card{width:420px; background:#fff; border-radius:14px; box-shadow:var(--shadow); padding:28px 26px; text-align:center; border:1px solid var(--line)}
+  .force .logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,var(--red),#ff7a8c); color:#fff;font-weight:800;font-size:22px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px}
+  .force h2{font-size:17px; margin-bottom:6px}
+  .force .st-line{font-size:13px; color:var(--bad); background:#fef2f2; border:1px solid #fecaca; padding:6px 10px; border-radius:8px; display:inline-block; margin:6px 0 4px}
+  .force .st-line.kick{color:var(--warn); background:#fffbeb; border-color:#fde68a}
+  .force p.desc{font-size:12px; color:var(--sub); margin:8px 0 18px; text-align:left; line-height:1.7}
+  .force .go{width:100%; padding:10px; font-size:14px; font-weight:600}
+  .force .no-close{font-size:11px; color:#bbb; margin-top:12px}
+
+  /* ── 小红书登录页模拟（原生保持，无视觉改造） ── */
+  .login-sim{position:fixed; inset:0; z-index:120; background:#fff; display:none; flex-direction:column;}
+  .login-sim.on{display:flex}
+  .login-sim .sim-top{height:44px; display:flex; align-items:center; justify-content:center; position:relative; color:#333; font-size:13px; border-bottom:1px solid #f0f1f2;}
+  .login-sim .sim-top .x{position:absolute; left:16px; color:#c0c0c0; cursor:pointer}
+  .login-sim .sim-top .x.hidden{opacity:0; pointer-events:none}
+  .login-sim .stage{flex:1; display:flex; align-items:center; justify-content:center; gap:56px; padding:20px; background:#fff;}
+  .qr{width:172px; height:172px; border:1px solid #f0f1f2; background:
+    repeating-conic-gradient(#111 0% 25%, #fff 0% 50%) 50% / 14px 14px;
+    -webkit-mask:linear-gradient(#000 0 0) content-box, repeating-linear-gradient(90deg,#000 0 12px, transparent 12px 14px), repeating-linear-gradient(#000 0 12px, transparent 12px 14px);
+    mask:linear-gradient(#000 0 0) content-box, repeating-linear-gradient(90deg,#000 0 12px, transparent 12px 14px), repeating-linear-gradient(#000 0 12px, transparent 12px 14px);
+    mask-composite:intersect; -webkit-mask-composite:source-in; padding:14px;}
+  .qr-wrap{text-align:center}
+  .qr-tip{font-size:12px; color:#666; margin-top:10px}
+  .phone{width:240px}
+  .phone input{margin-bottom:10px}
+  .phone .getc{font-size:12px; color:#666}
+  .phone .login-btn{width:100%; background:var(--red); color:#fff; padding:9px; border-radius:8px; font-weight:600; margin-top:4px}
+  .phone .agr{font-size:10px; color:#999; margin-top:10px; text-align:center}
+  .sim-note{position:absolute; bottom:0; left:0; right:0; background:#fff8e6; border-top:1px solid #fde68a; color:#92400e; font-size:11px; padding:6px 14px; text-align:center;}
+  .sim-note b{font-weight:600}
+  .login-done{position:fixed; inset:0; z-index:130; background:#fff; display:none; align-items:center; justify-content:center; flex-direction:column; gap:14px;}
+  .login-done.on{display:flex}
+  .login-done .sp{width:34px;height:34px;border:4px solid #f0f1f2; border-top-color:var(--red); border-radius:50%; animation:rot 1s linear infinite}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .login-done .t{font-size:15px; font-weight:600; color:#333}
+
+  /* 遮罩（登录成功后回 APP 前的等待） */
+  .overlay-wait{position:fixed; inset:0; z-index:140; background:#fff; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px;}
+  .overlay-wait.on{display:flex}
+  .overlay-wait .sp{width:30px;height:30px;border:4px solid #f0f1f2; border-top-color:var(--red); border-radius:50%; animation:rot .9s linear infinite}
+  .overlay-wait .t{font-size:14px; color:#333}
+
+  .mock-note{font-size:11px; color:#b0b4bb; border:1px dashed #d5d9e0; border-radius:6px; padding:4px 10px; margin-top:12px; display:inline-block}
+  .empty-state{color:#c8ccd2; text-align:center; padding:90px 0; font-size:13px}
+  .empty-state .big{font-size:16px; color:#aab0b8; margin-bottom:6px}
+</style>
+</head>
+<body>
+
+<!-- ═══ 顶栏 ═══ -->
+<header class="flowbar">
+  <div class="brand"><span class="dot">X</span>XHS Leads · 小红书获客助手</div>
+  <nav class="tabs">
+    <button data-tab="collect" class="on">采集</button>
+    <button data-tab="create">创作</button>
+    <button data-tab="clients">客户</button>
+    <button data-tab="settings">设置</button>
+  </nav>
+  <div class="login-pill in" id="loginPill"><span class="st"></span><span id="pillText">已登录 · 未命名</span></div>
+</header>
+
+<!-- ═══ 采集 Tab ═══ -->
+<div class="view on" id="view-collect">
+  <div class="workbench">
+    <aside class="left">
+      <div class="panel-h">采集参数</div>
+      <label class="f-label">关键词</label>
+      <input type="text" value="翡翠" placeholder="输入采集关键词">
+      <label class="f-label">排序</label>
+      <select><option>综合</option><option>最新</option><option>最热</option></select>
+      <label class="f-label">时间筛选</label>
+      <select><option>不限</option><option>24小时</option><option>一周内</option><option>一月内</option></select>
+      <label class="f-label">结果上限</label>
+      <input type="number" value="50">
+      <div class="row2" style="margin-top:10px">
+        <label class="f-label" style="margin:0"><input type="checkbox" checked> 极速采集</label>
+        <label class="f-label" style="margin:0"><input type="checkbox"> 仅图文</label>
+      </div>
+      <button class="btn primary" style="width:100%; margin-top:14px; padding:9px">开始采集</button>
+      <div class="mock-note">原型：左下角 Cookie / CDP 模块已移除，统一收敛到「设置」</div>
+    </aside>
+    <main class="main">
+      <div class="empty-state"><div class="big">采集结果区</div>输入关键词后开始采集，结果卡片将展示在这里</div>
+    </main>
+  </div>
+</div>
+
+<!-- ═══ 创作 Tab ═══ -->
+<div class="view" id="view-create">
+  <main class="main" style="min-height:420px"><div class="empty-state"><div class="big">创作区（保持不变）</div>克隆编辑器 / AI 工具条 / 发布前质检</div></main>
+</div>
+
+<!-- ═══ 客户 Tab ═══ -->
+<div class="view" id="view-clients">
+  <main class="main" style="min-height:420px"><div class="empty-state"><div class="big">客户区（保持不变）</div>评论区线索 + 聚合 + 获客指引</div></main>
+</div>
+
+<!-- ═══ 设置 Tab ═══ -->
+<div class="view" id="view-settings">
+  <div style="max-width:900px; margin:0 auto">
+
+    <!-- 区块一：账号与登录（新增） -->
+    <div class="set-card">
+      <div class="set-card-h">账号与登录 <span style="font-weight:400;color:#16a34a;font-size:11px">新增 · 主动/被动双入口收敛于此</span></div>
+      <div class="desc">登录状态、重新登录、Cookie 只读查看统一在此。未登录时 APP 强制登录页负责引导；已登录时可随时主动重新登录。</div>
+
+      <div class="acct-line" id="acctLine">
+        <span class="st in"></span>
+        <span class="who" id="acctWho">已登录</span>
+        <span class="hint" id="acctHint">Cookie 有效 · 登录态注入独立引擎</span>
+      </div>
+
+      <div class="relogin">
+        <button class="btn primary" id="btnRelogin">重新登录</button>
+        <span class="note">主动触发：壳窗口切换到小红书登录页（扫码 / 手机号+验证码 / 微信任一途径），登录后自动回 APP 并注入引擎。</span>
+      </div>
+
+      <div class="cookie-box" id="cookieBox">
+        <div class="cookie-head">
+          <span class="tri">▶</span>
+          Cookie（只读查看 · 点击展开）
+          <span class="meta" id="cookieMeta">12 条 · 小红书域</span>
+        </div>
+        <div class="cookie-body">
+          <table class="cookie-table">
+            <thead><tr><th>名称</th><th>值</th><th>域</th><th>有效期</th></tr></thead>
+            <tbody>
+              <tr><td>web_session</td><td class="v" data-full="f66e3a88c2b14d9f…（完整值示例）" data-masked="f66e3a…">f66e3a88c2b14d9f…（完整值示例）</td><td>.xiaohongshu.com</td><td>会话级</td></tr>
+              <tr><td>id_token</td><td class="v" data-full="x8QmZ2Kp7vN4cR…（完整值示例）" data-masked="x8QmZ2…">x8QmZ2Kp7vN4cR…（完整值示例）</td><td>.xiaohongshu.com</td><td>2027-04-30</td></tr>
+              <tr><td>web_session_ts</td><td class="v" data-full="1755000000000" data-masked="1755…">1755000000000</td><td>.xiaohongshu.com</td><td>会话级</td></tr>
+              <tr><td>a1</td><td class="v" data-full="d9f2b7c4e1a6f30b…（完整值示例）" data-masked="d9f2b7…">d9f2b7c4e1a6f30b…（完整值示例）</td><td>.xiaohongshu.com</td><td>2028-01-01</td></tr>
+              <tr><td>gid</td><td class="v" data-full="y4kL8pQ2sW…（完整值示例）" data-masked="y4kL8p…">y4kL8pQ2sW…（完整值示例）</td><td>.xiaohongshu.com</td><td>2027-06-30</td></tr>
+              <tr><td>galaxy_creator_session_id</td><td class="v" data-full="s3U7vX…（完整值示例）" data-masked="s3U7vX…">s3U7vX…（完整值示例）</td><td>.xiaohongshu.com</td><td>会话级</td></tr>
+            </tbody>
+          </table>
+          <label class="hide-toggle"><input type="checkbox" id="maskToggle" checked> 隐藏 Cookie 值（防截图外发泄露；勾掉即显示完整值）</label>
+        </div>
+      </div>
+
+      <div class="import-box">
+        <div class="ttl">导入 Cookie（附加功能 · 调试用：客户报 Cookie 时粘贴校验，正常登录走扫码即可）</div>
+        <textarea placeholder="粘贴 Cookie 文本（name=value; name2=value2; …）"></textarea>
+        <div class="set-actions">
+          <button class="btn">校验并保存</button>
+          <span class="set-hint" style="margin-top:8px">校验结果：Cookie 有效 · 已登录（示例提示）</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 区块二：AI 模型 Key（保持不变） -->
+    <div class="set-card">
+      <div class="set-card-h">AI 模型 Key（保持不变）</div>
+      <div class="desc">文稿 / 质检共用。未配置时相关按钮灰态并引导。</div>
+      <label class="f-label">AI Key</label>
+      <input type="text" placeholder="未配置">
+      <div class="set-actions"><button class="btn">保存</button></div>
+    </div>
+
+    <!-- 区块三：CDP 连接（保留现有完整区块，采集页左下的重复模块已删除） -->
+    <div class="set-card">
+      <div class="set-card-h">CDP 连接（Chrome 路径 / Profile）</div>
+      <div class="desc">唯一 CDP 入口：采集 / 克隆前置。原采集页左下角重复模块已删除。</div>
+      <label class="f-label">Chrome 路径</label>
+      <div class="cdp-row">
+        <input type="text" readonly value="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome">
+        <button class="btn">浏览指定</button>
+      </div>
+      <label class="f-label">Profile（独立调试 Profile，已登录小红书）</label>
+      <input type="text" readonly value="xhs-leads（独立 Profile）" style="width:100%">
+      <label class="f-label">调试端口</label>
+      <input type="text" readonly value="9223" style="width:100%">
+      <div class="cdp-status"><span class="ok">✓ Chrome 已检测到 · Profile 已登录小红书 · 调试可用</span></div>
+      <div class="set-actions">
+        <button class="btn">重启调试连接</button>
+        <button class="btn">引导教程</button>
+        <button class="btn primary">保存并验证</button>
+      </div>
+    </div>
+
+    <!-- 区块四：账号人设 + 调试视图（保持不变） -->
+    <div class="set-card">
+      <div class="set-card-h">账号人设（保持不变）</div>
+      <label class="f-label">行业 / 主营品类</label>
+      <input type="text" value="珠宝翡翠、宝石、手串">
+      <label class="f-label">人设口吻</label>
+      <input type="text" value="干货型 / 分享型">
+      <div class="set-actions"><button class="btn primary">保存人设</button></div>
+    </div>
+    <div class="set-card">
+      <div class="set-card-h">调试视图（保持不变）</div>
+      <p class="set-hint">引擎实时画面镜像（登录 / 采集过程一目了然），登录自动开 / 调试手动开 / 平时关。</p>
+      <div class="set-actions"><button class="btn primary">打开调试视图</button></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ 未登录强制登录页（整页覆盖 · 无关闭） ═══ -->
+<div class="force" id="forcePage">
+  <div class="card">
+    <div class="logo">X</div>
+    <h2>需要登录小红书</h2>
+    <div class="st-line" id="forceSt">当前未登录，采集 / 创作 / 客户功能均不可用</div>
+    <p class="desc">
+      登录为强制步骤：点击下方「去登录」后，窗口将切换到小红书<strong>真实登录页</strong>，
+      支持<strong>扫码 / 手机号+验证码 / 微信任一途径</strong>，均为小红书原生页面操作。
+      登录完成后自动返回本工具并注入采集引擎（Cookie 仅存于独立 Profile）。<br>
+      <span style="color:#999">未登录期间无法关闭本页，也无法跳过。</span>
+    </p>
+    <button class="btn primary go" id="btnGoLogin">去登录</button>
+    <div class="no-close">本页无关闭入口 · 强制登录</div>
+  </div>
+</div>
+
+<!-- ═══ 小红书登录页模拟（保持原生白底 · 不做视觉改造） ═══ -->
+<div class="login-sim" id="loginSim">
+  <div class="sim-top">
+    <span class="x hidden" id="simX" title="关闭并返回 APP">✕</span>
+    小红书登录（模拟）<span style="font-size:11px;color:#999;margin-left:10px" id="loginXNote"></span>
+  </div>
+  <div class="stage">
+    <div class="qr-wrap">
+      <div class="qr"></div>
+      <div class="qr-tip">可用 小红书 或 微信 扫码</div>
+    </div>
+    <div class="phone">
+      <input type="text" placeholder="+86 输入手机号" disabled>
+      <div class="row2"><input type="text" placeholder="输入验证码" disabled><button class="btn sm getc" disabled>获取验证码</button></div>
+      <button class="login-btn" disabled>登录</button>
+      <div class="agr">我已阅读并同意《用户协议》《隐私政策》</div>
+    </div>
+  </div>
+  <div class="sim-note"><b>模拟：小红书原生登录页</b>——原型仅示意流程与视觉，实际为小红书官方页面，本工具不做任何视觉改造（保持原样，无品牌化背景，避免不安全感）。
+    关闭按钮区分场景：<b>无叉=强制登录</b>（未登录/被踢触发，不可关闭）；<b>有叉=主动重新登录</b>（设置页触发，可关闭回 APP）。
+    <button class="btn sm" id="simDone" style="margin-left:12px; color:#fff; background:var(--red); border:none">模拟扫码完成 →</button></div>
+</div>
+
+<!-- ═══ 登录成功 → 遮罩 → 回 APP ═══ -->
+<div class="login-done" id="loginDone">
+  <div class="sp"></div>
+  <div class="t">登录成功，正在进入工作台…</div>
+  <div style="font-size:12px;color:#999">（遮罩：扫码完成后 ~1-2s 切换期的等待提示，防误操作）</div>
+</div>
+
+<!-- ═══ 调试控件（原型演示用 · 非产品 UI） ═══ -->
+<div class="devbar">
+  <b>⚙ 原型演示控件（非产品 UI）</b>
+  <div class="row">
+    <button class="btn sm" id="devOut">未登录</button>
+    <button class="btn sm" id="devIn">已登录</button>
+    <button class="btn sm" id="devKick">被踢</button>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button class="btn sm" id="devDemo">▶ 演示完整登录闭环</button>
+  </div>
+  <div style="color:#999;margin-top:6px;line-height:1.5">演示闭环：未登录强制页 → 去登录 → 小红书页 → 登录成功遮罩 → 回 APP 复查。</div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const views = {collect: $('view-collect'), create: $('view-create'), clients: $('view-clients'), settings: $('view-settings')};
+
+  // Tab 切换
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    Object.entries(views).forEach(([k, el]) => el.classList.toggle('on', k === b.dataset.tab));
+  });
+
+  // ── 登录态（演示） ──
+  let state = 'in'; // in | out | kick
+  function setState(s, opts={}) {
+    state = s;
+    const pill = $('loginPill'), st = pill.querySelector('.st');
+    pill.className = 'login-pill ' + (s==='in'?'in':s==='kick'?'kick':'out');
+    const names = {in:'已登录 · 未命名', out:'未登录', kick:'已失效 · 请重新登录'};
+    $('pillText').textContent = names[s];
+    // 设置页账号行
+    const al = $('acctLine'), as = al.querySelector('.st');
+    as.className = 'st ' + (s==='in'?'in':s==='kick'?'kick':'out');
+    const whos = {in:'已登录', out:'未登录', kick:'登录已失效（被平台踢出）'};
+    const hints = {in:'Cookie 有效 · 登录态注入独立引擎', out:'未登录 · 请登录后使用', kick:'风控/登录超限被踢 · 请重新登录'};
+    $('acctWho').textContent = whos[s];
+    $('acctHint').textContent = hints[s];
+    // 强制页
+    const force = $('forcePage');
+    const fst = $('forceSt');
+    if (s === 'out') { fst.textContent = '当前未登录，采集 / 创作 / 客户功能均不可用'; fst.className='st-line'; force.classList.add('on'); }
+    else if (s === 'kick') { fst.textContent = '登录已被平台踢出（登录超限 / 风控）'; fst.className='st-line kick'; force.classList.add('on'); }
+    else force.classList.remove('on');
+    // 遮罩/登录页联动
+    if (s === 'in') { $('loginSim').classList.remove('on'); $('loginDone').classList.remove('on'); }
+    if (opts.done && s === 'in') { $('overlayWait')?.classList.remove('on'); }
+  }
+  $('devOut').onclick = () => setState('out');
+  $('devIn').onclick = () => setState('in');
+  $('devKick').onclick = () => setState('kick');
+
+  // ── 设置页：重新登录（主动 · 可关闭） ──
+  $('btnRelogin').onclick = () => {
+    // 主动重登：登录页带叉，可关闭回 APP（本已登录，可随时取消）
+    $('forcePage').classList.remove('on');
+    $('simX').classList.remove('hidden');
+    $('loginXNote').textContent = '可关闭（主动重登：关闭即回 APP，登录态不变）';
+    $('loginSim').classList.add('on');
+  };
+
+  // ── 强制页：去登录（强制 · 不可关闭） ──
+  $('btnGoLogin').onclick = () => {
+    $('forcePage').classList.remove('on');
+    $('simX').classList.add('hidden');
+    $('loginXNote').textContent = '强制登录：无关闭入口（未登录 / 被踢场景）';
+    $('loginSim').classList.add('on');
+  };
+
+  // ── 主动重登：点叉关闭 → 回 APP（登录态保持） ──
+  $('simX').onclick = () => {
+    $('loginSim').classList.remove('on');
+    setState('in');
+  };
+
+  // ── 小红书登录页模拟：模拟扫码完成 ──
+  $('simDone').onclick = (e) => { e.stopPropagation(); simulateLoginSuccess(); };
+  function simulateLoginSuccess() {
+    $('loginSim').classList.remove('on');
+    $('loginDone').classList.add('on');       // 登录成功遮罩
+    setTimeout(() => {
+      $('loginDone').classList.remove('on');
+      setState('in');                          // 回 APP 复查：已登录 → 进入工作台
+    }, 1800);
+  }
+
+  // ── Cookie 展开 + 隐藏值开关 ──
+  $('cookieBox').querySelector('.cookie-head').onclick = () => $('cookieBox').classList.toggle('open');
+  function applyMask(mask) {
+    document.querySelectorAll('.cookie-table .v').forEach(td => {
+      td.textContent = mask ? td.dataset.masked : td.dataset.full;
+      td.classList.toggle('val-mask', mask);
+    });
+  }
+  $('maskToggle').onchange = () => applyMask($('maskToggle').checked);
+  applyMask(true); // 默认脱敏显示
+
+  // ── 完整闭环演示 ──
+  $('devDemo').onclick = () => {
+    setState('out');          // ① 未登录 → 强制页
+    setTimeout(() => $('btnGoLogin').click(), 900);   // ② 点去登录
+    setTimeout(() => simulateLoginSuccess(), 2600);    // ③ 模拟扫码完成 → 遮罩 → 回 APP
+  };
+
+  // 初始化演示态：已登录
+  setState('in');
+</script>
+</body>
+</html>

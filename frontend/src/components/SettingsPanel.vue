@@ -2,13 +2,86 @@
 // SettingsPanel v1.5：设置 Tab（AI 模型 Key 门控 / CDP 连接 / 账号人设）
 // 三卡收敛一页；配置后通过 appState.sys 全局状态条即时反映（共享观察）
 import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
-import { refreshSysStatus, toast } from '../store'
+import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
   apiCdpStatus, apiCdpSetup, apiCdpOpenInspect, apiCdpPickChrome,
   apiLicenseStatus, apiLicenseActivate,
   apiMirrorOpen, apiMirrorScreenshotUrl, apiMirrorEvent,
+  apiLoginStatus, apiLoginBegin, apiCookieInfo, apiImportCookieText,
 } from '../api'
+import type { CookieItem } from '../api'
+
+// ---- 账号与登录（登录 UI 改版·用户拍板） ----
+// 设置页「账号与登录」区块：登录状态行 + 「重新登录」（唯一主动入口，登录页带叉可关闭，
+// 登录态不变）+ Cookie 只读（名称/完整值/域/有效期 + 「隐藏值」开关防截图外发泄露）
+// + 导入 Cookie（附加调试，保留自采集页旧链路）。
+const loggedIn = ref(false)
+const loginText = ref('检测中…')
+const cookieItems = ref<CookieItem[]>([])
+const maskOn = ref(true) // 默认隐藏完整值（脱敏），开关可显示原文
+const importText = ref('')
+const importResult = ref('')
+
+async function loadAcct() {
+  try {
+    const lg = await apiLoginStatus()
+    loggedIn.value = !!lg.logged_in
+    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
+    loginText.value = lg.kicked ? '登录已失效（被踢）' : (lg.logged_in ? '已登录' : '未登录')
+  } catch {
+    loginText.value = '检测失败'
+  }
+  try {
+    const r = await apiCookieInfo()
+    cookieItems.value = r.cookies || []
+  } catch {
+    cookieItems.value = []
+  }
+}
+
+async function relogin() {
+  try {
+    const r = await apiLoginBegin(false) // 主动重登：登录页带叉可关闭（登录态不变）
+    if (r.already_logged_in) {
+      toast('当前已登录，无需重新登录')
+    } else {
+      toast('正在打开小红书登录页（右上角可关闭）…')
+      await loadAcct()
+    }
+  } catch (e) {
+    toast('重新登录失败：' + (e as Error).message)
+  }
+}
+
+function maskValue(v: string) {
+  if (!v) return '—'
+  if (v.length <= 6) return '******'
+  return v.slice(0, 3) + '****' + v.slice(-3)
+}
+
+function fmtExp(exp?: number | null) {
+  if (!exp) return '会话级'
+  const d = new Date(exp * 1000)
+  if (Number.isNaN(d.getTime())) return String(exp)
+  return d.toLocaleDateString('zh-CN') + (exp * 1000 < Date.now() ? '（已过期）' : '')
+}
+
+async function doImport() {
+  if (!importText.value.trim()) return
+  importResult.value = '导入中…'
+  try {
+    const r = await apiImportCookieText(importText.value)
+    importResult.value = r.ok ? '已导入并校验' : (r.error || '导入失败')
+    if (r.ok) {
+      importText.value = ''
+      await loadAcct()
+      appState.cookieRefreshTick += 1
+    }
+  } catch (e) {
+    importResult.value = '导入失败：' + (e as Error).message
+  }
+}
 
 // ---- R 批 v1.4：调试视图（引擎镜像，按需开启） ----
 // 口径：登录自动开 / 调试手动开 / 平时关；镜像=截图流+事件转发（可交互，点击画面即操作）；
@@ -237,7 +310,7 @@ async function savePersona() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadCdp(), loadPersona(), loadLicense()])
+  await Promise.all([loadAi(), loadCdp(), loadPersona(), loadLicense(), loadAcct()])
   fillAiForm()
 })
 </script>
@@ -260,6 +333,49 @@ onMounted(async () => {
       <input v-model="actKey" placeholder="粘贴卖家提供的激活码" style="flex:1;min-width:240px" @keyup.enter="activateLicense" />
       <button class="btn primary sm" :disabled="actBusy" @click="activateLicense">{{ actBusy ? '激活中…' : '激活' }}</button>
       <span class="set-hint" style="margin:0">激活码由卖家按设备指纹签发，一台设备一个码</span>
+    </div>
+
+    <!-- 账号与登录（登录 UI 改版·用户拍板）：状态行 + 重新登录 + Cookie 只读 + 导入 Cookie -->
+    <div class="set-card acct-card">
+      <div class="set-card-h">账号与登录</div>
+      <div class="acct-row">
+        <span class="acct-status" :class="{ on: loggedIn }">
+          {{ loginText }}{{ appState.login.nickname ? ' · ' + appState.login.nickname : '' }}
+        </span>
+        <button class="btn primary sm" @click="relogin">重新登录</button>
+      </div>
+      <p class="set-hint">
+        「重新登录」是唯一主动入口：进入小红书官方登录页（右上角「✕」可关闭，登录态不变）。
+        未登录 / 被踢 / 采集异常时，APP 会自动弹出强制登录对话框（不可关闭）。
+      </p>
+      <details class="cookie-fold">
+        <summary>
+          Cookie（只读 · {{ cookieItems.length }} 条）
+          <span class="mask-toggle" @click.prevent="maskOn = !maskOn">{{ maskOn ? '显示值' : '隐藏值' }}</span>
+        </summary>
+        <table class="cookie-table">
+          <thead>
+            <tr><th>名称</th><th>值</th><th>域</th><th>有效期</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in cookieItems" :key="c.name + c.domain">
+              <td class="mono">{{ c.name }}</td>
+              <td class="mono">{{ maskOn ? maskValue(c.value) : c.value }}</td>
+              <td class="mono">{{ c.domain }}</td>
+              <td>{{ fmtExp(c.expires) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="set-hint">会话仅存本机 data/cookies.json；值默认脱敏（防截图外发泄露），可点「显示值」查看完整内容。</p>
+      </details>
+      <div class="import-cookie">
+        <label class="f-label">导入 Cookie（附加调试）</label>
+        <textarea v-model="importText" rows="2" placeholder="name=value; name2=value2 或每行一条（域固定 .xiaohongshu.com）"></textarea>
+        <div class="set-actions">
+          <button class="btn" :disabled="!importText.trim()" @click="doImport">导入并校验</button>
+          <span v-if="importResult" class="import-result">{{ importResult }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="set-grid">
@@ -372,6 +488,37 @@ onMounted(async () => {
   gap: 8px;
 }
 .set-card-h { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.acct-card { margin-bottom: 16px; gap: 10px; }
+.acct-row { display: flex; align-items: center; gap: 12px; }
+.acct-status {
+  font-size: 13px; font-weight: 600; color: #c0392b;
+  padding: 4px 12px; border-radius: 999px; background: #fdf0ef;
+}
+.acct-status.on { color: #1a7f4c; background: #eaf7ef; }
+.cookie-fold { border-top: 1px dashed #ececec; padding-top: 8px; }
+.cookie-fold summary { font-size: 12.5px; font-weight: 600; color: #555; cursor: pointer; user-select: none; }
+.mask-toggle {
+  margin-left: 10px; font-weight: 600; color: #1565c0; cursor: pointer; font-size: 12px;
+}
+.cookie-table {
+  width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px;
+}
+.cookie-table th {
+  text-align: left; color: #888; font-weight: 600; padding: 5px 8px;
+  border-bottom: 1px solid #ececec;
+}
+.cookie-table td {
+  padding: 6px 8px; border-bottom: 1px solid #f4f4f4; color: #333; vertical-align: top;
+  word-break: break-all;
+}
+.cookie-table .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.import-cookie { margin-top: 10px; }
+.import-cookie textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  border: 1px solid var(--line, #e5e5e5); border-radius: 8px;
+  padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace;
+}
+.import-result { font-size: 12px; color: #1a7f4c; margin: auto 0 0 4px; }
 .f-label { font-size: 12px; color: var(--ink-2, #666); font-weight: 600; margin-top: 6px; }
 .f-label .limit { color: #b08a4d; font-weight: 500; margin-left: 4px; }
 input {

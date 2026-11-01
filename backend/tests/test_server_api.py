@@ -71,6 +71,40 @@ class TestApiSmoke:
         assert client.get("/api/nope").status_code == 404
 
 
+class TestLoginGate:
+    """登录 UI 改版：login_begin(force)/login_begin_state/login_cancel（纯 mock，不碰浏览器）。"""
+
+    def test_begin_active_relogin_when_logged_in(self, client, monkeypatch):
+        # 主动重登（force=False）且已登录 → 短路，不置 pending
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": {"logged_in": True, "kicked": False}, "t": 1e18})
+        r = client.post("/api/auth/login_begin", json={}).json()
+        assert r["ok"] is True and r["already_logged_in"] is True
+        assert server._LOGIN_GATE["pending"] is False
+
+    def test_begin_force_overrides_logged_in(self, client, monkeypatch):
+        # 强制登录（force=True）即使已登录也置 pending（用户拍板：首次登录也强制检查）
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": {"logged_in": True, "kicked": False}, "t": 1e18})
+        r = client.post("/api/auth/login_begin", json={"force": True}).json()
+        assert r["ok"] is True and r["already_logged_in"] is False and r["force"] is True
+        assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is True
+
+    def test_begin_when_not_logged_in(self, client, monkeypatch):
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
+        r = client.post("/api/auth/login_begin", json={}).json()
+        assert r["ok"] is True and r["already_logged_in"] is False
+        assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is False
+
+    def test_begin_state_and_cancel(self, client, monkeypatch):
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
+        client.post("/api/auth/login_begin", json={"force": True})
+        st = client.get("/api/auth/login_begin_state").json()
+        assert st == {"pending": True, "force": True}
+        r = client.post("/api/auth/login_cancel").json()
+        assert r == {"ok": True}
+        st2 = client.get("/api/auth/login_begin_state").json()
+        assert st2 == {"pending": False, "force": False}
+
+
 class TestPersistNotes:
     def test_replace_batch(self, tmp_db, monkeypatch):
         monkeypatch.setattr(server, "_db", lambda: tmp_db)

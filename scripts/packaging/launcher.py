@@ -57,6 +57,19 @@ _REMOVE_WAITING_OVERLAY_JS = (
     "(() => { const e = document.getElementById('xhs-leads-waiting'); if (e) e.remove(); })()"
 )
 
+# 登录 UI 改版（用户拍板）：主动重登（设置页「重新登录」force=False）登录页**可关闭**——
+# 注入右上角「✕」返回 APP（登录态不变）；强制登录（force=True）不注入，保持无叉。
+_ACTIVE_CLOSE_JS = (
+    "(function(){if(window.__xhs_leads_active_close)return;window.__xhs_leads_active_close=true;"
+    "var d=document.createElement('div');d.id='xhs-leads-active-close';d.textContent='✕';"
+    "d.style.cssText='position:fixed;top:16px;right:16px;width:34px;height:34px;"
+    "border-radius:50%;background:rgba(255,255,255,.94);box-shadow:0 1px 8px rgba(0,0,0,.2);"
+    "display:flex;align-items:center;justify-content:center;font-size:15px;color:#555;"
+    "cursor:pointer;z-index:2147483646;font-family:-apple-system,\"PingFang SC\",sans-serif;';"
+    "d.onclick=function(){window.location.href='__BASE__';};"
+    "document.body.appendChild(d);})()"
+)
+
 
 def _redirect_logs(data_dir: pathlib.Path) -> None:
     """GUI 模式（console=False）下 print/日志默认丢弃；重定向到 data/logs/app.log。"""
@@ -233,16 +246,18 @@ def main() -> int:
                 pass
 
         def _login_guard(window: "webview.Window", base_url: str, stop: "threading.Event") -> None:
-            """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录）。
+            """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录；登录 UI 改版：启动不自动导航）。
 
-            链路：服务就绪即主动 login_begin（未登录置 pending，无需用户点击）→ 守卫
-            轮询到 pending → 窗口 load_url(小红书真实登录页)（用户在壳窗口内原生完成扫码 /
-            手机号+获取验证码，验证码真实走「获取验证码」流程）→ 注入强制登录 JS
-            （隐藏登录弹层关闭按钮，用户无法跳过）→ 轮询 get_cookies() 出现 web_session
-            （HttpOnly 亦可得）→ POST /api/auth/import_cookies 注入无头引擎独立 profile
-            （幂等）→ 引擎真实判定登录 → 窗口回 APP 前端。
-            强制语义（用户拍板）：未登录时窗口永远停在登录页（无「稍后再说/关闭」路径），
-            注入未通过/URL 漂移均留在登录页；仅登录成功才回 APP，无超时回退。
+            登录 UI 改版（用户拍板，R-6.9+）核心语义：
+            - **启动不自动导航**：未登录 / 启动被踢不再直接 load_url 登录页，而是停在 APP 前端
+              （前端 onMounted 检测未登录/被踢 → 显示 APP 内部**强制登录对话框**，不可关闭）。
+              用户点「去登录」（login_begin force=True）→ 守卫才导航小红书真实登录页（无叉）。
+            - **运行时被踢不直接导航**：轮询到 kicked → 通知 APP 前端弹强制登录对话框
+              （dispatchEvent xhs-leads:kicked；前端确认后弹窗；兜底刷新 APP 触发 onMounted）。
+            - **主动重登可关闭**：设置页「重新登录」（login_begin force=False）→ 登录页注入
+              右上角「✕」（_ACTIVE_CLOSE_JS），点关闭回 APP，登录态不变；不锁死、不拉回。
+            - **强制登录不可关闭**：force=True → 注入 force_login_js（隐藏关闭类元素）+ URL 锁死。
+            - 登录成功链路不变：id_token 出现 → R-6.9 遮罩 → import_cookies 注入引擎 → 回 APP。
             CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化/不想被导航时）。
             """
             if os.environ.get("CZ_SKIP_LOGIN_GUARD"):
@@ -271,7 +286,15 @@ def main() -> int:
                 try:
                     window.evaluate_js(force_login_js)
                 except Exception as e:  # noqa: BLE001（页面未就绪等，下轮重试）
-                    print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}")
+                    print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+
+            def _inject_active_close() -> None:
+                """注入/重注主动重登的「✕ 返回 APP」按钮（幂等；页面重渲染后补注）。"""
+                try:
+                    r = window.evaluate_js(_ACTIVE_CLOSE_JS.replace("__BASE__", f"{base}/"))
+                    print(f"[xhs-leads] 主动关闭按钮注入 evaluate_js -> {r!r}", flush=True)
+                except Exception as e:  # noqa: BLE001（页面未就绪等，下轮重试）
+                    print(f"[xhs-leads] 主动重登关闭按钮注入暂未成功: {e!r}", flush=True)
 
             def _get_json(path: str):
                 try:
@@ -321,44 +344,69 @@ def main() -> int:
                 window.events.loaded.wait(timeout=60)  # webview.start 后窗口就绪
             except Exception:  # noqa: BLE001
                 pass
-            # 启动即强制（R-6.6）：服务就绪主动置登录态检查，未登录直接进入登录页导航流程，
-            # 不再依赖前端「前往登录」按钮（实测打包态按钮点击偶发不触发后端请求）。
-            # R-6.8 被踢统一：login_begin 对「kicked」（平台登录超限/请重新登录，cookie 残留
-            # 假阳性）不再短路，kicked 视为未登录 → 启动即进登录页；运行时被踢同样自动拉回。
-            r0 = _post_json("/api/auth/login_begin", {})
+            # 登录 UI 改版：启动仅做状态判定，**不自动导航登录页**——未登录/启动被踢由
+            # APP 前端强制登录对话框承接（前端 onMounted 检测 → 弹窗 → 点「去登录」置 pending
+            # → 守卫才导航）。守卫主职责：轮询 pending 导航登录页 + 运行时被踢通知前端。
             ls = _get_json("/api/login_status")
             kicked_at_start = bool(ls and ls.get("kicked"))
-            if r0 and r0.get("already_logged_in") and not kicked_at_start:
-                return  # 已登录且未被踢：无需守卫
-            # R-6.6 提速：login_begin 依赖 30s 缓存，重启后缓存空会误报未登录 → 导航登录页。
-            # 引擎实时判定兜底（login_status 会走引擎 CDP 真实判定）：已登录则秒回 APP 首页。
             if ls and ls.get("logged_in") and not kicked_at_start:
-                print("[xhs-leads] 引擎已登录，跳过登录页")
-                return
-            if kicked_at_start:
-                print("[xhs-leads] 检测到登录已被平台踢出（登录超限/风控），启动即进入登录页")
-            if not r0 or not r0.get("ok"):
-                print(f"[xhs-leads] login_begin 未就绪: {(r0 or {}).get('error', '重试')}")
+                print("[xhs-leads] 启动已登录——守卫进入运行时轮询（被踢检测）")
+            elif kicked_at_start:
+                print(
+                    "[xhs-leads] 启动检测到登录已被平台踢出（登录超限/风控）"
+                    "——APP 前端显示强制登录对话框（不自动导航登录页）"
+                )
+            else:
+                print(
+                    "[xhs-leads] 启动未登录——APP 前端显示强制登录对话框"
+                    "（不自动导航登录页；点「去登录」后守卫导航小红书登录页）"
+                )
             in_login = False
+            cur_force = False
+            _last_kick_notify = 0.0
             while not stop.wait(0.5):
                 if in_login:
                     continue  # 正在登录页（局部轮询控制），此处等待退出
-                # R-6.8 运行时被踢轮询：登录态被平台踢出（风控/登录超限）→ 自动回登录页，
-                # 不依赖前端操作或 pending（采集 403 与登录页导航从此同源驱动）。
+                st = _get_json("/api/auth/login_begin_state")
+                pending = bool(st and st.get("pending"))
+                pending_force = bool(st and st.get("force"))
                 ls = _get_json("/api/login_status")
                 kicked_now = bool(ls and ls.get("kicked"))
-                st = _get_json("/api/auth/login_begin_state")
-                if not kicked_now and (not st or not st.get("pending")):
+                if pending:
+                    # 用户点了「去登录」（强制）或「重新登录」（主动）→ 导航小红书登录页
+                    cur_force = pending_force
+                    print(
+                        "[xhs-leads] 切换到小红书登录页"
+                        f"（{'强制登录·不可关闭' if cur_force else '主动重登·可关闭'}）"
+                    )
+                elif kicked_now:
+                    # 运行时被踢：**不直接导航登录页**——通知 APP 前端弹强制登录对话框
+                    # （前端确认 kicked 后弹窗，与启动未登录同一入口；节流 5s 防重复通知）
+                    if time.monotonic() - _last_kick_notify >= 5.0:
+                        _last_kick_notify = time.monotonic()
+                        print(
+                            "[xhs-leads] 运行时检测到登录被踢（风控/登录超限）"
+                            "——通知 APP 前端弹强制登录对话框"
+                        )
+                        try:
+                            window.evaluate_js(
+                                "window.dispatchEvent(new CustomEvent('xhs-leads:kicked'))"
+                            )
+                        except Exception as e:  # noqa: BLE001（前端页面未就绪 → 刷新兜底）
+                            print(f"[xhs-leads] 前端事件通知失败，刷新 APP 触发检测: {e!r}")
+                            try:
+                                window.load_url(f"{base}/")
+                            except Exception:  # noqa: BLE001
+                                pass
                     continue
-                if kicked_now:
-                    print("[xhs-leads] 运行时检测到登录被踢（风控/登录超限），自动切回登录页")
-                print("[xhs-leads] 切换到小红书登录页（壳窗口内真实页面，扫码/手机号+验证码原生操作）")
+                else:
+                    continue
+                # ---- 导航到小红书真实登录页（双保险） ----
                 try:
                     window.load_url(XHS_LOGIN_URL)
                     print("[xhs-leads] load_url 已调用（无异常）")
                 except Exception as e:  # noqa: BLE001（诊断：打包态 cocoa load_url 曾静默失效）
                     print(f"[xhs-leads] load_url 异常: {e!r}")
-                # 双保险：load_url 若因打包态 callAfter/loadRequest 静默失效，改由页面内 JS 导航兜底
                 import time as _t  # noqa: PLC0415
                 _t.sleep(1)
                 try:
@@ -371,13 +419,13 @@ def main() -> int:
                 import time as _t  # noqa: PLC0415
                 _t_last_import = 0.0
                 _t_last_inject = 0.0
-                # 强制语义（R-6.6）：无超时——未登录期间窗口永远停留在小红书整页登录页；
-                # 仅 stop（退出）或登录成功才离开。整页登录页无浏览内容，URL 漂移即拉回。
+                # 场景化注入：强制 → 隐藏关闭按钮（无叉）；主动 → 右上角「✕ 返回 APP」（可关闭）
+                if cur_force:
+                    _inject_force_login()
+                else:
+                    _inject_active_close()
+                # 登录页内监视循环：强制锁死（URL 漂移拉回 + 无叉）；主动可关闭（URL 回 APP 即结束）
                 while not stop.is_set():
-                    # 只认 id_token（R-6.6 修复）：web_session 未登录态也会种占位值，
-                    # 以它为触发会注入无效会话 + 与 URL 锁死互相打架（拉回 login 会覆盖
-                    # 壳窗口真实会话 cookie）。id_token 是登录成功专属令牌（未登录不种），
-                    # 它出现 = 用户已真实登录，才值得注入引擎。
                     try:
                         cs = window.get_cookies()  # 窗口当前 URL 域过滤
                     except Exception:  # noqa: BLE001
@@ -386,49 +434,70 @@ def main() -> int:
                         m.key == "id_token"
                         for c in (cs or []) for m in c.values()
                     )
-                    if has_id:
-                        # R-6.9 过渡遮罩：真登录态一现立即注入「等待中」，遮挡小红书登录后
-                        # 页面、拦截误操作（幂等；页面若在跳转导致遮罩丢失，下轮自动补注）。
-                        try:
-                            window.evaluate_js(_WAITING_OVERLAY_JS)
-                        except Exception:  # noqa: BLE001（页面未就绪等，下轮补注）
-                            pass
-                        # 真登录态已现：快速注入引擎（R-6.6 提速：节流 2s——id_token 是
-                        # 真实登录标志，无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。
-                        # 注入成功后 break 回 APP；未通过（极少见）也不拉回，等待下次判定。
-                        if _t.monotonic() - _t_last_import >= 2.0:
+                    if not cur_force:
+                        # ---- 主动重登：不锁死、不拉回 ----
+                        if _t.monotonic() - _t_last_inject >= 5.0:
+                            _t_last_inject = _t.monotonic()
+                            _inject_active_close()
+                        if has_id and _t.monotonic() - _t_last_import >= 2.0:
                             _t_last_import = _t.monotonic()
                             r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
                             if r and r.get("logged_in"):
-                                print("[xhs-leads] 登录成功，Cookie 已注入引擎，返回 APP")
+                                print("[xhs-leads] 主动重登成功，Cookie 已注入引擎，返回 APP")
                                 ok = True
                                 break
-                            print(
-                                "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
-                                (r or {}).get("error", "未知原因（等待下次判定）"),
-                            )
-                            # R-6.9：验证未通过 → 移除遮罩，让用户重新看到登录页重试
-                            try:
-                                window.evaluate_js(_REMOVE_WAITING_OVERLAY_JS)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        # 节流窗口内：不拉回（登录态已现，放行等注入判定）
-                    else:
-                        # 未登录（无 id_token）：必须停在整页登录页——URL 锁死 + 周期补注 JS
-                        if _t.monotonic() - _t_last_inject >= 10.0:
-                            _t_last_inject = _t.monotonic()
-                            _inject_force_login()
                         try:
                             cur = window.get_current_url() or ""
                         except Exception:  # noqa: BLE001
                             cur = ""
-                        if cur and "/login" not in cur:
-                            print(f"[xhs-leads] 离开登录页（{cur[:70]}），强制拉回登录页")
+                        if cur.startswith(base):
+                            # 用户点「✕」回 APP（登录态不变）：结束本轮 + 清 pending
+                            print("[xhs-leads] 主动重登已关闭（回 APP，登录态不变）")
+                            _post_json("/api/auth/login_cancel", {})
+                            break
+                    else:
+                        # ---- 强制登录：锁死 + 无叉 ----
+                        if has_id:
+                            # R-6.9 过渡遮罩：真登录态一现立即注入「等待中」，遮挡小红书登录后
+                            # 页面、拦截误操作（幂等；页面若在跳转导致遮罩丢失，下轮自动补注）。
                             try:
-                                window.load_url(XHS_LOGIN_URL)
-                            except Exception:  # noqa: BLE001
+                                window.evaluate_js(_WAITING_OVERLAY_JS)
+                            except Exception:  # noqa: BLE001（页面未就绪等，下轮补注）
                                 pass
-                            _inject_force_login()
+                            # 真登录态已现：快速注入引擎（节流 2s——id_token 是真实登录标志，
+                            # 无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。
+                            if _t.monotonic() - _t_last_import >= 2.0:
+                                _t_last_import = _t.monotonic()
+                                r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
+                                if r and r.get("logged_in"):
+                                    print("[xhs-leads] 登录成功，Cookie 已注入引擎，返回 APP")
+                                    ok = True
+                                    break
+                                print(
+                                    "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
+                                    (r or {}).get("error", "未知原因（等待下次判定）"),
+                                )
+                                # R-6.9：验证未通过 → 移除遮罩，让用户重新看到登录页重试
+                                try:
+                                    window.evaluate_js(_REMOVE_WAITING_OVERLAY_JS)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        else:
+                            # 未登录（无 id_token）：必须停在整页登录页——URL 锁死 + 周期补注 JS
+                            if _t.monotonic() - _t_last_inject >= 10.0:
+                                _t_last_inject = _t.monotonic()
+                                _inject_force_login()
+                            try:
+                                cur = window.get_current_url() or ""
+                            except Exception:  # noqa: BLE001
+                                cur = ""
+                            if cur and "/login" not in cur:
+                                print(f"[xhs-leads] 离开登录页（{cur[:70]}），强制拉回登录页")
+                                try:
+                                    window.load_url(XHS_LOGIN_URL)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                _inject_force_login()
                     stop.wait(1.0)
                 in_login = False
                 if ok:

@@ -372,7 +372,11 @@ async def login_status():
 # 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫轮询到 pending →
 #       窗口 load_url(小红书登录页) → 守卫轮询 get_cookies 出现 web_session →
 #       import_cookies 注入引擎 → 真实判定登录态 → 回 APP 前端。
-_LOGIN_GATE = {"pending": False}
+_LOGIN_GATE = {"pending": False, "force": False}
+
+
+class LoginBeginReq(BaseModel):
+    force: bool = False
 
 
 class ImportCookiesReq(BaseModel):
@@ -380,20 +384,35 @@ class ImportCookiesReq(BaseModel):
 
 
 @app.post("/api/auth/login_begin")
-async def login_begin():
-    """前端请求打开真实登录页（窗口导航由 launcher 守卫执行）。已登录则直接返回无需导航。"""
+async def login_begin(req: LoginBeginReq | None = None):
+    """前端请求打开真实登录页（窗口导航由 launcher 守卫执行）。
+
+    force=True：强制登录（启动未登录/被踢、采集异常被踢、APP 强制登录页「去登录」）——
+    即使已登录也置 pending；守卫导航登录页后隐藏关闭按钮（不可关闭，登录成功才回）。
+    force=False（默认）：主动重登（设置页「重新登录」，本已登录）——绕过已登录短路置
+    pending；守卫保留关闭按钮（可关闭回 APP，登录态不变）。
+    """
     cache = _LOGIN_CACHE["data"]
-    # R-6.8：被踢（平台登录超限/请重新登录，cookie 残留假阳性）视为未登录 → 不短路，置 pending 触发登录页
-    if cache and cache.get("logged_in") and not cache.get("kicked"):
+    force = bool(req and req.force)
+    if not force and cache and cache.get("logged_in") and not cache.get("kicked"):
         return {"ok": True, "already_logged_in": True}
     _LOGIN_GATE["pending"] = True
-    return {"ok": True, "already_logged_in": False}
+    _LOGIN_GATE["force"] = force
+    return {"ok": True, "already_logged_in": False, "force": force}
 
 
 @app.get("/api/auth/login_begin_state")
 async def login_begin_state():
-    """壳 launcher 守卫轮询：是否有待处理的登录请求（pending 由登录成功清除）。"""
-    return {"pending": _LOGIN_GATE["pending"]}
+    """壳 launcher 守卫轮询：是否有待处理的登录请求（pending 由登录成功清除）+ force 标志。"""
+    return {"pending": _LOGIN_GATE["pending"], "force": bool(_LOGIN_GATE.get("force"))}
+
+
+@app.post("/api/auth/login_cancel")
+async def login_cancel():
+    """取消待处理登录请求（主动重登用户点「✕」回 APP 时由守卫调用；强制登录无取消路径）。"""
+    _LOGIN_GATE["pending"] = False
+    _LOGIN_GATE["force"] = False
+    return {"ok": True}
 
 
 @app.post("/api/auth/import_cookies")
@@ -461,6 +480,7 @@ async def import_cookies(req: ImportCookiesReq):
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
         _LOGIN_GATE["pending"] = False
+        _LOGIN_GATE["force"] = False
     return {
         "ok": True,
         "logged_in": logged_in,
@@ -1750,10 +1770,24 @@ _COOKIE_ORDER = ["web_session", "last_web_session", "a1", "webId", "gid", "id_to
 
 
 def _cookie_items(cookies: list) -> tuple[list, str]:
-    """把本地 cookie 列表整理成展示项（按 _COOKIE_ORDER 排序）+ 提取 web_session 摘要。"""
+    """把本地 cookie 列表整理成展示项（按 _COOKIE_ORDER 排序）+ 提取 web_session 摘要。
+
+    登录 UI 改版（用户拍板）：Cookie 只读粒度尽量完整 —— 名称 + 完整值 + 域 + 有效期；
+    前端以「隐藏值」开关控制完整值是否脱敏展示（防截图外发泄露会话）。
+    """
     items = []
-    for i, nm in enumerate(c.get("name", "") for c in cookies):
-        items.append({"name": nm, "value": "", "domain": ".xiaohongshu.com", "ord": i})
+    for i, c in enumerate(cookies):
+        nm = c.get("name", "")
+        exp = c.get("expires")
+        if isinstance(exp, (int, float)) and exp < 0:
+            exp = None
+        items.append({
+            "name": nm,
+            "value": str(c.get("value", "")),  # 完整值（前端默认脱敏，开关可显示原文）
+            "domain": str(c.get("domain", ".xiaohongshu.com")),
+            "expires": exp if isinstance(exp, (int, float)) else None,  # 会话级 = None
+            "ord": i,
+        })
     items.sort(key=lambda x: (_COOKIE_ORDER.index(x["name"]) if x["name"] in _COOKIE_ORDER else 99, x["name"]))
     ws = next((c.get("value", "") for c in cookies if c.get("name") == "web_session"), "") or ""
     return items, ws
