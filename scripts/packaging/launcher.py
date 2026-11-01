@@ -33,6 +33,30 @@ XHS_LOGIN_URL = (
     "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
 )
 
+# R-6.9 登录成功过渡遮罩：id_token 一出现即注入全屏「等待中」，遮挡小红书登录后页面、
+# 拦截用户误操作；引擎注入完成 load_url 切回 APP 时随导航消失。幂等（已有 id 不重复注入）。
+_WAITING_OVERLAY_JS = r"""(() => {
+  if (document.getElementById('xhs-leads-waiting')) return;
+  const d = document.createElement('div');
+  d.id = 'xhs-leads-waiting';
+  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;'
+    + 'z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;'
+    + 'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;';
+  const st = document.createElement('style');
+  st.textContent = '@keyframes xhs-leads-spin{to{transform:rotate(360deg)}}';
+  const t = document.createElement('div');
+  t.textContent = '登录成功，正在进入工作台…';
+  t.style.cssText = 'font-size:18px;color:#333;margin-bottom:16px;letter-spacing:1px;';
+  const s = document.createElement('div');
+  s.style.cssText = 'width:26px;height:26px;border:3px solid #ff2442;border-top-color:transparent;'
+    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;';
+  d.appendChild(st); d.appendChild(t); d.appendChild(s);
+  document.body.appendChild(d);
+})()"""
+_REMOVE_WAITING_OVERLAY_JS = (
+    "(() => { const e = document.getElementById('xhs-leads-waiting'); if (e) e.remove(); })()"
+)
+
 
 def _redirect_logs(data_dir: pathlib.Path) -> None:
     """GUI 模式（console=False）下 print/日志默认丢弃；重定向到 data/logs/app.log。"""
@@ -299,24 +323,35 @@ def main() -> int:
                 pass
             # 启动即强制（R-6.6）：服务就绪主动置登录态检查，未登录直接进入登录页导航流程，
             # 不再依赖前端「前往登录」按钮（实测打包态按钮点击偶发不触发后端请求）。
+            # R-6.8 被踢统一：login_begin 对「kicked」（平台登录超限/请重新登录，cookie 残留
+            # 假阳性）不再短路，kicked 视为未登录 → 启动即进登录页；运行时被踢同样自动拉回。
             r0 = _post_json("/api/auth/login_begin", {})
-            if r0 and r0.get("already_logged_in"):
-                return  # 已登录：无需守卫
+            ls = _get_json("/api/login_status")
+            kicked_at_start = bool(ls and ls.get("kicked"))
+            if r0 and r0.get("already_logged_in") and not kicked_at_start:
+                return  # 已登录且未被踢：无需守卫
             # R-6.6 提速：login_begin 依赖 30s 缓存，重启后缓存空会误报未登录 → 导航登录页。
             # 引擎实时判定兜底（login_status 会走引擎 CDP 真实判定）：已登录则秒回 APP 首页。
-            ls = _get_json("/api/login_status")
-            if ls and ls.get("logged_in"):
+            if ls and ls.get("logged_in") and not kicked_at_start:
                 print("[xhs-leads] 引擎已登录，跳过登录页")
                 return
+            if kicked_at_start:
+                print("[xhs-leads] 检测到登录已被平台踢出（登录超限/风控），启动即进入登录页")
             if not r0 or not r0.get("ok"):
                 print(f"[xhs-leads] login_begin 未就绪: {(r0 or {}).get('error', '重试')}")
             in_login = False
             while not stop.wait(0.5):
                 if in_login:
                     continue  # 正在登录页（局部轮询控制），此处等待退出
+                # R-6.8 运行时被踢轮询：登录态被平台踢出（风控/登录超限）→ 自动回登录页，
+                # 不依赖前端操作或 pending（采集 403 与登录页导航从此同源驱动）。
+                ls = _get_json("/api/login_status")
+                kicked_now = bool(ls and ls.get("kicked"))
                 st = _get_json("/api/auth/login_begin_state")
-                if not st or not st.get("pending"):
+                if not kicked_now and (not st or not st.get("pending")):
                     continue
+                if kicked_now:
+                    print("[xhs-leads] 运行时检测到登录被踢（风控/登录超限），自动切回登录页")
                 print("[xhs-leads] 切换到小红书登录页（壳窗口内真实页面，扫码/手机号+验证码原生操作）")
                 try:
                     window.load_url(XHS_LOGIN_URL)
@@ -352,6 +387,12 @@ def main() -> int:
                         for c in (cs or []) for m in c.values()
                     )
                     if has_id:
+                        # R-6.9 过渡遮罩：真登录态一现立即注入「等待中」，遮挡小红书登录后
+                        # 页面、拦截误操作（幂等；页面若在跳转导致遮罩丢失，下轮自动补注）。
+                        try:
+                            window.evaluate_js(_WAITING_OVERLAY_JS)
+                        except Exception:  # noqa: BLE001（页面未就绪等，下轮补注）
+                            pass
                         # 真登录态已现：快速注入引擎（R-6.6 提速：节流 2s——id_token 是
                         # 真实登录标志，无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。
                         # 注入成功后 break 回 APP；未通过（极少见）也不拉回，等待下次判定。
@@ -366,6 +407,11 @@ def main() -> int:
                                 "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
                                 (r or {}).get("error", "未知原因（等待下次判定）"),
                             )
+                            # R-6.9：验证未通过 → 移除遮罩，让用户重新看到登录页重试
+                            try:
+                                window.evaluate_js(_REMOVE_WAITING_OVERLAY_JS)
+                            except Exception:  # noqa: BLE001
+                                pass
                         # 节流窗口内：不拉回（登录态已现，放行等注入判定）
                     else:
                         # 未登录（无 id_token）：必须停在整页登录页——URL 锁死 + 周期补注 JS

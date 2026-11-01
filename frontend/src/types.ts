@@ -120,6 +120,8 @@ export interface ClonePayload {
 
 export interface LoginStatus {
   logged_in: boolean
+  /** R-6.8：平台已踢（登录超限/请重新登录，cookie 残留假阳性）→ 登录态失效需重新登录 */
+  kicked?: boolean
   nickname?: string
   [k: string]: unknown
 }

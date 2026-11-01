@@ -51,8 +51,8 @@ export const appState = reactive({
     images: string[]
     originUrl: string
   },
-  // 登录
-  login: { logged_in: false, nickname: '' },
+  // 登录（R-6.8 增加 kicked：平台已踢/登录超限 → 登录态失效）
+  login: { logged_in: false, nickname: '', kicked: false },
   // 登录态/Cookie 刷新信号（LoginModal 登录成功后 +1，CollectPanel 监听刷新 cookie 显示）
   cookieRefreshTick: 0,
   // toast

@@ -256,12 +256,14 @@ def _expires_ok(exps: list) -> bool:
     return any(e is None or (e or 0) >= now_ts for e in exps)
 
 
-async def _engine_login_state(eng) -> tuple[bool, bool]:
-    """引擎真实登录态（R 批 v1.5；R-6.6 判定升级）：返回 (web_session 存在?, 登录判定)。
+async def _engine_login_state(eng) -> tuple[bool, bool, bool]:
+    """引擎真实登录态（R 批 v1.5；R-6.6 判定升级；R-6.8 被踢检测统一）：返回 (web_session 存在?, 页面登录判定?, 被踢信号?)。
 
     只读、不清 cookie、不新建浏览器实例（复用引擎现有小红书页，无则开 explore）：
     ① CDP 读引擎内存 cookie → web_session / id_token 是否存在；
-    ② 页面注入 extract.js → xhsIsLoggedIn()（仅作辅助判定）。
+    ② 页面注入 extract.js → xhsIsLoggedIn()（仅作辅助判定）；
+    ③ **被踢信号检测**：平台判定「设备登录超限/请重新登录」时会在页面渲染登录弹窗，
+       即使 id_token/web_session 残留也视为登录态失效（R-6.8：修复「cookie 残留假阳性」）。
 
     背景：
     - web_session 存在 ≠ 会话有效（小红书未登录也会种占位 web_session，页面仍弹登录框，
@@ -269,8 +271,9 @@ async def _engine_login_state(eng) -> tuple[bool, bool]:
     - **id_token 是登录成功专属令牌**（未登录会话不种，实测打包态引擎注入后 cookie 含
       id_token len=136 + unread），而引擎页面渲染可能滞后/失败（headless 偶发空白，
       实测注入后 reload 页面空白 → xhsIsLoggedIn 恒 false 造成假阴性，见 R-6.6）。
-      因此：id_token 存在 → 直接判已登录（页面判定不阻塞）；否则回退
-      web_session + 页面判定。
+      因此：id_token 存在 → 直接判已登录（页面判定不阻塞）；否则回退 web_session + 页面判定。
+    - **R-6.8 被踢覆盖**：被踢信号只认「登录超限 / 请重新登录」这类明确登录 UI 文本，
+      不依赖 xhsIsLoggedIn（空白页无这些文本 → 不误判），任一分支出现该信号 → 判失效。
     """
     from src import browser_client
 
@@ -278,16 +281,32 @@ async def _engine_login_state(eng) -> tuple[bool, bool]:
     has_ws = any(c.get("name") == "web_session" for c in mem)
     has_id_token = any(c.get("name") == "id_token" for c in mem)
     page_logged_in = False
-    if has_id_token:
-        # id_token = 登录成功专属令牌：直接判定通过（页面渲染滞后/空白不阻塞，避免假阴性）
-        page_logged_in = True
-    elif has_ws:
+    kicked = False
+    # R-6.8 被踢信号检测（尽力而为）：仅复用**现成**小红书页读取 inner_text；
+    # 无页面/读取失败/空白 → 不误判（id_token 权威分支不因页面问题被降级，R-6.6 精神）。
+    ctx = None
+    try:
         ctx = await eng.context()
-        page = None
+    except Exception:  # noqa: BLE001（测试环境/引擎未就绪：无 context 不判被踢）
+        ctx = None
+    page = None
+    if ctx is not None:
         for p in ctx.pages:
             if not p.is_closed() and "xiaohongshu" in (p.url or ""):
                 page = p
                 break
+    body = ""
+    if page is not None:
+        try:
+            body = (await page.inner_text("body")) or ""
+        except Exception:  # noqa: BLE001（页面未就绪 → 无被踢信号，不误判）
+            body = ""
+    kicked = ("登录超限" in body) or ("请重新登录" in body)
+    if has_id_token:
+        # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）；
+        # 被踢信号覆盖（平台已踢但 cookie 残留 → 判失效）
+        page_logged_in = not kicked
+    elif has_ws:
         if page is None:
             page = await eng.new_page()
             await page.goto(
@@ -297,8 +316,8 @@ async def _engine_login_state(eng) -> tuple[bool, bool]:
             )
             await asyncio.sleep(3)
         await page.evaluate(browser_client._EXTRACT_SRC)
-        page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()"))
-    return has_ws, page_logged_in
+        page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
+    return has_ws, page_logged_in, kicked
 
 
 @app.get("/api/login_status")
@@ -323,16 +342,18 @@ async def login_status():
         from src import engine_pool
 
         eng = await engine_pool.pool.get("default")
-        has_ws, page_logged_in = await _engine_login_state(eng)
-        logged_in = has_ws and page_logged_in
+        has_ws, page_logged_in, kicked = await _engine_login_state(eng)
+        # R-6.8：被踢（平台登录超限/请重新登录，cookie 残留假阳性）→ 一律视为未登录
+        logged_in = has_ws and page_logged_in and not kicked
         result = {
-            "status": "logged_in" if logged_in else "not_logged_in",
+            "status": "kicked" if kicked else ("logged_in" if logged_in else "not_logged_in"),
             "logged_in": logged_in,
+            "kicked": kicked,
             "nickname": "",
-            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'}",
+            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'}",
         }
         # 登录恢复闭环：引擎真实登录态有效 → 自动解除该账号软风控
-        if logged_in:
+        if logged_in and not kicked:
             try:
                 risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
             except Exception:  # noqa: BLE001
@@ -362,7 +383,8 @@ class ImportCookiesReq(BaseModel):
 async def login_begin():
     """前端请求打开真实登录页（窗口导航由 launcher 守卫执行）。已登录则直接返回无需导航。"""
     cache = _LOGIN_CACHE["data"]
-    if cache and cache.get("logged_in"):
+    # R-6.8：被踢（平台登录超限/请重新登录，cookie 残留假阳性）视为未登录 → 不短路，置 pending 触发登录页
+    if cache and cache.get("logged_in") and not cache.get("kicked"):
         return {"ok": True, "already_logged_in": True}
     _LOGIN_GATE["pending"] = True
     return {"ok": True, "already_logged_in": False}
@@ -430,19 +452,20 @@ async def import_cookies(req: ImportCookiesReq):
         log.warning("注入后刷新引擎页面失败（不影响判定）: %s", e)
 
     try:
-        has_ws, page_logged_in = await _engine_login_state(eng)
+        has_ws, page_logged_in, kicked = await _engine_login_state(eng)
     except Exception as e:  # noqa: BLE001（引擎页面刷新/判定时序异常：返回未通过，守卫留在登录页重试）
         log.warning("注入后引擎登录判定异常（不中断，按未通过处理）: %s", e)
-        has_ws, page_logged_in = False, False
-    logged_in = has_ws and page_logged_in
+        has_ws, page_logged_in, kicked = False, False, False
+    # R-6.8：被踢（登录超限/请重新登录）→ 视为未通过，守卫留在登录页重新登录
+    logged_in = has_ws and page_logged_in and not kicked
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
         _LOGIN_GATE["pending"] = False
     return {
         "ok": True,
         "logged_in": logged_in,
-        "status": "logged_in" if logged_in else "not_logged_in",
-        "raw": f"注入后 engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'}",
+        "status": "kicked" if kicked else ("logged_in" if logged_in else "not_logged_in"),
+        "raw": f"注入后 engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'}",
     }
 
 
@@ -899,8 +922,16 @@ async def _require_real_login() -> dict:
         # R-6.7 口径对齐：id_token 为真实登录权威标志（与 login_status 的
         # _engine_login_state 同判定），存在即放行——不依赖页面渲染（headless
         # 偶发空白 → xhsIsLoggedIn 假阴性坑，登录态明明有效却被拦）。
+        # R-6.8 被踢覆盖：平台已踢（登录超限/请重新登录弹窗）但 id_token 残留 → 视为未登录，
+        # 走拦截引导重新登录（否则采集 403 与登录态判定的口径再次脱节）。
         if any(c.get("name") == "id_token" for c in mem):
-            return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP id_token）"}
+            _, _, kicked = await _engine_login_state(eng)
+            if not kicked:
+                return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP id_token）"}
+            return {
+                "ok": False, "code": "kicked",
+                "note": "登录已被平台踢出（登录超限/风控），请在 app 内重新登录后重试",
+            }
         if any(c.get("name") == "web_session" for c in mem):
             r = await _verify_cookies_or_raise(mem, "default")
             if r.get("logged_in"):

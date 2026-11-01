@@ -26,6 +26,7 @@ class TestApiSmoke:
     def test_login_status(self, client, monkeypatch):
         # R 批 v1.5：登录态 = 引擎 CDP web_session 存在 且 页面登录（xhsIsLoggedIn），
         # 两条件任一不满足即未登录（web_session 存在但会话失效=假阳性场景，实测见 R-6）
+        # R-6.8：_engine_login_state 返回三元组 (web_session?, 页面登录?, 被踢?)；被踢 → 判失效
         async def fake_get(*a, **k):
             return object()  # 假引擎实例：仅用于传入 _engine_login_state
 
@@ -33,17 +34,26 @@ class TestApiSmoke:
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
 
         async def state_ok(eng):
-            return True, True
+            return True, True, False
 
         async def state_stale(eng):
-            return True, False  # stale cookie：web_session 有但页面未登录
+            return True, False, False  # stale cookie：web_session 有但页面未登录
+
+        async def state_kicked(eng):
+            return True, True, True  # R-6.8：cookie 残留但平台已踢（登录超限/请重新登录）
 
         monkeypatch.setattr(server, "_engine_login_state", state_ok)
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 防跨用例缓存污染
         assert client.get("/api/login_status").json()["logged_in"] is True
 
         monkeypatch.setattr(server, "_engine_login_state", state_stale)
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 重置 30s 缓存
         assert client.get("/api/login_status").json()["logged_in"] is False
+
+        monkeypatch.setattr(server, "_engine_login_state", state_kicked)
+        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 重置 30s 缓存
+        r = client.get("/api/login_status").json()
+        assert r["logged_in"] is False and r["status"] == "kicked" and r["kicked"] is True
 
     def test_cookie_info_empty(self, client, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "BASE", tmp_path)

@@ -625,32 +625,35 @@ class TestRefreshCookie:
 
 
 class TestLoginStatus:
-    def test_ws_without_expires(self, client, tmp_path, monkeypatch):
-        # web_session 无 expires 字段（exps 空）→ exp_ok=True 视为已登录（149 行 or 分支应被杀）
-        monkeypatch.setattr(server, "_read_cookie_status", _REAL_READ_COOKIE_STATUS)
-        (tmp_path / "data").mkdir()
-        (tmp_path / "data" / "cookies.json").write_text(
-            json.dumps({"cookies": [{"name": "web_session", "value": "abcdef012345"}]}))
-        r = client.get("/api/login_status")
-        assert r.json()["logged_in"] is True
+    """R 批 v1.5 后 /api/login_status 走引擎 CDP 判定（见 _engine_login_state）；
+    文件链路 _read_cookie_status 已停用留档，此处直测其本体（旧链路 expires 语义）。"""
 
-    def test_ws_expires_future(self, client, tmp_path, monkeypatch):
-        monkeypatch.setattr(server, "_read_cookie_status", _REAL_READ_COOKIE_STATUS)
-        (tmp_path / "data").mkdir()
-        (tmp_path / "data" / "cookies.json").write_text(
+    def test_ws_without_expires(self, tmp_path):
+        # web_session 无 expires 字段（exps 空）→ exp_ok=True 视为已登录（or 分支应被杀）
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "cookies.json").write_text(
+            json.dumps({"cookies": [{"name": "web_session", "value": "abcdef012345"}]}))
+        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
+        assert logged_in is True
+
+    def test_ws_expires_future(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "cookies.json").write_text(
             json.dumps({"cookies": [{"name": "web_session", "value": "x",
                                      "expires": int(time.time()) + 3600}]}))
-        r = client.get("/api/login_status")
-        assert r.json()["logged_in"] is True
+        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
+        assert logged_in is True
 
-    def test_ws_expires_past(self, client, tmp_path, monkeypatch):
-        monkeypatch.setattr(server, "_read_cookie_status", _REAL_READ_COOKIE_STATUS)
-        (tmp_path / "data").mkdir()
-        (tmp_path / "data" / "cookies.json").write_text(
+    def test_ws_expires_past(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "cookies.json").write_text(
             json.dumps({"cookies": [{"name": "web_session", "value": "x",
                                      "expires": int(time.time()) - 60}]}))
-        r = client.get("/api/login_status")
-        assert r.json()["logged_in"] is False
+        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
+        assert logged_in is False
 
 
 class TestReadChromeCookies:

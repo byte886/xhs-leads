@@ -21,7 +21,7 @@ onMounted(async () => {
   // 一次性拉取全局共享状态（幂等；失败静默，保持旧值）
   try {
     const lg = await apiLoginStatus()
-    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '' }
+    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪 */ }
   try {
     const c = await apiCdpStatus()
@@ -56,7 +56,7 @@ onMounted(async () => {
     <div class="sysbar">
       <button class="sys-item" :class="appState.login.logged_in ? 'ok' : 'bad'" @click="appState.login.logged_in ? jumpToSettings() : undefined" title="点设置页查看连接详情">
         <span class="dot-s" :class="appState.login.logged_in ? 'on' : 'off'"></span>
-        登录 {{ appState.login.logged_in ? (appState.login.nickname || '已登录') : '未登录' }}
+        登录 {{ appState.login.kicked ? '已失效，请重新登录' : (appState.login.logged_in ? (appState.login.nickname || '已登录') : '未登录') }}
       </button>
       <button class="sys-item" :class="appState.sys.cdp.ok ? 'ok' : (appState.sys.cdp.state === 'not_configured' ? 'bad' : 'mid')" @click="jumpToSettings()">
         <span class="dot-s" :class="appState.sys.cdp.ok ? 'on' : 'off'"></span>

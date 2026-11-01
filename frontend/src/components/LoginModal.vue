@@ -37,7 +37,7 @@ function startTimers() {
     try {
       const lg = await apiLoginStatus()
       if (lg.logged_in) {
-        appState.login = { logged_in: true, nickname: lg.nickname || '' }
+        appState.login = { logged_in: true, nickname: lg.nickname || '', kicked: false }
         appState.cookieRefreshTick += 1
         toast('登录成功')
         stopTimers()

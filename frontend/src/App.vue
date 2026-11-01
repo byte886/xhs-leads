@@ -26,7 +26,7 @@ const loginOpen = ref(false)
 // 触发点：用户主动打开登录引导；或搜索/采集失败提示后手动打开。
 function checkLogin() {
   apiLoginStatus().then((lg) => {
-    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '' }
+    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
     if (!lg.logged_in && !appState.collecting) loginOpen.value = true
   }).catch(() => { /* 后端未就绪静默 */ })
 }
@@ -106,7 +106,7 @@ onMounted(async () => {
   let lg: any = null
   try { lg = await apiLoginStatus() } catch { lg = null }
   const loggedIn = !!(lg && lg.logged_in)
-  appState.login = { logged_in: loggedIn, nickname: (lg && lg.nickname) || '' }
+  appState.login = { logged_in: loggedIn, nickname: (lg && lg.nickname) || '', kicked: !!(lg && lg.kicked) }
   if (!loggedIn && !appState.collecting) {
     loginOpen.value = true
   }

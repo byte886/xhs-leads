@@ -244,7 +244,7 @@ onMounted(async () => {
   refreshCdpStatus()
   try {
     const lg = await apiLoginStatus()
-    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '' }
+    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪时静默 */ }
 })
 </script>
