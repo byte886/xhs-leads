@@ -47,12 +47,15 @@ function onKickedEvent() {
 
 function startKickWatch() {
   if (kickTimer) clearInterval(kickTimer)
+  // R-6.21d：运行时轮询口径与 checkLogin 统一——只要未登录（含被踢/403 风控墙/
+  // cookie 假阳性等 kicked=False 但页面判否的异常形态）且空闲即弹强制登录对话框；
+  // 不再只认 kicked 字段（修复「登录失效/异常不弹窗」：被踢文案检测盲区兜底）。
   kickTimer = setInterval(() => {
     apiLoginStatus(8000).then((lg) => {
       appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-      if (lg.kicked) forceOpen.value = true
+      if ((!lg.logged_in || lg.kicked) && !appState.collecting) forceOpen.value = true
     }).catch(() => {})
-  }, 30000)
+  }, 15000)
 }
 
 function openMenu(payload: { note: Note; x: number; y: number }) {

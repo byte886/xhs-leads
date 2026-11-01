@@ -216,7 +216,7 @@ def _init_tables(con):
 # 前端轮询 login_status 若每次都连 Chrome → 每几秒弹一次窗（用户痛点「关了又开」）。
 # 因此缓存检测结果 TTL=30s，轮询打缓存，不反复连 Chrome。
 _LOGIN_CACHE = {"t": 0.0, "data": None}
-_LOGIN_CACHE_TTL = 30.0
+_LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半（CDP inner_text 开销可控）
 
 def _read_cookie_status(p: Path) -> tuple[bool, str, bool]:
     """【R 批 v1.5 已停用留档】读本地 cookies.json 判定登录态（方案 A「读系统 Chrome 落盘副本」遗留）。
@@ -301,7 +301,7 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool]:
             body = (await page.inner_text("body")) or ""
         except Exception:  # noqa: BLE001（页面未就绪 → 无被踢信号，不误判）
             body = ""
-    kicked = ("登录超限" in body) or ("请重新登录" in body)
+    kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body)
     if has_id_token:
         # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）；
         # 被踢信号覆盖（平台已踢但 cookie 残留 → 判失效）
