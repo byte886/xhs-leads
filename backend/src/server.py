@@ -1167,7 +1167,7 @@ def _persist_notes(keyword: str, notes: list, account_id: str = "default") -> tu
 
 
 async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "default",
-                        on_progress=None) -> list:
+                        on_progress=None, should_stop=None) -> list:
     """详情补全：互动数据（赞/藏/评/转/发布时间/作者 uid）+ 作者粉丝数（按 uid 缓存）。
 
     搜索卡片只有点赞粗值；详情页 SSR 提供全量互动与作者 uid，作者主页提供粉丝数
@@ -1178,10 +1178,14 @@ async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "defa
     account_id：使用哪个账号引擎补全详情（默认 default）。
     on_progress(n)：每条补全完成后回调（n=已完成条数），供任务进度/状态条实时反馈
     （R-6.15：补全阶段不再「进度卡死」——搜索采满后 collected 持续更新）。
+    should_stop()：R-6.15 补全阶段停止钩子——用户点「停止」时补全循环也立即收尾，
+    不再把已搜到的笔记全部补完才停（原实现只停搜索阶段，补全阶段点停止无效）。
     """
     cache: dict = {}
     done = 0
     for n in notes:
+        if should_stop and should_stop():
+            break
         try:
             if fast:
                 await _enrich_fast(n, cache, account_id)
@@ -1272,10 +1276,11 @@ async def collect_start(req: SearchReq):
             items = await _enrich_notes(
                 items, fast=req.fast, account_id=account_id,
                 on_progress=lambda n: state.__setitem__("collected", n),
+                should_stop=lambda: state["stop_event"],
             )
             state["phase"] = "save"
             saved, total, top = _persist_notes(req.keyword, items, account_id)
-            if res.get("stopped"):
+            if res.get("stopped") or state["stop_event"]:
                 state["status"] = "stopped"
                 state["note"] = f"已停止：采集到 {len(items)} 条并完成排序" if len(items) else "已停止（未采到结果）"
             elif len(items) >= req.limit:
