@@ -23,6 +23,10 @@ from playwright.async_api import async_playwright
 from src import config, logger as xlog, risk
 from src import browser_client
 
+# R-6.19：Tab2（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
+# 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
+TAB2_GUARD_LOCK = asyncio.Lock()
+
 log = xlog.get("engine")
 
 _pw = None
@@ -221,6 +225,17 @@ class AccountEngine:
                 self._context = None
 
     # ---------------- 页面管理 ----------------
+
+    def task_page_snapshot(self):
+        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 Tab2 显隐（R-6.19）。"""
+        tp = self._task_page
+        if tp is not None:
+            try:
+                if not tp.is_closed():
+                    return tp
+            except Exception:  # noqa: BLE001
+                pass
+        return None
 
     async def new_page(self):
         """取一个可用页面：优先复用该账号缓存的【任务 tab】（同 tab 导航覆盖，

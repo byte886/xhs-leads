@@ -110,6 +110,10 @@ class ShellWindow:
         self.page = page
         self.base_url = base_url.rstrip("/")
 
+    def rebind(self, page) -> None:
+        """R-6.19：keeper 重建壳 tab 后重绑定 page（登录守卫继续使用新 tab）。"""
+        self.page = page
+
     async def evaluate_js(self, js: str) -> str:
         try:
             return str(await self.page.evaluate(js))
@@ -143,7 +147,17 @@ async def ensure_shell(base_url: str):
             page = p
             break
     if page is None:
-        page = await ctx.new_page()
+        # R-6.19：复用引擎默认空白页（launch_persistent_context 不带 url → 首个 tab 为
+        # about:blank），避免「默认空白 tab 残留」造成窗口第 3 个多余 tab；无空白页才新开。
+        page = next(
+            (
+                p for p in ctx.pages
+                if not p.is_closed() and (p.url or "").strip() in ("", "about:blank")
+            ),
+            None,
+        )
+        if page is None:
+            page = await ctx.new_page()
     # 重启竞态：uvicorn 刚起时静态路由可能瞬时未就绪——goto 重试（≤20s），
     # 成功后壳 tab 停在 APP 前端页；守卫在未登录时自行接管导航。
     last_err = None
@@ -157,6 +171,13 @@ async def ensure_shell(base_url: str):
         await asyncio.sleep(0.5)
     else:
         print(f"[xhs-leads] 壳 tab 导航前端未成功（最后错误: {last_err!r}）", flush=True)
+    # R-6.19：导航成功后清理其余空白残留 tab（启动默认页已复用，此处仅清理异常残留）
+    for p in list(ctx.pages):
+        if p is not page and not p.is_closed() and (p.url or "").strip() in ("", "about:blank"):
+            try:
+                await p.close()
+            except Exception:  # noqa: BLE001
+                pass
     try:
         await page.bring_to_front()
     except Exception:  # noqa: BLE001
@@ -242,6 +263,11 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         if stop.is_set():
             return
         await asyncio.sleep(0.5)
+        # R-6.19：Tab1 被关闭后 keeper 即时重建——登录守卫重绑定新壳 page，
+        # 重建即重置登录状态（旧导航流程已随旧 tab 失效）
+        if await _rebind_if_closed(win, base):
+            in_login = False
+            continue
         if in_login:
             continue  # 正在登录页（局部轮询控制）
         st = await _get_json("/api/auth/login_begin_state")
@@ -297,6 +323,9 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             await _inject_active_close()
         # 小红书页内监视循环：强制锁死（离开小红书拉回首页+重开面板）；主动可关闭（URL 回 APP 即结束）。
         while not stop.is_set():
+            # R-6.19：登录中 Tab1 被关 → keeper 已重建，重绑定后继续登录监视
+            if await _rebind_if_closed(win, base):
+                continue
             try:
                 cs = await win.cookies()
             except Exception:  # noqa: BLE001
@@ -381,32 +410,214 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                 await asyncio.sleep(1.0)
 
 
-async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
-    """R-6.18 Tab1 固定：壳窗口内应用/登录 tab 被关闭时自动重建。
+async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
+    """R-6.19：壳 tab 被 keeper 重建后，旧 page 已关闭——登录守卫重绑定新壳 page。"""
+    try:
+        if win.page.is_closed():
+            from src import engine_pool  # noqa: PLC0415
 
-    语义：Tab1 = 前端（base_url 前缀）或登录页（xiaohongshu.com 导航中）均视为
-    壳 tab 存活；两者都消失（被用户关闭/崩溃）时自动 new_page + goto 前端恢复，
-    bring_to_front 拉回前台——实现「不可被关闭，固定住」。
+            eng = await engine_pool.pool.get("default")
+            ctx = await eng.context()
+            for p in ctx.pages:
+                if not p.is_closed() and (p.url or "").startswith(base):
+                    win.rebind(p)
+                    print("[xhs-leads] login_guard 已重绑定重建的壳 tab", flush=True)
+                    return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
+    """R-6.19 Tab1/Tab2 监护（事件驱动即时恢复，替代 R-6.18 的 2s 轮询）。
+
+    Tab1（应用/登录，固定不可关）：
+    - 持有壳 page 引用，close 事件触发**即时重建**（goto 前端 + bring_to_front），
+      用户感知 ≈ 关不掉；引用判活——登录导航（URL 变为小红书登录页）不影响存活判定。
+    - 兜底轮询 5s（事件丢失 / 引擎重建场景）。
+    Tab2（采集，collect_tab_visible 开关控制）：
+    - 开关开：小红书采集 tab 被关闭 → 重建 xiaohongshu 骨架并置前（Tab2 常驻语义，
+      「只能由开关关闭」）；开关关：不守护、不创建（空闲采集 tab 由 /api/app_config 联动关闭）。
+    兜底清理：about:blank 等空白残留 tab（引擎启动默认页如未被复用）随时关闭。
     """
-    from src import engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
+    from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
 
     base = base_url.rstrip("/")
+    shell_ref: list = [None]  # 当前壳 page 对象（引用判活；登录导航 URL 变化不影响）
+    _recovering: list = [False]  # 防重入：close 事件可能对同一销毁派发多次
+    _last_recover: list = [0.0]  # 时间窗：迟到重发事件（1s 内）直接忽略
+
+    async def _find_shell(ctx):
+        for p in ctx.pages:
+            if not p.is_closed() and (p.url or "").startswith(base):
+                return p
+        return None
+
+    async def _find_tab2(ctx, shell):
+        for p in ctx.pages:
+            if p is shell or p.is_closed():
+                continue
+            u = p.url or ""
+            if "xiaohongshu.com" in u and "/login" not in u:
+                return p
+        return None
+
+    def _watch(page) -> None:
+        def _on_close() -> None:
+            if stop.is_set():
+                return
+            try:
+                asyncio.get_running_loop().create_task(_recover())
+            except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
+                pass
+
+        try:
+            page.on("close", _on_close)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _rebuild_shell(ctx) -> None:
+        page = await ctx.new_page()
+        try:
+            await page.goto(base, wait_until="domcontentloaded", timeout=8000)
+        except Exception as e:  # noqa: BLE001（goto 失败：关闭空页，交由外层/兜底处理）
+            try:
+                await page.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        try:
+            await page.bring_to_front()
+        except Exception:  # noqa: BLE001
+            pass
+        shell_ref[0] = page
+        _watch(page)
+        print("[xhs-leads] 壳 Tab1 被关闭，已即时恢复前端 tab（R-6.19 事件驱动）", flush=True)
+
+    async def _recover() -> None:
+        """close 事件处理器：Tab1 / Tab2 被关，按开关状态即时恢复（防重入+时间窗）。"""
+        now = time.monotonic()
+        if stop.is_set() or _recovering[0] or (now - _last_recover[0]) < 1.0:
+            return
+        _last_recover[0] = now
+        _recovering[0] = True
+        try:
+            eng = await engine_pool.pool.get("default")
+            ctx = await eng.context()
+            shell = await _find_shell(ctx)
+            if shell is not None:
+                shell_ref[0] = shell
+            elif shell_ref[0] is None or shell_ref[0].is_closed():
+                await _rebuild_shell(ctx)
+            if config.get_config().get("collect_tab_visible"):
+                async with engine_pool.TAB2_GUARD_LOCK:
+                    if await _find_tab2(ctx, shell_ref[0]) is None:
+                        page = await ctx.new_page()
+                        try:
+                            await page.goto(
+                                "https://www.xiaohongshu.com/explore",
+                                wait_until="domcontentloaded", timeout=10000,
+                            )
+                        except Exception:  # noqa: BLE001
+                            try:
+                                await page.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                        else:
+                            _watch(page)  # Tab2 同样事件监护（被关即时重建，R-6.19）
+                            try:
+                                await page.bring_to_front()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            print("[xhs-leads] Tab2 被关闭，已按开关重建采集骨架（R-6.19）", flush=True)
+            # 重建后清理残留空白页（goto 失败页 / 并发残留）
+            await _sweep_blank(ctx, shell_ref[0])
+        except Exception as e:  # noqa: BLE001
+            if not stop.is_set():
+                print(f"[xhs-leads] Tab 监护恢复暂不可用（兜底轮询接管）: {e!r}", flush=True)
+        finally:
+            _recovering[0] = False
+
+    async def _sweep_blank(ctx, shell) -> None:
+        for p in list(ctx.pages):
+            if p is shell or p.is_closed():
+                continue
+            if (p.url or "").strip() in ("", "about:blank"):
+                try:
+                    await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    async def _sweep_tab2_dup(ctx, shell) -> None:
+        """兜底收敛：并发双建时多余 explore 骨架只保留一个（绝不触碰采集结果页）。"""
+        t2s = [
+            p for p in ctx.pages
+            if p is not shell and not p.is_closed()
+            and (p.url or "").startswith("https://www.xiaohongshu.com/explore")
+        ]
+        if len(t2s) > 1:
+            for p in t2s[1:]:
+                try:
+                    await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            print(f"[xhs-leads] 收敛重复 Tab2 骨架（{len(t2s)} → 1）", flush=True)
+
+    # 初始：确保 Tab1 存在并挂监听；顺带清理空白残留
     while not stop.is_set():
         try:
             eng = await engine_pool.pool.get("default")
             ctx = await eng.context()
-            pages = [p for p in ctx.pages if not p.is_closed()]
-            if pages:
-                shell_alive = any(
-                    (p.url or "").startswith(base) or "xiaohongshu.com" in (p.url or "")
-                    for p in pages
-                )
-                if not shell_alive:
-                    print("[xhs-leads] 壳 Tab1 被关闭，自动恢复前端 tab…", flush=True)
-                    page = await ctx.new_page()
-                    await page.goto(base, wait_until="domcontentloaded")
-                    await page.bring_to_front()
-        except Exception as e:  # noqa: BLE001（引擎未就绪/正在重建：下轮再试）
+            shell = await _find_shell(ctx)
+            if shell is None:
+                await _rebuild_shell(ctx)
+            else:
+                shell_ref[0] = shell
+                _watch(shell)
+            await _sweep_blank(ctx, shell_ref[0])
+            break
+        except Exception as e:  # noqa: BLE001
             if not stop.is_set():
-                print(f"[xhs-leads] 壳 Tab1 监护暂不可用（忽略，下轮重试）: {e!r}", flush=True)
-        await asyncio.sleep(2.0)
+                print(f"[xhs-leads] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
+            await asyncio.sleep(2.0)
+
+    # 兜底轮询：事件丢失 / 引擎重建场景下仍恢复 Tab1、守护 Tab2、清理空白
+    while not stop.is_set():
+        await asyncio.sleep(5.0)
+        try:
+            eng = await engine_pool.pool.get("default")
+            ctx = await eng.context()
+            shell = await _find_shell(ctx)
+            if shell is not None:
+                shell_ref[0] = shell
+                _watch(shell)
+            elif shell_ref[0] is None or shell_ref[0].is_closed():
+                await _rebuild_shell(ctx)
+            t2 = await _find_tab2(ctx, shell_ref[0])
+            if t2 is not None:
+                _watch(t2)  # 无论谁创建的 Tab2（server 开关联动/引擎），轮询补挂事件监护
+            elif config.get_config().get("collect_tab_visible"):
+                async with engine_pool.TAB2_GUARD_LOCK:
+                    if await _find_tab2(ctx, shell_ref[0]) is None:
+                        page = await ctx.new_page()
+                        try:
+                            await page.goto(
+                                "https://www.xiaohongshu.com/explore",
+                                wait_until="domcontentloaded", timeout=10000,
+                            )
+                        except Exception:  # noqa: BLE001
+                            try:
+                                await page.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                        else:
+                            _watch(page)  # Tab2 兜底创建同样挂事件监护（R-6.19）
+                            try:
+                                await page.bring_to_front()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            print("[xhs-leads] Tab2 兜底重建（开关开）", flush=True)
+            await _sweep_blank(ctx, shell_ref[0])
+            await _sweep_tab2_dup(ctx, shell_ref[0])  # 兜底收敛：并发双建的多余 explore 骨架
+        except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）
+            pass

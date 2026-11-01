@@ -2374,15 +2374,74 @@ def app_config_get():
 
 
 @app.post("/api/app_config")
-def app_config_set(req: AppConfigReq):
-    """写入 APP 设置（白名单字段；collect_tab_visible 下次采集即生效，无需重启）。"""
+async def app_config_set(req: AppConfigReq):
+    """写入 APP 设置（白名单字段；collect_tab_visible 即时联动 Tab2：开→前置；关→空闲关闭）。"""
     data = req.model_dump(exclude_none=True)
     unknown = set(data) - set(_APP_SETTING_KEYS)
     if unknown:
         raise HTTPException(400, f"不支持设置项: {', '.join(sorted(unknown))}")
     for k, v in data.items():
         config.set_config(k, v)
+    if "collect_tab_visible" in data:
+        await _sync_tab2_visibility(bool(data["collect_tab_visible"]))
     return {"ok": True, "saved": list(data)}
+
+
+async def _sync_tab2_visibility(visible: bool) -> None:
+    """R-6.19 开关即时联动：开→Tab2 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
+    try:
+        from src import engine_pool  # noqa: PLC0415
+
+        eng = await engine_pool.pool.get("default")
+        tp = eng.task_page_snapshot()
+        if visible:
+            if tp is None:
+                # 无任务 tab：立即创建 Tab2 骨架（无需等 keeper 轮询），复用任务 tab 位；
+                # 与 keeper 兜底轮询共享 TAB2_GUARD_LOCK，避免并发双建。
+                async with engine_pool.TAB2_GUARD_LOCK:
+                    if eng.task_page_snapshot() is not None:
+                        await eng.task_page_snapshot().bring_to_front()
+                    else:
+                        page = await eng.new_page()
+                        try:
+                            await page.goto(
+                                "https://www.xiaohongshu.com/explore",
+                                wait_until="domcontentloaded", timeout=10000,
+                            )
+                            await page.bring_to_front()
+                            log.info("app_config：已创建 Tab2 采集骨架（开关开）")
+                        except Exception:  # noqa: BLE001
+                            log.warning("app_config：Tab2 骨架创建失败（keeper 兜底轮询接管）")
+            else:
+                try:
+                    await tp.bring_to_front()
+                except Exception:  # noqa: BLE001
+                    pass
+                log.info("app_config：采集 tab 前置（开关开）")
+        else:
+            running = any(
+                st.get("status") == "running" for st in _COLLECT_TASKS.values()
+            )
+            if running:
+                log.info("app_config：采集中，Tab2 保持后台（开关关，任务结束后自然闲置）")
+                return
+            # 空闲：收起所有 Tab2 家族页（explore 骨架/残留采集页；无论谁创建——
+            # keeper 事件/兜底重建的 explore 不在 _task_page 缓存，须直接扫描关闭）
+            ctx = await eng.context()
+            closed = 0
+            for p in list(ctx.pages):
+                if p.is_closed():
+                    continue
+                u = p.url or ""
+                if "xiaohongshu.com" in u and "/login" not in u:
+                    try:
+                        await p.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    closed += 1
+            log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
+    except Exception as e:  # noqa: BLE001
+        log.warning("app_config Tab2 联动失败: %s", e)
 
 
 @app.post("/api/llm_test")
