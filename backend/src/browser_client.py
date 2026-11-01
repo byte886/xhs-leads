@@ -208,12 +208,20 @@ def quit_chrome() -> bool:
 # ===========================================================================
 # 页面加载与提取
 # ===========================================================================
-async def _load(url: str, wait_ms: int = 5000, account_id: str = "default"):
+async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
+                show_front: bool = True):
+    """打开页面并注入提取脚本。show_front=False（R-6.18）：采集后台完成——
+    不 bring_to_front 抢前台，采集 tab 留在壳窗口 Tab2（设置页开关控制是否显示）。
+    """
     page = await _page(account_id)
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=40000)
         try:
-            await page.bring_to_front()
+            if show_front:
+                await page.bring_to_front()
+            else:
+                # 后台采集：切回壳窗口 Tab1（前端/登录 tab），采集 tab 保持激活渲染
+                await _switch_back_to_shell(page)
         except Exception:  # noqa: BLE001
             pass
         await page.evaluate(_EXTRACT_SRC)
@@ -225,6 +233,22 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default"):
         except Exception:  # noqa: BLE001
             pass
         raise
+
+
+async def _switch_back_to_shell(page) -> None:
+    """后台采集：窗口焦点回到壳窗口 Tab1（base_url 前缀 tab），采集 tab 保持存在。
+
+    注：Chrome 单窗口仅一个 active tab——切换后采集 tab 为后台，若实测渲染节流
+    导致采集 0 条，R-6.18 兜底由 collect_tab_visible=True（显示采集）承担。
+    """
+    try:
+        base = (os.environ.get("XHS_SHELL_URL") or "").rstrip("/")
+        for p in page.context.pages:
+            if not p.is_closed() and p != page and base and (p.url or "").startswith(base):
+                await p.bring_to_front()
+                return
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def login_check(account_id: str = "default") -> dict:
@@ -496,14 +520,16 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     **登录墙页面保留不关闭**：用户需要在这个页面上扫码/验证恢复。
     """
     url = _XHS + "/search_result?keyword=" + _urlencode(keyword) + "&source=web_search_result_notes"
-    page = await _load(url, 2500, account_id)
+    page = await _load(url, 2500, account_id,
+                       show_front=config.get_config().get("collect_tab_visible", False))
     appeared, wall = await _wait_note_cards(page, timeout_s=45)
     if wall:
         _handle_login_wall(account_id, wall)  # 软→引导扫码恢复；硬→熔断
         raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
     if not appeared:
         await _close_page_safe(page, account_id)
-        page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500, account_id)
+        page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500, account_id,
+                           show_front=config.get_config().get("collect_tab_visible", False))
         appeared, wall = await _wait_note_cards(page, timeout_s=45)
         if wall:
             _handle_login_wall(account_id, wall)

@@ -72,7 +72,10 @@ _DEFAULTS = {
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
     "browser_mode": "engine",     # engine=独立引擎（B 方案）/ daily=连日常 Chrome（调试遗留）
-    "headless": True,             # 引擎无头化（R 批 v1.4）：无头无窗口；False=后台可见窗口兜底
+    "headless": False,            # R-6.16 路线 A：壳=CFT 引擎窗口（CDP 可控），常态有头；mirror 可显式切
+    "collect_tab_visible": False, # R-6.18 壳窗口双 Tab：采集过程是否在壳窗口 Tab2 显示。
+                                  #   True=采集 tab 前置可见（调试/演示）；False=采集后台完成、
+                                  #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
     "chrome_path": "",            # 用户自定义 Chrome 路径（~ 相对）
     "profile_dir": "",            # 兼容字段：default 账号 user_data_dir 旧配置
     "collect_min_interval": 90.0, # 废弃（R-6.15 移除任务间节流；保留字段兼容旧配置）

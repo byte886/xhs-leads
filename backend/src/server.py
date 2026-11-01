@@ -2358,6 +2358,33 @@ def clear_llm_config():
     return llm_service.clear_config()
 
 
+# ====== R-6.18 壳窗口双 Tab：设置项读写（白名单，仅前端设置项） ======
+_APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 Tab2 显示
+
+
+class AppConfigReq(BaseModel):
+    collect_tab_visible: bool | None = None
+
+
+@app.get("/api/app_config")
+def app_config_get():
+    """读取 APP 设置（当前仅返回壳窗口 Tab 相关设置项）。"""
+    cfg = config.get_config()
+    return {k: cfg.get(k) for k in _APP_SETTING_KEYS}
+
+
+@app.post("/api/app_config")
+def app_config_set(req: AppConfigReq):
+    """写入 APP 设置（白名单字段；collect_tab_visible 下次采集即生效，无需重启）。"""
+    data = req.model_dump(exclude_none=True)
+    unknown = set(data) - set(_APP_SETTING_KEYS)
+    if unknown:
+        raise HTTPException(400, f"不支持设置项: {', '.join(sorted(unknown))}")
+    for k, v in data.items():
+        config.set_config(k, v)
+    return {"ok": True, "saved": list(data)}
+
+
 @app.post("/api/llm_test")
 async def test_llm(req: LLMConfigReq):
     """测试 LLM 连接：用当前表单值（或已存配置）GET /models 验证可用性。"""

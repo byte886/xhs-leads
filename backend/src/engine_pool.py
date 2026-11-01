@@ -153,10 +153,16 @@ class AccountEngine:
                         f"--remote-debugging-port={eng_port}",
                     ],
                 )
-                # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出独立小窗，
-                # 实时可见采集/登录操作过程（替代「截图映射」）；窗口 960x720 小窗。
+                # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
+                # 实时可见采集/登录操作过程（替代「截图映射」）。
+                # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
+                # 「壳窗口内两个固定 Tab」：Tab1=应用/登录（固定不可关），Tab2=采集
+                # （设置开关控制是否显示）。--app 模式会把同 context 的新 tab 弹到独立
+                # 普通窗口（外部 Chrome 采集的根因），故移除 —— 壳窗口=普通 CFT 窗口，
+                # 前端 tab 与采集 tab 同窗口（Tab strip 可见，Tab2 归壳窗口内）。
+                # 注：XHS_SHELL_URL 仍由 launcher 注入，供 ensure_shell/监护使用（不再作启动参数）。
                 if not headless:
-                    launch_kwargs["args"].append("--window-size=960,720")
+                    launch_kwargs["args"].append("--window-size=1280,800")  # 壳窗口尺寸（CFT 承载前端）
                 # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
                 # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
                 # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；

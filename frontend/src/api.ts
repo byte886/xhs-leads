@@ -223,6 +223,23 @@ export async function apiMirrorWindow(on: boolean, account = 'default'): Promise
   }))
 }
 
+/** R-6.18 壳窗口双 Tab 设置：采集过程是否在壳窗口 Tab2 显示（collect_tab_visible） */
+export async function apiGetAppConfig(): Promise<{ ok: boolean; collect_tab_visible?: boolean; error?: string }> {
+  try {
+    return await j(await fetch(`${BASE}/api/app_config`))
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
+  }
+}
+
+export async function apiSetAppConfig(patch: { collect_tab_visible: boolean }): Promise<{ ok: boolean; saved?: string[]; error?: string }> {
+  return j(await fetch(`${BASE}/api/app_config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  }))
+}
+
 /** 引擎镜像页画面（JPEG；带时间戳防缓存，<img> 轮询刷新显示） */
 export function apiMirrorScreenshotUrl(account = 'default'): string {
   return `${BASE}/api/mirror/screenshot?account_id=${encodeURIComponent(account)}&t=${Date.now()}`
