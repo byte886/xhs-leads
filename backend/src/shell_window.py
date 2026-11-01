@@ -20,6 +20,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import time
 import urllib.request
 import json as _json_mod
@@ -40,32 +41,98 @@ def _json_post(url: str, payload: dict, timeout: float):
         return _json_mod.loads(r.read().decode("utf-8"))
 
 
-async def open_tab2_window(ctx, shell, url: str = "https://www.xiaohongshu.com/explore"):
-    """R-6.21 采集独立窗口：在**独立窗口**打开采集页（window.open 新窗口）。
+async def open_tab2_window(
+    ctx,
+    shell,
+    url: str = "https://www.xiaohongshu.com/explore",
+    *,
+    user_data_dir: str | None = None,
+    executable: str | None = None,
+):
+    """R-6.21b 采集独立窗口：**应用模式**（无地址栏/无标签条）+ 调试窗口标题。
 
-    双窗口形态：窗口一=APP/登录（壳窗口 Tab1，keep_shell_tab 监护固定不可关）；
-    窗口二=采集（此函数创建的独立 CFT 窗口，同引擎同 profile —— 登录态/Cookie
-    完全共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关，被手动关闭
-    时按开关状态由 keep_shell_tab 事件监护重建。
+    双窗口形态：窗口一=APP/登录（壳窗口应用模式，keep_shell_tab 监护固定不可关）；
+    窗口二=采集（应用模式独立 CFT 窗口，同引擎同 profile —— 登录态/Cookie 完全
+    共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关，被手动关闭时按
+    开关状态由 keep_shell_tab 事件监护重建。
 
-    Playwright 对同 context 的 window.open 新窗口自动 attach（实测 CFT 156 生效），
-    page.close() 关闭最后 tab 时窗口随之关闭。窗口尺寸与引擎视口一致（1280x800）。
+    应用模式实现：Chrome 无「为既有 target 创建 app 窗口」API，window.open 只能
+    开普通窗口（带地址栏/标签条）。采用**命令行路由**：向已运行的引擎实例
+    （同 --user-data-dir 单实例锁）传 `--app=<url>`，Chrome 会让现有实例弹出
+    **应用模式新窗口**（实测 CFT 156 生效），Playwright 对同 context 新 target
+    自动 attach（expect_page 捕获）。窗口尺寸沿用引擎 --window-size=1280,800。
+    标题跟随 document.title——采集页为真实小红书页，注入轻量 title 守护显示
+    「XHS Leads · 采集调试窗口」（SPA 导航重设 title 由 interval 覆盖）。
+    命令行路由不可用时（无 CFT/实例未起）退回 window.open 普通窗口（能力兜底）。
     """
-    async with ctx.expect_page(timeout=8000) as pinfo:
-        await shell.evaluate(
-            "(u) => window.open(u, 'xhs_collect', 'width=1280,height=800,left=160,top=90')",
-            url,
-        )
-    page = await pinfo.value  # async API：EventInfo.value 是 coroutine，须 await
+    page = None
+    if executable and user_data_dir:
+        try:
+            async with ctx.expect_page(timeout=8000) as pinfo:
+                subprocess.Popen(
+                    [
+                        executable,
+                        f"--user-data-dir={user_data_dir}",
+                        f"--app={url}",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            page = await pinfo.value  # async API：EventInfo.value 是 coroutine，须 await
+        except Exception as e:  # noqa: BLE001（路由失败：退回 window.open 普通窗口）
+            print(f"[xhs-leads] 采集窗口 --app 路由失败（退普通窗口）: {e!r}", flush=True)
+            page = None
+    if page is None:
+        async with ctx.expect_page(timeout=8000) as pinfo:
+            await shell.evaluate(
+                "(u) => window.open(u, 'xhs_collect', 'width=1280,height=800,left=160,top=90')",
+                url,
+            )
+        page = await pinfo.value
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=12000)
     except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
         pass
+    await _ensure_debug_title(page)
     try:
         await page.bring_to_front()
     except Exception:  # noqa: BLE001
         pass
     return page
+
+
+async def _ensure_debug_title(page) -> None:
+    """采集调试窗口标题守护：Chrome 窗口标题跟随 document.title。采集页为真实
+    小红书页（SPA 路由/整页导航都会重设 title），用轻量 setInterval 覆盖为
+    「XHS Leads · 采集调试窗口」，让用户一眼看出这是调试/观察窗口。
+    title 为纯浏览器元数据：不触发网络请求、不改页面逻辑与 DOM 结构，
+    风控面极小（远小于既有 stealth 注入）。
+
+    采用 **page 级 add_init_script**（Playwright 仅对该 page 的后续导航生效，
+    不污染壳窗口/其他页面）+ 当前文档立即生效；防重标记避免重复 add 累积。
+    幂等，可反复调用（已装时仅刷新当前文档）。
+    """
+    if getattr(page, "_debug_title_installed", False):
+        try:
+            await page.evaluate(_COLLECT_DEBUG_TITLE_JS)
+        except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
+            pass
+        return
+    try:
+        await page.add_init_script(_COLLECT_DEBUG_TITLE_JS)
+        await page.evaluate(_COLLECT_DEBUG_TITLE_JS)
+        page._debug_title_installed = True
+    except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
+        pass
+
+
+# 采集调试窗口标题守护脚本（页面级 init script，注入即常驻）
+_COLLECT_DEBUG_TITLE_JS = """() => {
+    const T = 'XHS Leads · 采集调试窗口';
+    const setT = () => { if (document.title !== T) document.title = T; };
+    setT();
+    setInterval(setT, 2000);
+}"""
 
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**。
 # 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
@@ -543,11 +610,12 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 async with engine_pool.TAB2_GUARD_LOCK:
                     if await _find_tab2(ctx, shell_ref[0]) is None:
                         try:
-                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21 单窗口）
+                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
                             await page.goto(
                                 "https://www.xiaohongshu.com/explore",
                                 wait_until="domcontentloaded", timeout=10000,
                             )
+                            await _ensure_debug_title(page)  # 调试窗口标题守护
                         except Exception as e:  # noqa: BLE001（导航失败：兜底轮询接管）
                             print(f"[xhs-leads] Tab2 采集窗口重建失败（兜底轮询接管）: {e!r}", flush=True)
                         else:
@@ -627,11 +695,12 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 async with engine_pool.TAB2_GUARD_LOCK:
                     if await _find_tab2(ctx, shell_ref[0]) is None:
                         try:
-                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21 单窗口）
+                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
                             await page.goto(
                                 "https://www.xiaohongshu.com/explore",
                                 wait_until="domcontentloaded", timeout=10000,
                             )
+                            await _ensure_debug_title(page)  # 调试窗口标题守护
                         except Exception as e:  # noqa: BLE001（窗口创建失败：下轮再试）
                             print(f"[xhs-leads] Tab2 采集窗口兜底创建失败（下轮重试）: {e!r}", flush=True)
                         else:

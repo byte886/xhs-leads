@@ -2408,6 +2408,9 @@ async def _sync_tab2_visibility(visible: bool) -> None:
                                 "https://www.xiaohongshu.com/explore",
                                 wait_until="domcontentloaded", timeout=10000,
                             )
+                            from src import shell_window  # noqa: PLC0415
+
+                            await shell_window._ensure_debug_title(page)  # 采集调试窗口标题守护
                             await page.bring_to_front()
                             log.info("app_config：已创建 Tab2 采集骨架（开关开）")
                         except Exception:  # noqa: BLE001

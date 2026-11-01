@@ -251,10 +251,11 @@ class AccountEngine:
         从机制上消除「反复开关 tab」的观感）；无缓存则**在独立采集窗口**新建，
         失败退化为前台新页。新建后缓存为该账号任务 tab。
 
-        R-6.21 双窗口：任务页（采集执行页）开在**独立 CFT 窗口**（window.open
-        新窗口，同引擎同 profile —— 登录态/Cookie 共享、CDP 可控），即「窗口二
-        （采集，由设置开关 collect_tab_visible 控制开/关）」。窗口一=APP/登录
-        （壳窗口 Tab1，keep_shell_tab 监护固定不可关）。
+        R-6.21 双窗口：任务页（采集执行页）开在**独立 CFT 窗口**（--app 应用模式
+        独立窗口，无地址栏/标签条 + 「采集调试窗口」标题守护；同引擎同 profile ——
+        登录态/Cookie 共享、CDP 可控），即「窗口二（采集，由设置开关
+        collect_tab_visible 控制开/关）」。窗口一=APP/登录（壳窗口应用模式，
+        keep_shell_tab 监护固定不可关）。
         """
         if self._task_page is not None:
             try:
@@ -268,7 +269,17 @@ class AccountEngine:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
             src_page = ctx.pages[0]
-            page = await shell_window.open_tab2_window(ctx, src_page, url="about:blank")
+            executable = None
+            try:
+                cfts = browser_client._builtin_cft_candidates()
+                if cfts:
+                    executable = cfts[0]
+            except Exception:  # noqa: BLE001（CFT 探测失败：走 window.open 普通窗口兜底）
+                executable = None
+            page = await shell_window.open_tab2_window(
+                ctx, src_page, url="about:blank",
+                user_data_dir=self.user_data_dir, executable=executable,
+            )
             self._task_page = page
             return page
         except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
