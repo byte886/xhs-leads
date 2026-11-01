@@ -76,12 +76,13 @@ async function doCollect() {
   try {
     const r = await apiCollectStart(appState.params)
     collectTaskId = r.task_id
-    appState.searchNote = `采集中 0/${r.limit}…（可随时点「停止采集」）`
+    appState.searchNote = '采集中…（可随时点「停止采集」）'
     collectTimer = setInterval(async () => {
       try {
         const pr = await apiCollectProgress(collectTaskId)
         if (pr.status === 'running') {
-          appState.searchNote = `采集中 ${pr.collected}/${pr.limit}…（可随时点「停止采集」）`
+          // 进度由顶部全局状态条（StatusBar，/api/status_now）播报，此处仅保留操作提示避免重复
+          appState.searchNote = '采集中…（可随时点「停止采集」）'
           return
         }
         // 完成 / 停止 / 失败：统一收尾
