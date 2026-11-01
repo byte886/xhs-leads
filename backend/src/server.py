@@ -389,13 +389,13 @@ async def login_begin(req: LoginBeginReq | None = None):
 
     force=True：强制登录（启动未登录/被踢、采集异常被踢、APP 强制登录页「去登录」）——
     即使已登录也置 pending；守卫导航登录页后隐藏关闭按钮（不可关闭，登录成功才回）。
-    force=False（默认）：主动重登（设置页「重新登录」，本已登录）——绕过已登录短路置
-    pending；守卫保留关闭按钮（可关闭回 APP，登录态不变）。
+    force=False（默认）：主动重登（设置页「重新登录」）——与当前登录态无关，
+    总是打开可关闭登录页（可关闭回 APP，登录态不变）。
+    R-6.13：移除原「已登录短路」（已登录返回 already_logged_in=True）——用户约定
+    设置页「重新登录」应总能触发（换账号/刷新会话），不得被当前登录态拦截。
     """
     cache = _LOGIN_CACHE["data"]
     force = bool(req and req.force)
-    if not force and cache and cache.get("logged_in") and not cache.get("kicked"):
-        return {"ok": True, "already_logged_in": True}
     _LOGIN_GATE["pending"] = True
     _LOGIN_GATE["force"] = force
     return {"ok": True, "already_logged_in": False, "force": force}
