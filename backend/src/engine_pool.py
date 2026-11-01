@@ -162,12 +162,19 @@ class AccountEngine:
                 # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
                 # 实时可见采集/登录操作过程（替代「截图映射」）。
                 # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
-                # 「壳窗口内两个固定 Tab」；R-6.21 用户拍板还原「双窗口」：
-                # 窗口一=APP/登录（壳窗口 Tab1，keep_shell_tab 监护固定不可关），
-                # 窗口二=采集（独立窗口，由设置开关 collect_tab_visible 控制开/关，
-                # shell_window.open_tab2_window 以 window.open 在独立窗口创建 explore）。
-                # 注：XHS_SHELL_URL 仍由 launcher 注入，供 ensure_shell/监护使用（不再作启动参数）。
+                # 「壳窗口内两个固定 Tab」故移除；R-6.21 用户拍板还原「双窗口」并恢复
+                # 壳窗口应用模式：窗口一=APP/登录（--app 壳窗口：无地址栏/无标签条，
+                # 标签条上的 +/×/pinned 全部不再出现；keep_shell_tab 监护固定不可关），
+                # 窗口二=采集（独立普通窗口，设置开关 collect_tab_visible 控制开/关，
+                # shell_window.open_tab2_window 以 window.open 从壳窗口弹出——app 模式
+                # 下 window.open 新 target 落到普通独立窗口，与双窗口语义一致）。
+                # 注：XHS_SHELL_URL 由 launcher 注入（供 ensure_shell/监护/--app 使用）；
+                # 未注入时（直接跑 server 调试）按 front_port 兜底拼。
                 if not headless:
+                    shell_url = os.environ.get("XHS_SHELL_URL") or (
+                        f"http://127.0.0.1:{config.front_port()}/"
+                    )
+                    launch_kwargs["args"].append(f"--app={shell_url}")  # 壳窗口应用模式
                     launch_kwargs["args"].append("--window-size=1280,800")  # 壳窗口尺寸（CFT 承载前端）
                 # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
                 # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
