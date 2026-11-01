@@ -896,6 +896,11 @@ async def _require_real_login() -> dict:
     try:
         eng = await engine_pool.pool.get("default")
         mem = await eng.read_cookies()
+        # R-6.7 口径对齐：id_token 为真实登录权威标志（与 login_status 的
+        # _engine_login_state 同判定），存在即放行——不依赖页面渲染（headless
+        # 偶发空白 → xhsIsLoggedIn 假阴性坑，登录态明明有效却被拦）。
+        if any(c.get("name") == "id_token" for c in mem):
+            return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP id_token）"}
         if any(c.get("name") == "web_session" for c in mem):
             r = await _verify_cookies_or_raise(mem, "default")
             if r.get("logged_in"):

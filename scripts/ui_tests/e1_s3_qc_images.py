@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""E1-场景3 创作页质检 + 图片操作 + 草稿库（连 9333 headless）。
+"""E1-场景3 创作页质检 + 图片操作 + 草稿库（连引擎调试端口 9223）。
 
 验证：克隆进创作 → 质检面板（违规词/结构/二创/原创）→ 违规词命中（绝对化用语）→ 合规恢复 →
 lightbox 看全图（点击灯箱本身关闭，Escape 无效）→ 删除图片 → 本地文件追加 → 保存草稿 → 草稿库恢复/删除。
@@ -8,10 +8,11 @@ lightbox 看全图（点击灯箱本身关闭，Escape 无效）→ 删除图片
   - 质检展开/收起通过 .qc-head 点击（收起后再展开触发实时检查）；
   - 本地追加图片路径必须可移植：优先仓库 data/images 现有缓存图，兜底 /tmp 截图，不硬编码 /Users/<用户名>。
 
-前置：后端 8791；9333 headless + 已登录；有已采集图文卡；数据可污染（草稿数会变）。
+前置：后端 8791；引擎 9223（调试端口，R 批 v1.5）已登录；有已采集图文卡（数据依赖，无卡自动 SKIP）；数据可污染（草稿数会变）。
 """
 import os
 import pathlib
+import sys
 from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]  # 仓库根（scripts/ui_tests/ → 上两级）
@@ -25,6 +26,11 @@ with sync_playwright() as p:
     pg.wait_for_function("() => { const h = document.querySelector('.flow-hint'); return h && h.innerText.includes('关键词采集') }", timeout=12000)
     pg.wait_for_timeout(500)
     pg.wait_for_selector('.view-switch', timeout=10000)
+
+    # 数据预检：无已采集图文卡 → 数据依赖不足，SKIP（exit 2，与 run_all 语义一致）
+    if pg.locator('.card', has=pg.locator('.badge-note', has_text='图文')).count() == 0:
+        print("SKIP: 无已采集图文卡（数据依赖不足）")
+        sys.exit(2)
 
     card = pg.locator('.card', has=pg.locator('.badge-note', has_text='图文')).first
     card.hover()

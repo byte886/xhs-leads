@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""E1-场景1 采集页筛选真实态（连 9333 headless）。
+"""E1-场景1 采集页筛选真实态（连引擎调试端口 9223）。
 
 验证：真实态 select 数量/选项 → 选排序+时间 → 已选筛选行实时更新 → collect_start 请求体完整 → 低频真实采集。
 踩坑记录：
@@ -7,7 +7,7 @@
   - route 拦截取 body 必须用 route.request.post_data，不能用 route.post_data；
   - 采集铁律：低频单次、关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），绝不连环重试。
 
-前置：后端 8791 已启动；9333 headless（独立 profile）已启动且小红书已登录；数据可污染（采集落库）。
+前置：后端 8791 已启动；引擎 9223（调试端口，R 批 v1.5）已登录；数据可污染（采集落库）。
 """
 import os
 from playwright.sync_api import sync_playwright
