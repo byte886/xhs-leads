@@ -28,28 +28,36 @@ _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一�
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**（login?redirectPath 重定向到首页）。
 # 独立登录页 = 全屏登录界面（扫码/手机号+验证码/微信），无推荐流浏览内容、无弹层叉可点；
 # 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
+# R-6.10（用户反馈）：登录页**保持小红书原生背景与内容**——绝不注入遮蔽类样式（历史版本
+# force_login_js 的 [class*="close"] 全隐藏规则会遮蔽登录页内容致空白，已精确化，见下方）。
 XHS_LOGIN_URL = (
     "https://www.xiaohongshu.com/login"
     "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
 )
 
-# R-6.9 登录成功过渡遮罩：id_token 一出现即注入全屏「等待中」，遮挡小红书登录后页面、
+# R-6.9 登录成功过渡提示：id_token 一出现即注入「等待中」提示，遮挡小红书登录后页面、
 # 拦截用户误操作；引擎注入完成 load_url 切回 APP 时随导航消失。幂等（已有 id 不重复注入）。
+# R-6.10（用户反馈）：改为**半透明**背景——不再纯白全屏遮蔽（历史版 #ffffff 把小红书页面
+# 整个盖住，用户反馈「背景被遮蔽看不见」），背景透出、提示清晰，扫码完成后直接回 APP。
 _WAITING_OVERLAY_JS = r"""(() => {
   if (document.getElementById('xhs-leads-waiting')) return;
   const d = document.createElement('div');
   d.id = 'xhs-leads-waiting';
-  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;'
+  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;'
+    + 'background:rgba(255,255,255,.55);backdrop-filter:blur(2px);'
     + 'z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;'
     + 'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;';
   const st = document.createElement('style');
   st.textContent = '@keyframes xhs-leads-spin{to{transform:rotate(360deg)}}';
   const t = document.createElement('div');
   t.textContent = '登录成功，正在进入工作台…';
-  t.style.cssText = 'font-size:18px;color:#333;margin-bottom:16px;letter-spacing:1px;';
+  t.style.cssText = 'font-size:18px;color:#333;background:rgba(255,255,255,.92);'
+    + 'padding:10px 20px;border-radius:10px;margin-bottom:16px;letter-spacing:1px;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.12);';
   const s = document.createElement('div');
   s.style.cssText = 'width:26px;height:26px;border:3px solid #ff2442;border-top-color:transparent;'
-    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;';
+    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;background:rgba(255,255,255,.92);'
+    + 'padding:4px;background-clip:content-box;box-shadow:0 2px 12px rgba(0,0,0,.12);';
   d.appendChild(st); d.appendChild(t); d.appendChild(s);
   document.body.appendChild(d);
 })()"""
@@ -267,16 +275,18 @@ def main() -> int:
 
             base = base_url.rstrip("/")  # 防双斜杠（base_url 形如 http://127.0.0.1:8800/）
 
-            # 强制登录 JS（R-6.6）：防御性锁定——登录页若渲染出任何 close/关闭类元素一律隐藏
-            # （整页登录页本身无可点浏览内容；弹层模式遗留的 MutationObserver 保留兜底）。
+            # 强制登录 JS（R-6.6→R-6.10）：防御性锁定登录页**明确的关闭按钮**，但**绝不遮蔽
+            # 页面内容/背景**。历史版 `[class*="close"]{display:none!important}` 会隐藏一切类名
+            # 含 close 的元素（登录页容器若含之即整页空白——用户反馈「背景被遮蔽看不见」），
+            # 已改为精确选择器：仅隐藏 aria-label=关闭 / title=关闭 / 明确 close-btn 类。
             force_login_js = (
                 "(function(){"
                 "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
                 "var st=document.createElement('style');st.id='xhs-leads-lock';"
-                "st.textContent='[class*=\"close\"]{display:none!important}.close{display:none!important}';"
+                "st.textContent='[aria-label=\"关闭\"]{display:none!important}[aria-label=\"close\"]{display:none!important}.close-btn{display:none!important}';"
                 "document.head.appendChild(st);"
                 "new MutationObserver(function(){"
-                "var a=document.querySelectorAll('[class*=\"close\"],[class*=\"icon-close\"]');"
+                "var a=document.querySelectorAll('[aria-label=\"关闭\"],[aria-label=\"close\"],.close-btn');"
                 "for(var i=0;i<a.length;i++){a[i].style.display='none';a[i].removeAttribute('onclick');}"
                 "}).observe(document.body,{childList:true,subtree:true});})();"
             )
@@ -419,12 +429,16 @@ def main() -> int:
                 import time as _t  # noqa: PLC0415
                 _t_last_import = 0.0
                 _t_last_inject = 0.0
-                # 场景化注入：强制 → 隐藏关闭按钮（无叉）；主动 → 右上角「✕ 返回 APP」（可关闭）
-                if cur_force:
-                    _inject_force_login()
-                else:
+                # R-6.10 首页模式：两种分支统一先点开右上角「登录」面板（二维码浮于首页背景上）；
+                # 主动分支额外注入右上角「✕ 返回 APP」。
+                try:
+                    window.evaluate_js(_OPEN_LOGIN_PANEL_JS)
+                except Exception:  # noqa: BLE001（首页未就绪，下轮补注）
+                    pass
+                if not cur_force:
                     _inject_active_close()
-                # 登录页内监视循环：强制锁死（URL 漂移拉回 + 无叉）；主动可关闭（URL 回 APP 即结束）
+                # 小红书页内监视循环：强制锁死（离开小红书拉回首页+重开面板）；主动可关闭（URL 回 APP 即结束）。
+                # 轮询 0.3s + 注入节流 0.5s：扫码成功后尽快回 APP，消除「先进小红书再回 APP」的过渡观感。
                 while not stop.is_set():
                     try:
                         cs = window.get_cookies()  # 窗口当前 URL 域过滤
@@ -439,7 +453,7 @@ def main() -> int:
                         if _t.monotonic() - _t_last_inject >= 5.0:
                             _t_last_inject = _t.monotonic()
                             _inject_active_close()
-                        if has_id and _t.monotonic() - _t_last_import >= 2.0:
+                        if has_id and _t.monotonic() - _t_last_import >= 0.5:
                             _t_last_import = _t.monotonic()
                             r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
                             if r and r.get("logged_in"):
@@ -464,9 +478,10 @@ def main() -> int:
                                 window.evaluate_js(_WAITING_OVERLAY_JS)
                             except Exception:  # noqa: BLE001（页面未就绪等，下轮补注）
                                 pass
-                            # 真登录态已现：快速注入引擎（节流 2s——id_token 是真实登录标志，
-                            # 无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。
-                            if _t.monotonic() - _t_last_import >= 2.0:
+                            # 真登录态已现：快速注入引擎（节流 0.5s——id_token 是真实登录标志，
+                            # 无占位误触风险；重复注入幂等，仅引擎 reload 轻量）。R-6.10 提速：
+                            # 扫码成功到回 APP 应尽量短，避免用户看到小红书页面跳转。
+                            if _t.monotonic() - _t_last_import >= 0.5:
                                 _t_last_import = _t.monotonic()
                                 r = _post_json("/api/auth/import_cookies", {"cookies": _cookies_to_payload(cs)})
                                 if r and r.get("logged_in"):
@@ -498,7 +513,7 @@ def main() -> int:
                                 except Exception:  # noqa: BLE001
                                     pass
                                 _inject_force_login()
-                    stop.wait(1.0)
+                    stop.wait(0.3)  # R-6.10：0.3s 轮询——扫码成功后更快捕获并回 APP（无小红书过渡）
                 in_login = False
                 if ok:
                     # 仅真登录成功回前端（强制登录：失败/中途退出不回，保持登录页置顶）。
