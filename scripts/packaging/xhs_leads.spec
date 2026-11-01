@@ -19,7 +19,6 @@ APP_NAME = "XHSLeads"
 hiddenimports = (
     collect_submodules("src")
     + collect_submodules("uvicorn")
-    + collect_submodules("webview")  # R 批：内嵌 UI 载体（pywebview，macOS cocoa 后端）
 )
 datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
