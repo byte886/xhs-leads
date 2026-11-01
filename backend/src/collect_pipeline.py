@@ -89,15 +89,18 @@ async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, sh
     return {"items": notes, "stopped": data.get("stopped", False)}
 
 
-async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id: str = "default") -> dict | None:
+async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id: str = "default",
+                       wait_ms: int | None = None) -> dict | None:
     """经常驻账号引擎连接调浏览器执行（note/user），复用连接不弹窗。失败返回 None。"""
     from src import browser_client
 
     try:
         if cmd == "note":
-            return (await browser_client.note(arg, arg2, account_id=account_id)) or None
+            return (await browser_client.note(arg, arg2, wait_ms=wait_ms or 5000,
+                                              account_id=account_id)) or None
         if cmd == "user":
-            return (await browser_client.user(arg, account_id=account_id)) or None
+            return (await browser_client.user(arg, wait_ms=wait_ms or 5000,
+                                              account_id=account_id)) or None
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -111,7 +114,8 @@ async def get_feed_detail(note: dict, account_id: str = "default") -> dict:
     account_id：使用哪个账号引擎（默认 default；多账户下采集号/发布号分离）。
     """
     d = await _run_browser("note", note.get("feed_id", ""), "NOTE",
-                           note.get("xsec_token", ""), account_id)
+                           note.get("xsec_token", ""), account_id,
+                           wait_ms=3000)
     if d:
         _merge_detail_core(note, d)
         _merge_detail_interactions(note, d)
@@ -189,7 +193,7 @@ async def get_user_profile(note: dict, cache: dict, account_id: str = "default")
     if uid in cache:
         note["fans_count"] = cache[uid]
         return note
-    u = await _run_browser("user", uid, "USER", "", account_id)
+    u = await _run_browser("user", uid, "USER", "", account_id, wait_ms=3500)
     fans = 0
     if u:
         fans = _parse_fans(u.get("fans") or "")

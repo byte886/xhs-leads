@@ -1151,7 +1151,8 @@ def _persist_notes(keyword: str, notes: list, account_id: str = "default") -> tu
     return saved, total, [dict(r) for r in top]
 
 
-async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "default") -> list:
+async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "default",
+                        on_progress=None) -> list:
     """详情补全：互动数据（赞/藏/评/转/发布时间/作者 uid）+ 作者粉丝数（按 uid 缓存）。
 
     搜索卡片只有点赞粗值；详情页 SSR 提供全量互动与作者 uid，作者主页提供粉丝数
@@ -1160,8 +1161,11 @@ async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "defa
     fast=True 快速档：直连浏览器同页连续导航（无拟人 sleep、渲染等待缩短），20 条约
     5 分钟 → 2 分钟；fast=False 拟人串行（默认，安全优先，保持真人浏览节奏）。
     account_id：使用哪个账号引擎补全详情（默认 default）。
+    on_progress(n)：每条补全完成后回调（n=已完成条数），供任务进度/状态条实时反馈
+    （R-6.15：补全阶段不再「进度卡死」——搜索采满后 collected 持续更新）。
     """
     cache: dict = {}
+    done = 0
     for n in notes:
         try:
             if fast:
@@ -1171,6 +1175,10 @@ async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "defa
                 n = await get_user_profile(n, cache, account_id)
         except Exception:  # noqa: BLE001 单条失败不影响整体
             continue
+        finally:
+            done += 1
+            if on_progress:
+                on_progress(done)
     return notes
 
 
@@ -1225,11 +1233,13 @@ async def collect_start(req: SearchReq):
         "collected": 0, "note": "", "stop_event": False,
         "account_id": account_id, "dedup_key": dedup_key, "started_ts": _now,
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "phase": "search",
     }
     _COLLECT_TASKS[tid] = state
 
     async def worker():
         try:
+            state["phase"] = "search"
             res = await search_via_browser(
                 req.keyword, req.limit,
                 on_progress=lambda n: state.__setitem__("collected", n),
@@ -1242,7 +1252,13 @@ async def collect_start(req: SearchReq):
             )
             items = res["items"]
             state["collected"] = len(items)
-            items = await _enrich_notes(items, fast=req.fast, account_id=account_id)
+            # 补全阶段：进度持续反馈（collected 更新为「已补全 x/N」），避免搜索采满后观感卡死
+            state["phase"] = "enrich"
+            items = await _enrich_notes(
+                items, fast=req.fast, account_id=account_id,
+                on_progress=lambda n: state.__setitem__("collected", n),
+            )
+            state["phase"] = "save"
             saved, total, top = _persist_notes(req.keyword, items, account_id)
             if res.get("stopped"):
                 state["status"] = "stopped"
@@ -1253,6 +1269,7 @@ async def collect_start(req: SearchReq):
             else:
                 state["status"] = "done"
                 state["note"] = f"采集完成：平台仅加载 {len(items)} 条（不足 {req.limit}），已按评分排序"
+            state["phase"] = "done"
         except Exception as e:
             state["status"] = "error"
             state["note"] = f"采集失败：{str(e)[:100]}"
@@ -1274,8 +1291,10 @@ async def status_now():
     running = [st for st in _COLLECT_TASKS.values() if st.get("status") == "running"]
     if running:
         st = running[0]
+        # R-6.15 阶段文案：搜索 → 正在采集；详情补全 → 正在补全（表达规范 + 阶段透明）
+        action = "正在采集" if st.get("phase", "search") == "search" else "正在补全详情"
         return {
-            "action": "正在采集",
+            "action": action,
             "detail": st.get("note") or "",
             "collected": st.get("collected", 0),
             "limit": st.get("limit", 0),

@@ -74,7 +74,7 @@ function pickAuthor(a: Author) {
         </div>
         <div class="info-item">
           <span class="k">状态</span>
-          <span class="status-pill" :class="{ running: appState.status === '采集中', done: appState.status === '展示中' }">{{ appState.status }}</span>
+          <span class="status-pill" :class="{ running: appState.status === '正在采集', done: appState.status === '展示中' }">{{ appState.status }}</span>
         </div>
         <div class="info-item">
           <span class="k">已完成</span><span class="v">{{ appState.notes.length }}</span>

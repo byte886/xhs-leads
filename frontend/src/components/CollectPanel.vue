@@ -64,7 +64,7 @@ async function doCollect() {
   }
   if (!appState.params.keyword.trim()) { toast('请先输入关键词'); return }
   appState.collecting = true
-  appState.status = '采集中'
+  appState.status = '正在采集'
   appState.selected = {}
   appState.taskLabel = buildTaskLabel()
   appState.searchNote = ''
@@ -76,13 +76,13 @@ async function doCollect() {
   try {
     const r = await apiCollectStart(appState.params)
     collectTaskId = r.task_id
-    appState.searchNote = '采集中…（可随时点「停止采集」）'
+    appState.searchNote = '正在采集…（可随时点「停止采集」）'
     collectTimer = setInterval(async () => {
       try {
         const pr = await apiCollectProgress(collectTaskId)
         if (pr.status === 'running') {
           // 进度由顶部全局状态条（StatusBar，/api/status_now）播报，此处仅保留操作提示避免重复
-          appState.searchNote = '采集中…（可随时点「停止采集」）'
+          appState.searchNote = '正在采集…（可随时点「停止采集」）'
           return
         }
         // 完成 / 停止 / 失败：统一收尾
