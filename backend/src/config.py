@@ -75,7 +75,7 @@ _DEFAULTS = {
     "headless": True,             # 引擎无头化（R 批 v1.4）：无头无窗口；False=后台可见窗口兜底
     "chrome_path": "",            # 用户自定义 Chrome 路径（~ 相对）
     "profile_dir": "",            # 兼容字段：default 账号 user_data_dir 旧配置
-    "collect_min_interval": 90.0, # 采集节流（每账号，秒）
+    "collect_min_interval": 90.0, # 废弃（R-6.15 移除任务间节流；保留字段兼容旧配置）
     "request_interval": [1.0, 1.8],  # 拟人节奏随机区间
 }
 

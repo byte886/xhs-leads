@@ -1,12 +1,15 @@
-"""每账号风控状态机 + 采集节流（架构改造 P1）。
+"""每账号风控状态机（架构改造 P1）。
 
-把散落在 server（采集 90s 全局节流、发布 24h 熔断）与 browser_client（登录墙检测）
+把散落在 server（发布 24h 熔断）与 browser_client（登录墙检测）
 的风控信号，收拢为【按账号隔离】的状态机：
 
     ok ──(登录墙/验证码/限流)──► cooldown（熔断 until=now+N，硬停该账号）
-    ok ──(采集频率超闸)────────► throttle（仅该账号拒绝新采集 N 秒）
     任何 ──(Cookie 失效)──────► manual（需扫码/导 Cookie，界面引导）
     cooldown/manual ──(人工确认 resolve)──► ok
+
+R-6.15 用户拍板：移除「拟人频率保护」任务间节流（90s）与「风控熔断/人工锁定」前置拦截，
+check_throttle 恒放行；mark_risk/mark_collect_done/resolve 保留落盘供审计，
+登录引导由 _require_login 与登录接口独立兜底。
 
 关键性质：
 - 每账号独立：A 号风控不影响 B 号（采集号被封，发布号照常）
@@ -15,7 +18,7 @@
 
 用法：
     from src import risk
-    risk.check_throttle("collect_a")       # 采集前置：超闸抛 BlockedError
+    risk.check_throttle("collect_a")       # 采集前置：风控熔断/人工锁定则抛 BlockedError
     risk.mark_risk("collect_a", "登录墙")   # 采集/发布失败时标记熔断
     risk.resolve("collect_a")              # 人工确认后解锁
 """
@@ -29,7 +32,6 @@ from src import logger as xlog
 _STATE_FILE = pathlib.Path(__file__).resolve().parents[2] / "data" / "risk_state.json"
 
 # 默认参数（config.json 可覆盖）
-DEFAULT_THROTTLE_SECONDS = 90.0     # 采集节流：距上次任务不足该值拒绝
 DEFAULT_COOLDOWN_SECONDS = 24 * 3600  # 风控熔断：24h 硬停（发布护栏同量级）
 DEFAULT_MANUAL_REASON = "需人工确认账号状态"
 
@@ -207,23 +209,14 @@ def resolve(account_id: str = "default", reason: str = "登录恢复/人工确�
 # 采集节流（每账号，替代 server 全局 _check_collect_throttle）
 # ---------------------------------------------------------------------------
 def check_throttle(account_id: str = "default", min_interval: float | None = None) -> None:
-    """采集/搜索前置节流闸：距该账号上次平台任务不足阈值 → 抛 BlockedError。
+    """采集/搜索前置闸（R-6.15 用户拍板：全部移除拦截，恒放行）。
 
-    min_interval 缺省 90s（config.collect_min_interval 可覆盖）。
+    用户明确「拟人频率保护（90s）不需要」且「风控熔断（24h 硬停/人工锁定）也不需要」：
+    本闸不再抛任何 BlockedError，任务启动/搜索不再被风险状态前置拦截。
+    登录引导不受影响（Cookie 失效/被踢由 collect_start 的 _require_login 与
+    登录接口独立兜底）；mark_risk/mark_collect_done/resolve 保留落盘供审计。
+    函数签名保留以兼容旧调用；参数不再使用。
     """
-    s = _state(account_id)
-    if _expired(s):
-        s["status"] = "ok"
-    if s.get("status") == "cooldown":
-        wait = max(0, int(s.get("until", 0) - time.time()))
-        raise BlockedError(account_id, f"账号风控熔断中，请 {wait // 60} 分钟后再试")
-    if s.get("status") == "manual":
-        raise BlockedError(account_id, s.get("reason") or DEFAULT_MANUAL_REASON)
-    interval = min_interval if min_interval is not None else DEFAULT_THROTTLE_SECONDS
-    elapsed = time.time() - s.get("last_collect_end_at", 0.0)
-    if elapsed < interval:
-        wait = int(interval - elapsed) + 1
-        raise BlockedError(account_id, f"操作过于频繁，请 {wait} 秒后再试（拟人频率保护）")
 
 
 def mark_collect_done(account_id: str = "default") -> None:
