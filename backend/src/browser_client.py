@@ -103,14 +103,31 @@ def chrome_executable() -> str | None:
 
 
 def _builtin_cft_candidates() -> str | None:
-    """内置 Chrome for Testing 候选：引擎数据目录旁的 CFT 副本（真实机路径；
-    打包态随 BASE 变化时在此追加 .app 资源内路径）。"""
-    cft = (
-        pathlib.Path.home()
-        / "Library/Application Support/xhs-leads/engine/chrome-mac-x64"
-        / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    """内置 Chrome for Testing 候选：打包态（.app 随包分发）优先，其次引擎数据目录
+    旁的 CFT 副本（开发态）。R-6.11 引擎抽象层：CFT 独立身份
+    （com.google.chrome.for.testing）不占用用户日常 Chrome 的 LaunchServices 单实例。
+    注意 PyInstaller BUNDLE 布局差异：sys._MEIPASS = EXE 目录（Contents/MacOS），
+    而 datas 落在 Contents/Resources——故两种布局都尝试（_MEIPASS/engine 与
+    _MEIPASS.parent/Resources/engine）。"""
+    candidates: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = pathlib.Path(meipass)
+        candidates.append(
+            str(mp / "engine/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        )
+        candidates.append(
+            str(mp.parent / "Resources/engine/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        )
+    candidates.append(
+        str(pathlib.Path.home()
+            / "Library/Application Support/xhs-leads/engine/chrome-mac-x64"
+            / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
     )
-    return str(cft) if cft.exists() else None
+    for c in candidates:
+        if c and pathlib.Path(c).exists():
+            return c
+    return None
 
 
 def _mac_chrome_candidates() -> str | None:

@@ -71,3 +71,4 @@ data/license_private.pem
 # --- 授权运行时状态（机器码绑定，不入库） ---
 data/license.json
 data/license_private.pem
+build_resources/

@@ -12,9 +12,21 @@ else
   echo ">> 跳过前端构建（复用现有 frontend/dist）"
 fi
 
-# 2) PyInstaller 打包 .app
+# 2) 内置引擎 CFT（Chrome for Testing）——从引擎数据目录同步到构建源，随包分发
+# （客户机器无需安装 Chrome；CFT 独立 bundle ID，不占用用户日常 Chrome）
+echo ">> 同步内置引擎 CFT → build_resources/engine"
+mkdir -p build_resources/engine
+rsync -a --delete "$HOME/Library/Application Support/xhs-leads/engine/chrome-mac-x64/" build_resources/engine/chrome-mac-x64/
+
+# 3) PyInstaller 打包 .app
 echo ">> PyInstaller 打包 .app"
 backend/.venv/bin/python -m PyInstaller --noconfirm --clean scripts/packaging/xhs_leads.spec
+
+# 4) post-copy：内置引擎 CFT 直拷进 .app（PyInstaller datas 无法处理签名 app bundle
+# 二进制，故打包完成后绕过其管线直接拷入 Resources/engine/）
+echo ">> 内置引擎 CFT 写入 .app"
+mkdir -p dist/XHSLeads.app/Contents/Resources/engine
+rsync -a --delete build_resources/engine/ dist/XHSLeads.app/Contents/Resources/engine/
 
 echo ">> 产物: dist/XHSLeads.app"
 ls -d dist/XHSLeads.app

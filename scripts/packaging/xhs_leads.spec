@@ -26,6 +26,9 @@ datas = [
     (str(ROOT / "extension" / "lib"), "extension/lib"),          # DOM 提取源 extract.js
     (str(ROOT / "scripts" / "browser"), "scripts/browser"),      # 授权代点 AppleScript
 ] + collect_data_files("playwright")
+# 注意：内置引擎 CFT 不进 PyInstaller datas——其可执行二进制会被 PyInstaller 当
+# binary 处理失败（bincache 无法处理签名 app bundle）；改由 build_mac.sh 在
+# 打包完成后 post-copy 直拷进 .app/Contents/Resources/engine/（R-6.11）。
 
 a = Analysis(
     [str(SPEC_DIR / "launcher.py")],

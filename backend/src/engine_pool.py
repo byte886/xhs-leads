@@ -161,6 +161,7 @@ class AccountEngine:
                 if cft:
                     launch_kwargs["executable_path"] = cft
                     launch_kwargs.pop("channel", None)
+                log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
                 if headless:
                     launch_kwargs["user_agent"] = _HEADLESS_UA
                 self._context = await pw.chromium.launch_persistent_context(
