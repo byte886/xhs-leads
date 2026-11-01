@@ -39,6 +39,34 @@ def _json_post(url: str, payload: dict, timeout: float):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return _json_mod.loads(r.read().decode("utf-8"))
 
+
+async def open_tab2_window(ctx, shell, url: str = "https://www.xiaohongshu.com/explore"):
+    """R-6.21 采集独立窗口：在**独立窗口**打开采集页（window.open 新窗口）。
+
+    双窗口形态：窗口一=APP/登录（壳窗口 Tab1，keep_shell_tab 监护固定不可关）；
+    窗口二=采集（此函数创建的独立 CFT 窗口，同引擎同 profile —— 登录态/Cookie
+    完全共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关，被手动关闭
+    时按开关状态由 keep_shell_tab 事件监护重建。
+
+    Playwright 对同 context 的 window.open 新窗口自动 attach（实测 CFT 156 生效），
+    page.close() 关闭最后 tab 时窗口随之关闭。窗口尺寸与引擎视口一致（1280x800）。
+    """
+    async with ctx.expect_page(timeout=8000) as pinfo:
+        await shell.evaluate(
+            "(u) => window.open(u, 'xhs_collect', 'width=1280,height=800,left=160,top=90')",
+            url,
+        )
+    page = await pinfo.value  # async API：EventInfo.value 是 coroutine，须 await
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=12000)
+    except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
+        pass
+    try:
+        await page.bring_to_front()
+    except Exception:  # noqa: BLE001
+        pass
+    return page
+
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**。
 # 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
 XHS_LOGIN_URL = (
@@ -429,15 +457,17 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
 
 
 async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
-    """R-6.19 Tab1/Tab2 监护（事件驱动即时恢复，替代 R-6.18 的 2s 轮询）。
+    """R-6.21 双窗口监护（事件驱动即时恢复；承接 R-6.19 语义）。
 
-    Tab1（应用/登录，固定不可关）：
+    窗口一（Tab1，应用/登录，固定不可关）：
     - 持有壳 page 引用，close 事件触发**即时重建**（goto 前端 + bring_to_front），
       用户感知 ≈ 关不掉；引用判活——登录导航（URL 变为小红书登录页）不影响存活判定。
     - 兜底轮询 5s（事件丢失 / 引擎重建场景）。
-    Tab2（采集，collect_tab_visible 开关控制）：
-    - 开关开：小红书采集 tab 被关闭 → 重建 xiaohongshu 骨架并置前（Tab2 常驻语义，
-      「只能由开关关闭」）；开关关：不守护、不创建（空闲采集 tab 由 /api/app_config 联动关闭）。
+    窗口二（Tab2 采集，collect_tab_visible 开关控制，独立 CFT 窗口）：
+    - 开关开：采集窗口（explore，任务页即采集窗口）被关闭 → 重建并置前
+      （「只能由开关关闭」）；开关关：不守护、不创建（空闲采集窗口由 /api/app_config
+      联动关闭）。窗口二 = 任务页所在窗口（engine_pool.new_page 独立窗口创建，
+      keep_shell_tab 与开关联动共用同一任务页缓存，杜绝双开窗口）。
     兜底清理：about:blank 等空白残留 tab（引擎启动默认页如未被复用）随时关闭。
     """
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
@@ -512,24 +542,21 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
             if config.get_config().get("collect_tab_visible"):
                 async with engine_pool.TAB2_GUARD_LOCK:
                     if await _find_tab2(ctx, shell_ref[0]) is None:
-                        page = await ctx.new_page()
                         try:
+                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21 单窗口）
                             await page.goto(
                                 "https://www.xiaohongshu.com/explore",
                                 wait_until="domcontentloaded", timeout=10000,
                             )
-                        except Exception:  # noqa: BLE001
-                            try:
-                                await page.close()
-                            except Exception:  # noqa: BLE001
-                                pass
+                        except Exception as e:  # noqa: BLE001（导航失败：兜底轮询接管）
+                            print(f"[xhs-leads] Tab2 采集窗口重建失败（兜底轮询接管）: {e!r}", flush=True)
                         else:
-                            _watch(page)  # Tab2 同样事件监护（被关即时重建，R-6.19）
+                            _watch(page)  # 采集窗口被关（窗口×/关 tab）即时重建（R-6.21）
                             try:
                                 await page.bring_to_front()
                             except Exception:  # noqa: BLE001
                                 pass
-                            print("[xhs-leads] Tab2 被关闭，已按开关重建采集骨架（R-6.19）", flush=True)
+                            print("[xhs-leads] Tab2 采集窗口被关闭，已按开关重建（独立窗口）", flush=True)
             # 重建后清理残留空白页（goto 失败页 / 并发残留）
             await _sweep_blank(ctx, shell_ref[0])
         except Exception as e:  # noqa: BLE001
@@ -599,24 +626,21 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
             elif config.get_config().get("collect_tab_visible"):
                 async with engine_pool.TAB2_GUARD_LOCK:
                     if await _find_tab2(ctx, shell_ref[0]) is None:
-                        page = await ctx.new_page()
                         try:
+                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21 单窗口）
                             await page.goto(
                                 "https://www.xiaohongshu.com/explore",
                                 wait_until="domcontentloaded", timeout=10000,
                             )
-                        except Exception:  # noqa: BLE001
-                            try:
-                                await page.close()
-                            except Exception:  # noqa: BLE001
-                                pass
+                        except Exception as e:  # noqa: BLE001（窗口创建失败：下轮再试）
+                            print(f"[xhs-leads] Tab2 采集窗口兜底创建失败（下轮重试）: {e!r}", flush=True)
                         else:
-                            _watch(page)  # Tab2 兜底创建同样挂事件监护（R-6.19）
+                            _watch(page)  # 采集窗口同样事件监护（R-6.21）
                             try:
                                 await page.bring_to_front()
                             except Exception:  # noqa: BLE001
                                 pass
-                            print("[xhs-leads] Tab2 兜底重建（开关开）", flush=True)
+                            print("[xhs-leads] Tab2 采集窗口兜底重建（开关开，独立窗口）", flush=True)
             await _sweep_blank(ctx, shell_ref[0])
             await _sweep_tab2_dup(ctx, shell_ref[0])  # 兜底收敛：并发双建的多余 explore 骨架
         except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）

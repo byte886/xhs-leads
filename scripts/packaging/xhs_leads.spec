@@ -24,7 +24,6 @@ datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
     (str(ROOT / "extension" / "lib"), "extension/lib"),          # DOM 提取源 extract.js
     (str(ROOT / "scripts" / "browser"), "scripts/browser"),      # 授权代点 AppleScript
-    (str(ROOT / "extensions" / "pin_ext"), "extensions/pin_ext"),  # R-6.20 固定标签扩展
 ] + collect_data_files("playwright")
 # 注意：内置引擎 CFT 不进 PyInstaller datas——其可执行二进制会被 PyInstaller 当
 # binary 处理失败（bincache 无法处理签名 app bundle）；改由 build_mac.sh 在
@@ -71,7 +70,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name=f"{APP_NAME}.app",
-    icon=None,
+    icon=str(ROOT / "build_resources" / "icon" / "XHSLeadsIcon.icns"),  # 品牌图标（build_mac.sh 生成）
     bundle_identifier="com.xhsleads.app",
     info_plist={
         # 品牌名统一为「XHS Leads · 小红书获客助手」（用户拍板：保留英文品牌 + 中文副标题）：

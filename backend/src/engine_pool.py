@@ -29,27 +29,6 @@ from src import browser_client
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
 TAB2_GUARD_LOCK = asyncio.Lock()
 
-
-def _pin_tabs_ext_dir() -> str | None:
-    """固定标签扩展目录（R-6.20「tab 压根没有叉」验收）。
-
-    壳窗口内 Tab1/Tab2 由该 MV3 扩展自动 pinned（窄图标、无 ×、鼠标不可关）。
-    资源定位镜像 browser_client._builtin_cft_candidates 的两布局：
-    打包态 .app/Contents/Resources/extensions/pin_ext（PyInstaller datas），
-    开发态项目根 extensions/pin_ext；均缺失返回 None（R-6.19 守护兜底）。
-    """
-    candidates: list[str] = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        mp = pathlib.Path(meipass)
-        candidates.append(str(mp / "extensions/pin_ext"))
-        candidates.append(str(mp.parent / "Resources/extensions/pin_ext"))
-    candidates.append(str(config.ROOT / "extensions" / "pin_ext"))
-    for c in candidates:
-        if c and pathlib.Path(c).exists():
-            return c
-    return None
-
 log = xlog.get("engine")
 
 _pw = None
@@ -180,25 +159,13 @@ class AccountEngine:
                         f"--remote-debugging-port={eng_port}",
                     ],
                 )
-                # R-6.20：固定标签扩展（用户「tab 压根没有叉」验收）。MV3 扩展把
-                # Tab1（应用/登录）与 Tab2（采集）自动 pinned：窄图标、无 ×、
-                # 鼠标不可手动关。Chrome 137+ 命令行加载未打包扩展需同时给
-                # --load-extension 与 --disable-extensions-except（已 PoC 验证
-                # CFT 156 生效）；系统 Chrome 兜底/资源缺失时跳过（守护仍兜底）。
-                pin_dir = _pin_tabs_ext_dir()
-                if pin_dir:
-                    launch_kwargs["args"].extend([
-                        f"--load-extension={pin_dir}",
-                        f"--disable-extensions-except={pin_dir}",
-                    ])
-                    log.info("固定标签扩展已挂载: %s", pin_dir)
                 # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
                 # 实时可见采集/登录操作过程（替代「截图映射」）。
                 # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
-                # 「壳窗口内两个固定 Tab」：Tab1=应用/登录（固定不可关），Tab2=采集
-                # （设置开关控制是否显示）。--app 模式会把同 context 的新 tab 弹到独立
-                # 普通窗口（外部 Chrome 采集的根因），故移除 —— 壳窗口=普通 CFT 窗口，
-                # 前端 tab 与采集 tab 同窗口（Tab strip 可见，Tab2 归壳窗口内）。
+                # 「壳窗口内两个固定 Tab」；R-6.21 用户拍板还原「双窗口」：
+                # 窗口一=APP/登录（壳窗口 Tab1，keep_shell_tab 监护固定不可关），
+                # 窗口二=采集（独立窗口，由设置开关 collect_tab_visible 控制开/关，
+                # shell_window.open_tab2_window 以 window.open 在独立窗口创建 explore）。
                 # 注：XHS_SHELL_URL 仍由 launcher 注入，供 ensure_shell/监护使用（不再作启动参数）。
                 if not headless:
                     launch_kwargs["args"].append("--window-size=1280,800")  # 壳窗口尺寸（CFT 承载前端）
@@ -274,11 +241,13 @@ class AccountEngine:
 
     async def new_page(self):
         """取一个可用页面：优先复用该账号缓存的【任务 tab】（同 tab 导航覆盖，
-        从机制上消除「反复开关 tab」的观感）；无缓存则后台新建 + 激活，
+        从机制上消除「反复开关 tab」的观感）；无缓存则**在独立采集窗口**新建，
         失败退化为前台新页。新建后缓存为该账号任务 tab。
 
-        后台 tab 会被 Chrome 渲染节流（SPA 不渲染 → 采集 0 条），建 tab 后立即
-        Target.activateTarget 激活。
+        R-6.21 双窗口：任务页（采集执行页）开在**独立 CFT 窗口**（window.open
+        新窗口，同引擎同 profile —— 登录态/Cookie 共享、CDP 可控），即「窗口二
+        （采集，由设置开关 collect_tab_visible 控制开/关）」。窗口一=APP/登录
+        （壳窗口 Tab1，keep_shell_tab 监护固定不可关）。
         """
         if self._task_page is not None:
             try:
@@ -289,21 +258,14 @@ class AccountEngine:
             self._task_page = None
         ctx = await self.context()
         try:
-            src = ctx.pages[0]
-            cdp = await ctx.new_cdp_session(src)
-            resp = await cdp.send("Target.createTarget", {"url": "about:blank", "background": True})
-            try:
-                await cdp.send("Target.activateTarget", {"targetId": resp["targetId"]})
-            except Exception:  # noqa: BLE001
-                pass
-            for _ in range(50):
-                for p in ctx.pages:
-                    if p.url == "about:blank" and len(ctx.pages) > 1 and p != src:
-                        self._task_page = p
-                        return p
-                await asyncio.sleep(0.2)
-        except Exception:  # noqa: BLE001
-            pass
+            from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
+
+            src_page = ctx.pages[0]
+            page = await shell_window.open_tab2_window(ctx, src_page, url="about:blank")
+            self._task_page = page
+            return page
+        except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
+            log.warning("独立采集窗口创建失败，退化为前台新页: %r", e)
         p = await ctx.new_page()
         self._task_page = p
         return p
