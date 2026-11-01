@@ -16,6 +16,8 @@
 import asyncio
 import json
 import os
+import pathlib
+import sys
 import time
 
 from playwright.async_api import async_playwright
@@ -26,6 +28,27 @@ from src import browser_client
 # R-6.19：Tab2（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
 TAB2_GUARD_LOCK = asyncio.Lock()
+
+
+def _pin_tabs_ext_dir() -> str | None:
+    """固定标签扩展目录（R-6.20「tab 压根没有叉」验收）。
+
+    壳窗口内 Tab1/Tab2 由该 MV3 扩展自动 pinned（窄图标、无 ×、鼠标不可关）。
+    资源定位镜像 browser_client._builtin_cft_candidates 的两布局：
+    打包态 .app/Contents/Resources/extensions/pin_ext（PyInstaller datas），
+    开发态项目根 extensions/pin_ext；均缺失返回 None（R-6.19 守护兜底）。
+    """
+    candidates: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = pathlib.Path(meipass)
+        candidates.append(str(mp / "extensions/pin_ext"))
+        candidates.append(str(mp.parent / "Resources/extensions/pin_ext"))
+    candidates.append(str(config.ROOT / "extensions" / "pin_ext"))
+    for c in candidates:
+        if c and pathlib.Path(c).exists():
+            return c
+    return None
 
 log = xlog.get("engine")
 
@@ -157,6 +180,18 @@ class AccountEngine:
                         f"--remote-debugging-port={eng_port}",
                     ],
                 )
+                # R-6.20：固定标签扩展（用户「tab 压根没有叉」验收）。MV3 扩展把
+                # Tab1（应用/登录）与 Tab2（采集）自动 pinned：窄图标、无 ×、
+                # 鼠标不可手动关。Chrome 137+ 命令行加载未打包扩展需同时给
+                # --load-extension 与 --disable-extensions-except（已 PoC 验证
+                # CFT 156 生效）；系统 Chrome 兜底/资源缺失时跳过（守护仍兜底）。
+                pin_dir = _pin_tabs_ext_dir()
+                if pin_dir:
+                    launch_kwargs["args"].extend([
+                        f"--load-extension={pin_dir}",
+                        f"--disable-extensions-except={pin_dir}",
+                    ])
+                    log.info("固定标签扩展已挂载: %s", pin_dir)
                 # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
                 # 实时可见采集/登录操作过程（替代「截图映射」）。
                 # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板

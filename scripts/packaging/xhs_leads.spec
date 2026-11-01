@@ -24,6 +24,7 @@ datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
     (str(ROOT / "extension" / "lib"), "extension/lib"),          # DOM 提取源 extract.js
     (str(ROOT / "scripts" / "browser"), "scripts/browser"),      # 授权代点 AppleScript
+    (str(ROOT / "extensions" / "pin_ext"), "extensions/pin_ext"),  # R-6.20 固定标签扩展
 ] + collect_data_files("playwright")
 # 注意：内置引擎 CFT 不进 PyInstaller datas——其可执行二进制会被 PyInstaller 当
 # binary 处理失败（bincache 无法处理签名 app bundle）；改由 build_mac.sh 在
