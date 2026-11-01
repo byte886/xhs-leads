@@ -27,11 +27,16 @@ with sync_playwright() as p:
     if interval_input.count():
         interval_input.first.fill('3000')
 
-    # 开始采集
+    # 开始采集（R 批 v1.5：异步任务——引擎搜索初始化需数秒，采集中态延迟出现，
+    # 改为轮询等待「停止采集」按钮/采集中态，最长 30s）
     pg.click('button:has-text("开始采集"), button:has-text("开始采集")')
-    pg.wait_for_timeout(1500)
-    collecting = pg.locator('.collecting, [class*="collecting"], button:has-text("停止采集")').count()
-    print('1) 采集中态出现:', collecting > 0)
+    collecting = False
+    for _ in range(30):
+        pg.wait_for_timeout(1000)
+        if pg.locator('.collecting, [class*="collecting"], button:has-text("停止采集")').count() > 0:
+            collecting = True
+            break
+    print('1) 采集中态出现:', collecting)
     if not collecting:
         # 采集可能已完成或按钮文案不同——检查当前状态文本
         note = pg.inner_text('body').split('采集中')[0][-80:] if '采集中' in pg.inner_text('body') else ''

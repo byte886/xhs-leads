@@ -8,8 +8,12 @@
 import os, json, time, urllib.request
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.expanduser('~/Desktop/xhs-leads')
-CODE = open('/tmp/b07_code.txt').read().strip()
+ROOT = os.path.expanduser('~/Desktop/codex-zhuke')
+try:
+    CODE = open('/tmp/b07_code.txt').read().strip()
+except FileNotFoundError:
+    print('b07 SKIP: 无激活码（/tmp/b07_code.txt 不存在）——激活流程需有效激活码，free 状态条仍可验证')
+    raise SystemExit(2)
 LIC_PATH = os.path.join(ROOT, 'data/license.json')
 
 def write_license(content):
