@@ -85,7 +85,13 @@ def save_cdp_config(chrome_path: str = "", profile_dir: str = "") -> dict:
 
 
 def chrome_executable() -> str | None:
-    """跨平台定位 Google Chrome 可执行文件：用户自定义优先，其次按平台最佳实践探测。"""
+    """定位引擎可执行文件：内置 CFT（Chrome for Testing，独立应用身份，不占用
+    用户日常 Chrome 的 LaunchServices 单实例）优先 → 用户自定义 → 平台探测（系统
+    Chrome 兜底）。R-6.11：内置 CFT 解决「APP 运行时日常 Chrome 无法新建窗口」。
+    """
+    builtin = _builtin_cft_candidates()
+    if builtin:
+        return builtin
     user_path = config.chrome_path()
     if user_path and os.path.exists(user_path):
         return user_path
@@ -94,6 +100,17 @@ def chrome_executable() -> str | None:
     if os.name == "nt":
         return _first_existing(_win_chrome_candidates())
     return None
+
+
+def _builtin_cft_candidates() -> str | None:
+    """内置 Chrome for Testing 候选：引擎数据目录旁的 CFT 副本（真实机路径；
+    打包态随 BASE 变化时在此追加 .app 资源内路径）。"""
+    cft = (
+        pathlib.Path.home()
+        / "Library/Application Support/xhs-leads/engine/chrome-mac-x64"
+        / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    )
+    return str(cft) if cft.exists() else None
 
 
 def _mac_chrome_candidates() -> str | None:

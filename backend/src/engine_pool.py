@@ -21,6 +21,7 @@ import time
 from playwright.async_api import async_playwright
 
 from src import config, logger as xlog, risk
+from src import browser_client
 
 log = xlog.get("engine")
 
@@ -152,6 +153,14 @@ class AccountEngine:
                         f"--remote-debugging-port={eng_port}",
                     ],
                 )
+                # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
+                # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
+                # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
+                # CFT 缺失时回退 channel="chrome"（系统 Google Chrome 兜底）。
+                cft = browser_client._builtin_cft_candidates()
+                if cft:
+                    launch_kwargs["executable_path"] = cft
+                    launch_kwargs.pop("channel", None)
                 if headless:
                     launch_kwargs["user_agent"] = _HEADLESS_UA
                 self._context = await pw.chromium.launch_persistent_context(
