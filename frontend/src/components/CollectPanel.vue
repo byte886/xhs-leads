@@ -126,6 +126,20 @@ onMounted(async () => {
     const lg = await apiLoginStatus()
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪时静默 */ }
+  // R-6.22k：进入采集页即从库恢复最近一次采集结果。
+  // 此前列表只在采集完成回调里写入前端内存（store），页面刷新 / 登录流程
+  // 守卫导航回 APP 重载后 store 清空、stage 回 input → 「采集完的列表消失」。
+  // SQLite 是权威存储，进页拉一次即可恢复列表视图；无数据时保持输入态。
+  try {
+    const list = await apiNotes('', 'score')
+    if (list.total > 0) {
+      appState.notes = list.notes
+      appState.total = list.total
+      appState.count = list.total
+      appState.status = '展示中'
+      setStage('pick')
+    }
+  } catch { /* 后端未就绪时静默 */ }
 })
 </script>
 
