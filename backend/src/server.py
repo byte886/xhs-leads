@@ -1297,17 +1297,15 @@ async def collect_start(req: SearchReq):
     account_id = (req.account_id or "default").strip() or "default"
     _check_license_or_raise("collect")  # 授权薄层：collect 功能闸门（free 恒放行）
     await _require_login(account_id)
-    _check_collect_throttle(account_id)  # 每账号拟人频率保护
-    # 任务唯一键防重复（现象 2）：同 keyword+account_id 在 60s 内（含刚结束）不允许重启，
-    # 防止「搜索等动作反复执行」被平台判定异常行为
+    _check_collect_throttle(account_id)  # 每账号拟人频率保护（R-6.15 起恒放行，不抛错）
+    # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
+    # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
+    # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
     dedup_key = f"{req.keyword.strip()}|{account_id}"
     _now = time.time()
-    for _tid, _st in list(_COLLECT_TASKS.items()):
-        if _st.get("dedup_key") == dedup_key and _now - _st.get("started_ts", 0) < 60:
-            raise HTTPException(409, "同一关键词采集任务进行中或刚结束，请稍候再试（防重复操作触发风控）")
     for tid, st in list(_COLLECT_TASKS.items()):
         if st.get("status") == "running":
-            st["stop_event"] = True
+            st["stop_event"] = True  # 新任务启动时优雅停止旧任务（并发任务管理，非启动限制）
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
