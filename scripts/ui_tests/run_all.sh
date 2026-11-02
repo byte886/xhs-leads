@@ -51,6 +51,20 @@ echo "✓ 引擎调试端口 9223 就绪（连引擎实例，登录态=引擎独
 # ---- 顺序执行 ----
 FILTER="${1:-}"
 PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=()
+
+# ---- R-6.22 双窗口分屏布局约定回归（固定化：左主APP/右调试/等宽并排/重建保持）----
+# 含 Tab1 四连关重建，必须与 t 系列串行（并发会 TargetClosedError），故独立前置执行。
+if [ -z "$FILTER" ]; then
+  if PYTHONPATH=backend/src "$PY" scripts/ui_tests/layout_verify.py >/tmp/ui_layout.$$ 2>&1; then
+    PASS=$((PASS+1)); echo "PASS  layout_verify（双窗口分屏约定）"
+  else
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("layout_verify")
+    echo "FAIL  layout_verify（双窗口分屏约定）"
+    tail -6 /tmp/ui_layout.$$
+  fi
+  rm -f /tmp/ui_layout.$$
+fi
+
 for f in scripts/ui_tests/t[0-9]*.py; do
   name="$(basename "$f")"
   if [ -n "$FILTER" ]; then
