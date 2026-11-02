@@ -679,6 +679,11 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
     _last_recover: list = [0.0]  # 时间窗：迟到重发事件（1s 内）直接忽略
 
     async def _find_shell(ctx):
+        # R-6.22j：shell_ref 引用判活优先——壳窗可能正被守卫导航到登录页/搜索页
+        # （URL 不含 base），URL 匹配会误判「壳窗被关」触发无谓重建（用户实测
+        # 「点采集后空白页/窗口消失」相关）。引用存活则直接视为壳窗存在。
+        if shell_ref[0] is not None and not shell_ref[0].is_closed():
+            return shell_ref[0]
         for p in ctx.pages:
             if not p.is_closed() and (p.url or "").startswith(base):
                 return p
@@ -703,6 +708,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 pass
 
         try:
+            # R-6.22j 取证：记录壳窗 close 时的 URL，定位「壳窗被关」来源
+            page.on("close", lambda: print(
+                f"[xhs-leads] 壳窗 close 事件（url={page.url!r}）", flush=True))
             page.on("close", _on_close)
         except Exception:  # noqa: BLE001
             pass

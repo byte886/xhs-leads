@@ -147,7 +147,6 @@ class AccountEngine:
         self.role = acc.get("role", "mixed")
         self._context = None
         self._lock = asyncio.Lock()
-        self._fail_until = 0.0
         self._task_page = None  # 该账号唯一任务 tab（复用，减少反复开关 tab）
 
     # ---------------- 生命周期 ----------------
@@ -170,10 +169,10 @@ class AccountEngine:
                 log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
 
             now = time.monotonic()
-            if self._fail_until > now:
-                raise RuntimeError(
-                    f"账号 {self.account_id} 引擎启动冷却中（{int(self._fail_until - now)}s 后再试）"
-                )
+            # R-6.22j（用户拍板）：移除「引擎启动失败 20s 冷却」——该防抖本意是
+            # 避免启动失败后反复重试；但用户实测（重登录场景多、封号从未出现）
+            # 认为无必要，且调试/重启时该冷却会造成「启动冷却中」误拦截与空白窗口
+            # 观感。启动失败直接抛错，由上层（任务 error / 用户重试）处置。
 
             pw = await _get_pw()
             try:
@@ -267,7 +266,7 @@ class AccountEngine:
                            detail=f"dir={config.home_relative(self.user_data_dir)}")
                 return self._context
             except Exception as e:  # noqa: BLE001
-                self._fail_until = time.monotonic() + 20
+                # R-6.22j：移除启动失败 20s 冷却（用户拍板，见 context() 入口注释）
                 xlog.audit(self.account_id, action="engine_start", ok=False,
                            detail=f"启动失败: {str(e)[:200]}")
                 raise RuntimeError(f"账号 {self.account_id} 引擎启动失败: {e}") from e
@@ -340,15 +339,12 @@ class AccountEngine:
             blocked = True
         if blocked:
             log.info("账号 %s 未登录/风控需验证——跳过独立采集调试窗口，任务页走引擎内新页", self.account_id)
-            # 未登录不显示调试窗口（用户约定）：引擎独立窗口最小化收起，
-            # 登录引导统一由左 APP ForceLogin 承接
-            try:
-                cdp = await ctx.new_cdp_session(ctx.pages[0])
-                t = await cdp.send("Browser.getWindowForTarget")
-                await cdp.send("Browser.setWindowBounds",
-                               {"windowId": t["windowId"], "bounds": {"windowState": "minimized"}})
-            except Exception:  # noqa: BLE001（最小化失败不影响任务页可用性）
-                pass
+            # R-6.22j 修复（用户实测反馈「点采集后被引入空白页/窗口消失」）：
+            # 原实现把 ctx.pages[0]（壳窗 APP 窗口）整体 minimized——本意是收起
+            # 调试窗，但壳窗恰是承载 ForceLogin/登录引导的窗口，被最小化后用户
+            # 看不到登录引导，只剩最小化窗口/空白页，观感即「乱」。
+            # 现在不再最小化任何窗口：壳窗保持可见承接登录引导；
+            # 任务页在引擎内新建（不建独立调试窗），登录墙由左 APP ForceLogin 承接。
             p = await ctx.new_page()
             self._task_page = p
             return p
@@ -423,15 +419,29 @@ class AccountEngine:
         """清理无关标签页：APP 前端页与 about:blank 保留，其余关闭。
 
         keep_url 缺省用 config.front_port() 拼 127.0.0.1:<port>（不再硬编码 8791）。
+        R-6.22j：壳窗（shell_ref 引用）**无条件保护**——壳窗可能正被守卫导航到
+        登录页/搜索页（URL 不含 keep_url），URL 匹配会误关壳窗（用户实测「点采集后
+        被引入空白页」根因）。以引用判活优先，URL 匹配仅作补充。
         """
         if not keep_url:
             keep_url = f"127.0.0.1:{config.front_port()}"
+        shell_pg = None
+        try:
+            from src import shell_window  # noqa: PLC0415
+
+            shell_pg = shell_window.shell_ref[0] if shell_window.shell_ref else None
+            if shell_pg is not None and shell_pg.is_closed():
+                shell_pg = None
+        except Exception:  # noqa: BLE001（引用不可用则退回 URL 匹配）
+            shell_pg = None
         try:
             ctx = await self.context()
             pages = ctx.pages
             closed = 0
             for p in pages:
                 u = p.url or ""
+                if p is shell_pg:
+                    continue  # 壳窗无条件保留（引用判活优先）
                 if keep_url in u or u == "about:blank":
                     continue  # APP 页/空白页保留
                 try:
@@ -441,6 +451,9 @@ class AccountEngine:
                     closed += 1
                 except Exception:  # noqa: BLE001
                     continue
+            if closed or shell_pg is not None:
+                log.info("cleanup_tabs: closed=%d shell_protected=%s pages=%d",
+                         closed, shell_pg is not None, len(pages))
             if not ctx.pages:  # 全部清空 → 补空白页保底
                 try:
                     await ctx.new_page()

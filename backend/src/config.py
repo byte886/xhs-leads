@@ -146,12 +146,28 @@ def engine_port() -> int:
 
 
 def front_port() -> int:
-    """前端服务端口：XHS_FRONT_PORT > config.front_port；auto 时探测空闲。"""
+    """前端服务端口：XHS_FRONT_PORT > XHS_SHELL_URL（实际监听，launcher 设定）
+    > config.front_port（auto 时探测空闲）。
+
+    R-6.22j 修复：原来每次调用 find_free_port(preferred) 重新探测「空闲端口」——
+    启动时 8791 空闲则返回 8791（uvicorn 监听 8791）；之后再次调用时 8791 已被
+    占用，探测跳过它返回 8800 → 与真实监听端口错位 → cleanup_tabs 的 keep_url
+    不匹配壳窗实际 URL → 登录引导时误关壳窗（用户实测「点采集后被引入空白页」）。
+    现以 launcher 写入的 XHS_SHELL_URL（uvicorn 真实监听）为权威，进程内稳定一致。
+    """
     env = os.environ.get("XHS_FRONT_PORT")
     if env:
         try:
             return int(env)
         except ValueError:
+            pass
+    sh = os.environ.get("XHS_SHELL_URL") or ""
+    if sh:
+        try:
+            from urllib.parse import urlparse  # noqa: PLC0415
+
+            return urlparse(sh).port
+        except Exception:  # noqa: BLE001
             pass
     cfg = get_config()
     preferred = int(cfg.get("front_port", 8791))
