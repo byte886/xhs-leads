@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { appState } from '../store'
+import { appState, toast } from '../store'
 import type { Note, Author } from '../types'
 import { apiAuthors } from '../api'
 import CardGrid from './CardGrid.vue'
@@ -47,10 +47,11 @@ function showNotes() {
   view.value = 'notes'
 }
 
-/** 点作者：切回笔记视图并按昵称过滤，只看该作者的笔记 */
+/** 点作者：切回笔记视图并按昵称过滤，只显示该作者的笔记（筛选提示防误导） */
 function pickAuthor(a: Author) {
   view.value = 'notes'
   filterText.value = a.nickname || a.user_id
+  toast(`已筛选：仅显示「${a.nickname || a.user_id}」的笔记，点「× 清除」恢复全部`)
 }
 </script>
 
@@ -103,6 +104,7 @@ function pickAuthor(a: Author) {
           <button class="vs-btn" :class="{ on: view === 'authors' }" @click="showAuthors">作者榜</button>
         </div>
         <input v-model="filterText" placeholder="请选标题,作者或UID" style="flex:1;min-width:0" />
+        <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
       </div>
 
       <!-- 作者榜（P2）：从当前采集集按作者聚合，低粉爆款多 × 均分高 = 值得模仿 -->
