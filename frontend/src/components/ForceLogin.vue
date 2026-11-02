@@ -13,6 +13,8 @@ const emit = defineEmits<{ (e: 'done'): void }>()
 
 const stateText = ref('正在检查登录状态…')
 const busy = ref(false)
+// R-6.22f：用户是否已主动点「去登录」——只有走完登录流程且复查真实有效才关窗
+const wentLogin = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
 function stopTimer() {
@@ -20,18 +22,27 @@ function stopTimer() {
 }
 
 // 打开即复查登录态（与登录成功回 APP 复查同一逻辑）：
-//   - 真实有效登录（logged_in 且非风控）→ 关窗（登录已完成）；
-//   - **风控拦截需人工扫码/验证**（R-6.22e：cookie 在但会话被平台风控拦，login_status
-//     假阳性 logged_in=true）→ **保持打开**，引导用户点「去登录」扫码验证——否则
-//     登录框弹出即被自动关闭，用户看到「登录还没完成就回到采集」；
-//   - 未登录/被踢 → 保持打开（强制登录语义）。
+//   - **R-6.22f 关键规则：打开后不自动关窗**。自动关依赖 login_status 判定，而风控/
+//     页面渲染时序会让判定抖动（任务页刚导航时风控文案未渲染 → risk_verify=false +
+//     logged_in=true 假阳性 → 闪关，实测用户「登录框没弹/闪一下就回采集」）。强制登录
+//     语义 = 用户**主动**完成登录（点「去登录」→ 官方登录页 → 扫码 → 回 APP 复查真实
+//     有效）才关闭；未操作时保持打开并持续提示状态。
+//   - 复查状态分派：
+//       wentLogin=false（用户尚未操作）→ 仅更新文案：
+//         已登录（logged_in 且非风控）→「当前已登录小红书，点「去登录」确认后继续」（误报
+//         场景用户点一下，apiLoginBegin 的 already_logged_in 立即关窗，不打扰）；
+//         风控需验证（risk_verify）→ 引导点「去登录」扫码验证；
+//         被踢/未登录 → 对应文案。
+//       wentLogin=true（已点「去登录」，从登录页回 APP 复查）→ 仅真实有效登录
+//         （logged_in 且非 risk_verify）→ 关窗进工作台；仍风控/未登录 → 保持并提示。
 function startCheck() {
   stopTimer()
   timer = setInterval(async () => {
     try {
       const lg = await apiLoginStatus()
       appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-      if (lg.logged_in && !lg.risk_verify) {
+      const realOk = !!lg.logged_in && !lg.risk_verify
+      if (wentLogin.value && realOk) {
         stopTimer()
         appState.cookieRefreshTick += 1
         emit('done')
@@ -39,6 +50,7 @@ function startCheck() {
       }
       if (lg.kicked) stateText.value = '登录已被平台踢出（登录超限 / 风控），需要重新登录'
       else if (lg.risk_verify) stateText.value = '账号被小红书风控拦截（Cookie 有效但需人工扫码/验证），请点「去登录」完成扫码验证'
+      else if (realOk) stateText.value = '当前已登录小红书；点「去登录」确认登录态后继续'
       else stateText.value = '当前未登录小红书，无法采集与发布内容'
     } catch {
       stateText.value = '后端未就绪，正在重试…'
@@ -49,6 +61,7 @@ function startCheck() {
 async function goLogin() {
   if (busy.value) return
   busy.value = true
+  wentLogin.value = true // R-6.22f：用户主动去登录 → 复查真实有效才允许关窗
   stateText.value = '正在打开小红书登录页…'
   try {
     const r = await apiLoginBegin(true) // 强制：登录页无叉，登录成功才回
@@ -70,6 +83,7 @@ watch(() => props.open, (v) => {
   if (v) {
     stateText.value = '正在检查登录状态…'
     busy.value = false
+    wentLogin.value = false
     startCheck()
   } else {
     stopTimer()

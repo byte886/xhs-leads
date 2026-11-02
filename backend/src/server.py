@@ -295,18 +295,22 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
         ctx = await eng.context()
     except Exception:  # noqa: BLE001（测试环境/引擎未就绪：无 context 不判被踢）
         ctx = None
+    # R-6.22f：合并**所有**小红书页 body 判定信号（explore 调试窗与任务页可能并存，
+    # 只读第一个匹配页会在多页场景漏读风控/被踢文案）。page 保留首个匹配页供
+    # 后续 xhsIsLoggedIn 注入判定；body 取全部页面文本拼接。
+    bodies: list[str] = []
     page = None
     if ctx is not None:
         for p in ctx.pages:
             if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-                page = p
-                break
-    body = ""
-    if page is not None:
-        try:
-            body = (await page.inner_text("body")) or ""
-        except Exception:  # noqa: BLE001（页面未就绪 → 无被踢信号，不误判）
-            body = ""
+                if page is None:
+                    page = p
+                try:
+                    txt = (await p.inner_text("body")) or ""
+                except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
+                    txt = ""
+                bodies.append(txt)
+    body = "\n".join(bodies)
     kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body)
     # R-6.22e：风控需人工验证信号（与 risk_manual 审计文案同源）。cookie 与页面登录
     # 标记都在但会话被平台风控拦截（「登录后查看」「需人工扫码/验证后重试」）——登录
@@ -380,8 +384,13 @@ async def login_status():
     except Exception as e:  # noqa: BLE001
         result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
 
-    _LOGIN_CACHE["t"] = now
-    _LOGIN_CACHE["data"] = result
+    # R-6.22f：**异常信号不缓存**——被踢/风控需验证是实时状态，登录引导（ForceLogin）
+    # 每秒复查必须立即感知，命中 15s 缓存内「风控前」旧判定会误显示「当前已登录」
+    # （实测：采集风控后 ForceLogin 复查命中缓存显示已登录，文案与行为不符）。
+    # 仅正常状态（有效登录/未登录）走 15s 缓存兜底轮询频率。
+    if not kicked and not risk_verify:
+        _LOGIN_CACHE["t"] = now
+        _LOGIN_CACHE["data"] = result
     return result
 
 
