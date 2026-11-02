@@ -1506,13 +1506,22 @@ class DownloadImgsReq(BaseModel):
     feed_ids: list[str]
 
 
+class OpenFolderReq(BaseModel):
+    path: str
+
+
 @app.post("/api/download_images")
 def download_images(req: DownloadImgsReq):
-    """打包选中笔记的本地图片为 zip。
+    """打包选中笔记的本地图片为 zip，落盘到固定目录并返回路径。
+
+    R-6.23：改为后端直接写文件（不再走浏览器 blob 下载）——内置 CFT 测试浏览器的
+    下载 UI 不可用（app 模式无下载栏，「在 Finder 中显示」打不开），用户无法定位
+    文件。落盘到 ~/Downloads（用户直觉位置；目录缺失时回退应用数据目录 downloads/），
+    前端据此提示路径 + 调 /api/open_folder 在 Finder 中定位。
 
     优先打包本地缓存（克隆时下载的 fid_pN.jpg / fid_cover.jpg 全部命中）；
     本地无缓存时回退远程 cover_url 补下载（带 Referer，低频，仅用户主动点打包时触发）；
-    仍缺失的 feed_id 在响应头 X-Missing 中返回（前端据此提示）。
+    仍缺失的 feed_id 在返回体 missing 中列出（前端据此提示）。
     """
     if not req.feed_ids:
         raise HTTPException(400, "没有选中的笔记")
@@ -1546,11 +1555,43 @@ def download_images(req: DownloadImgsReq):
                     pass
             missing.append(fid)
     data = buf.getvalue()
+    if not data:
+        raise HTTPException(400, "所选笔记没有可打包的图片")
     fname = f"xhs_images_{int(time.time() * 1000)}.zip"
-    headers = {"Content-Disposition": f"attachment; filename={fname}"}
-    resp = StreamingResponse(iter([data]), media_type="application/zip", headers=headers)
-    resp.headers["X-Missing"] = json.dumps(missing)
-    return resp
+    # R-6.23：落盘到 ~/Downloads（用户直觉位置）；目录不存在/不可写时回退数据目录
+    try:
+        dl_dir = Path.home() / "Downloads"
+        dl_dir.mkdir(parents=True, exist_ok=True)
+        dest = dl_dir / fname
+        dest.write_bytes(data)
+    except Exception:  # noqa: BLE001（无下载目录/权限异常 → 数据目录兜底）
+        (DATA_DIR / "downloads").mkdir(parents=True, exist_ok=True)
+        dest = DATA_DIR / "downloads" / fname
+        dest.write_bytes(data)
+    return {"ok": True, "path": str(dest), "name": fname, "size": len(data), "missing": missing}
+
+
+@app.post("/api/open_folder")
+def open_folder(req: OpenFolderReq):
+    """R-6.23：在 Finder 中定位文件（macOS `open -R`），供「下载图片包」查看产物。
+
+    仅允许定位下载目录（~/Downloads）与应用数据目录下的文件，防越权路径。
+    """
+    p = Path(req.path).expanduser().resolve()
+    allowed = [
+        (Path.home() / "Downloads").resolve(),
+        (DATA_DIR / "downloads").resolve(),
+        DATA_DIR.resolve(),
+    ]
+    if not any(str(p).startswith(str(base)) for base in allowed):
+        raise HTTPException(400, "不允许打开该路径")
+    if not p.exists():
+        raise HTTPException(404, "文件不存在，可能已被移动或删除")
+    try:
+        subprocess.Popen(["open", "-R", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {"ok": True, "path": str(p)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"打开文件夹失败：{e}") from e
 
 
 # ================= 发布页追加图片 =================

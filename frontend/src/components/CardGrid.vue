@@ -91,7 +91,11 @@ function clearSelect() {
   toast('已清空选择')
 }
 
-// 下载图片包（P3）：后端把选中笔记的本地封面打包 zip，走 blob 下载
+// 下载图片包（P3）：后端把选中笔记的本地封面打包 zip 落盘到 ~/Downloads 并返回
+// 路径（R-6.23 改后端直写文件——CFT 测试浏览器无下载 UI，浏览器 blob 下载
+// 无法定位产物）；前端提示路径 + 「打开文件夹」按钮在 Finder 中定位。
+const lastZip = ref<{ path: string; name: string } | null>(null)
+
 async function downloadImages() {
   const ids = Object.keys(appState.selected)
   if (!ids.length) { toast('请先勾选笔记'); return }
@@ -110,17 +114,31 @@ async function downloadImages() {
     toast('打包失败：' + ((await resp.text()) || resp.status).toString().slice(0, 80))
     return
   }
-  const blob = await resp.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `xhs_images_${Date.now()}.zip`
-  document.body.appendChild(a)
-  a.click()
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url) }, 1000)
-  let missing = 0
-  try { missing = JSON.parse(resp.headers.get('X-Missing') || '[]').length } catch { /* 忽略 */ }
-  toast(missing > 0 ? `已打包 ${ids.length - missing} 张图片（${missing} 张缺失），文件已保存到浏览器下载目录` : `已打包 ${ids.length} 张图片，文件已保存到浏览器下载目录`)
+  const data = await resp.json().catch(() => null)
+  if (!data || !data.ok) { toast('打包失败：响应异常'); return }
+  lastZip.value = { path: data.path, name: data.name }
+  const missing = (data.missing || []).length
+  toast(
+    missing > 0
+      ? `已打包 ${ids.length - missing} 张图片（${missing} 张缺失），已保存：下载/${data.name}`
+      : `已打包 ${ids.length} 张图片，已保存：下载/${data.name}`,
+  )
+}
+
+async function openFolder() {
+  if (!lastZip.value) { toast('请先下载图片包'); return }
+  try {
+    const resp = await fetch('/api/open_folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: lastZip.value.path }),
+    })
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || !data?.ok) { toast('打开文件夹失败：' + ((data?.detail) || resp.status)); return }
+    toast('已在 Finder 中打开，双击 zip 即可查看图片')
+  } catch {
+    toast('打开文件夹失败：网络错误')
+  }
 }
 
 function exportJSON() {
@@ -212,6 +230,7 @@ function fmtPub(ts: string | number | null): string {
       <button class="b-btn" @click="selectAll">全选图文</button>
       <button class="b-btn" @click="clearSelect">清空选择</button>
       <button class="b-btn" @click="downloadImages">下载图片包</button>
+      <button v-if="lastZip" class="b-btn" @click="openFolder">打开文件夹</button>
       <button class="b-btn" @click="exportJSON">导出 JSON</button>
       <button class="b-btn" @click="exportCSV">导出 CSV</button>
     </div>
