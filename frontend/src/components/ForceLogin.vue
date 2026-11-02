@@ -19,20 +19,26 @@ function stopTimer() {
   if (timer) { clearInterval(timer); timer = null }
 }
 
-// 打开即复查登录态（与登录成功回 APP 复查同一逻辑）：已登录 → 关窗；未登录/被踢 → 保持
+// 打开即复查登录态（与登录成功回 APP 复查同一逻辑）：
+//   - 真实有效登录（logged_in 且非风控）→ 关窗（登录已完成）；
+//   - **风控拦截需人工扫码/验证**（R-6.22e：cookie 在但会话被平台风控拦，login_status
+//     假阳性 logged_in=true）→ **保持打开**，引导用户点「去登录」扫码验证——否则
+//     登录框弹出即被自动关闭，用户看到「登录还没完成就回到采集」；
+//   - 未登录/被踢 → 保持打开（强制登录语义）。
 function startCheck() {
   stopTimer()
   timer = setInterval(async () => {
     try {
       const lg = await apiLoginStatus()
       appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-      if (lg.logged_in) {
+      if (lg.logged_in && !lg.risk_verify) {
         stopTimer()
         appState.cookieRefreshTick += 1
         emit('done')
         return
       }
       if (lg.kicked) stateText.value = '登录已被平台踢出（登录超限 / 风控），需要重新登录'
+      else if (lg.risk_verify) stateText.value = '账号被小红书风控拦截（Cookie 有效但需人工扫码/验证），请点「去登录」完成扫码验证'
       else stateText.value = '当前未登录小红书，无法采集与发布内容'
     } catch {
       stateText.value = '后端未就绪，正在重试…'
