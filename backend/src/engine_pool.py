@@ -216,7 +216,11 @@ class AccountEngine:
                     shell_url = os.environ.get("XHS_SHELL_URL") or (
                         f"http://127.0.0.1:{config.front_port()}/"
                     )
-                    launch_kwargs["args"].append(f"--app={shell_url}")  # 壳窗口应用模式
+                    # R-6.22c：launch_persistent_context 的 --app 实测不生效（窗口仍为
+                    # 普通 Chrome 形态，带菜单栏/标签栏）。壳窗口应用模式改由
+                    # shell_window.ensure_shell 走 --app 命令行路由（_launch_app_window）
+                    # 弹出；此处保留 --window-size/--window-position 让启动初始普通窗口
+                    # 也落在主屏左半（避免闪现错位，随后被 ensure_shell 关闭）。
                     # R-6.22 双窗口左右分屏：主 APP 放主屏左半、采集调试窗口右半，
                     # 等宽并排不重叠（win_w = min(1280, 主屏宽 // 2)）
                     win_w, win_h, _, _ = shell_window_geometry()
@@ -319,11 +323,11 @@ class AccountEngine:
             try:
                 cfts = browser_client._builtin_cft_candidates()
                 if cfts:
-                    executable = cfts[0]
+                    executable = cfts  # 返回值为单个路径 str（非列表），勿取 [0]
             except Exception:  # noqa: BLE001（CFT 探测失败：走 window.open 普通窗口兜底）
                 executable = None
             page = await shell_window.open_tab2_window(
-                ctx, src_page, url="about:blank",
+                ctx, src_page, url="https://www.xiaohongshu.com/explore",
                 user_data_dir=self.user_data_dir, executable=executable,
             )
             self._task_page = page

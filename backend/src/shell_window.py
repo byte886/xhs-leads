@@ -69,25 +69,12 @@ async def open_tab2_window(
     from src import engine_pool  # noqa: PLC0415（与文件内其他延迟导入一致）
 
     if executable and user_data_dir:
-        try:
-            async with ctx.expect_page(timeout=8000) as pinfo:
-                # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
-                win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
-                subprocess.Popen(
-                    [
-                        executable,
-                        f"--user-data-dir={user_data_dir}",
-                        f"--app={url}",
-                        f"--window-size={win_w},{win_h}",
-                        f"--window-position={win_left},0",
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            page = await pinfo.value  # async API：EventInfo.value 是 coroutine，须 await
-        except Exception as e:  # noqa: BLE001（路由失败：退回 window.open 普通窗口）
-            print(f"[xhs-leads] 采集窗口 --app 路由失败（退普通窗口）: {e!r}", flush=True)
-            page = None
+        # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
+        win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
+        page = await _launch_app_window(
+            ctx, url, user_data_dir=user_data_dir, executable=executable,
+            left=win_left, width=win_w, height=win_h,
+        )
     if page is None:
         async with ctx.expect_page(timeout=8000) as pinfo:
             win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
@@ -238,6 +225,50 @@ class ShellWindow:
         return await self.page.context.cookies()
 
 
+async def _launch_app_window(
+    ctx, url: str, *, user_data_dir: str, executable: str,
+    left: int, width: int, height: int,
+):
+    """R-6.22c 应用模式窗口（无菜单栏/标签栏/地址栏）：--app 命令行路由。
+
+    Chrome 无「为既有 target 创建 app 窗口」API；向已运行实例（同
+    --user-data-dir 单实例锁）传 `--app=<url>`，现有实例会弹出应用模式新窗口，
+    Playwright 对同 context 新 target 自动 attach（expect_page 捕获）。
+    路由不可用（无 CFT/exec 失败）返回 None，调用方退普通窗口兜底。
+    引擎启动初期（profile 目录初始化中）Popen 偶发 PermissionError——重试
+    至多 3 次（间隔 1.5s），引擎就绪后 Popen 稳定成功（实测）。
+    """
+    page = None
+    if executable and user_data_dir:
+        for attempt in range(3):
+            try:
+                async with ctx.expect_page(timeout=8000) as pinfo:
+                    subprocess.Popen(
+                        [
+                            executable,
+                            f"--user-data-dir={user_data_dir}",
+                            f"--app={url}",
+                            f"--window-size={width},{height}",
+                            f"--window-position={left},0",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                page = await pinfo.value  # async API：EventInfo.value 是 coroutine，须 await
+                break
+            except Exception as e:  # noqa: BLE001（路由失败：重试，仍失败则调用方兜底）
+                import traceback as _tb
+                print(
+                    f"[xhs-leads] --app 窗口路由失败（第{attempt + 1}/3 次）: {e!r}\n"
+                    f"  cwd={os.getcwd()} executable={executable!r}\n"
+                    f"  user_data_dir={user_data_dir!r} url={url!r}\n"
+                    f"  {''.join(_tb.format_exception_only(type(e), e)).strip()}",
+                    flush=True,
+                )
+                await asyncio.sleep(1.5)
+    return page
+
+
 async def _calibrate_window(page, left: int, top: int, width: int, height: int) -> None:
     """R-6.22 双窗口左右分屏：CDP Browser.setWindowBounds 精确摆位/定尺寸。
 
@@ -311,7 +342,44 @@ async def ensure_shell(base_url: str):
                 pass
     # R-6.22 双窗口左右分屏：壳窗口（主 APP）放主屏左半
     win_w, win_h, _, _ = engine_pool.shell_window_geometry()
-    await _calibrate_window(page, 0, 0, win_w, win_h)
+    # R-6.22c：壳窗口应用模式——launch_persistent_context 的 --app 参数实测不生效
+    # （窗口仍是带菜单栏/标签栏的普通 Chrome 窗口）。统一改走 --app 命令行路由
+    # （与采集调试窗口同法）：同实例弹出应用模式窗口（无菜单栏/标签栏/地址栏），
+    # 成功后关闭初始普通窗口（keep_shell_tab 此时尚未启动，close 无监听者，无竞态）。
+    from src import browser_client  # noqa: PLC0415
+
+    cfts = browser_client._builtin_cft_candidates()
+    app_page = await _launch_app_window(
+        ctx, base,
+        user_data_dir=eng.user_data_dir,
+        executable=cfts if cfts else None,  # 返回值为单个路径 str（非列表），勿取 [0]
+        left=0, width=win_w, height=win_h,
+    )
+    if app_page is not None:
+        try:
+            await app_page.goto(base, wait_until="domcontentloaded", timeout=12000)
+        except Exception:  # noqa: BLE001（--app=base 已带 URL，goto 仅保险）
+            pass
+        await _calibrate_window(app_page, 0, 0, win_w, win_h)
+        try:
+            await app_page.bring_to_front()
+        except Exception:  # noqa: BLE001
+            pass
+        # 关闭初始普通窗口 tab（keep_shell_tab 未启动无监听；后续监护 _find_shell
+        # 按 URL 找到应用模式壳窗口）
+        for p in list(ctx.pages):
+            if (
+                p is not app_page and not p.is_closed()
+                and (p.url or "").startswith(base)
+            ):
+                try:
+                    await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        page = app_page
+    else:
+        # 路由不可用：保留初始普通窗口（能力兜底），仅校准
+        await _calibrate_window(page, 0, 0, win_w, win_h)
     try:
         await page.bring_to_front()
     except Exception:  # noqa: BLE001
@@ -601,21 +669,34 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
             pass
 
     async def _rebuild_shell(ctx) -> None:
-        page = await ctx.new_page()
-        try:
-            await page.goto(base, wait_until="domcontentloaded", timeout=8000)
-        except Exception as e:  # noqa: BLE001（goto 失败：关闭空页，交由外层/兜底处理）
+        # R-6.22c：应用模式重建——--app 命令行路由弹无菜单栏/标签栏窗口；
+        # 路由不可用时退回普通 tab（能力兜底）。
+        win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+        eng = await engine_pool.pool.get("default")
+        from src import browser_client  # noqa: PLC0415
+
+        cfts = browser_client._builtin_cft_candidates()
+        page = await _launch_app_window(
+            ctx, base,
+            user_data_dir=eng.user_data_dir,
+            executable=cfts if cfts else None,  # 返回值为单个路径 str（非列表），勿取 [0]
+            left=0, width=win_w, height=win_h,
+        )
+        if page is None:
+            page = await ctx.new_page()
             try:
-                await page.close()
-            except Exception:  # noqa: BLE001
-                pass
-            raise
+                await page.goto(base, wait_until="domcontentloaded", timeout=8000)
+            except Exception as e:  # noqa: BLE001（goto 失败：关闭空页，交由外层/兜底处理）
+                try:
+                    await page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
         try:
             await page.bring_to_front()
         except Exception:  # noqa: BLE001
             pass
         # R-6.22：重建的新窗口默认尺寸/位置，重新校准为左半屏（主 APP 左、调试右）
-        win_w, win_h, _, _ = engine_pool.shell_window_geometry()
         await _calibrate_window(page, 0, 0, win_w, win_h)
         shell_ref[0] = page
         _watch(page)

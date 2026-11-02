@@ -3,7 +3,8 @@
 
 约定（固定化，每次启动必须满足）：
 - 左窗 = 主 APP 壳窗口（前端 127.0.0.1:8791，XHS Leads·小红书获客助手）
-  → bounds.left == 0, width == min(1280, 主屏宽//2), top 固定（macOS 菜单栏 25）
+  → **应用模式**（无标签栏/Tab 页面：window.open 新页落新窗口而非本窗口内
+    新 tab）+ bounds.left == 0, width == min(1280, 主屏宽//2), top 固定
 - 右窗 = 采集调试窗口（小红书 explore/任务页，xiaohongshu.com 非 /login）
   → bounds.left == 窗口宽（与左窗等宽并排）, width == 窗口宽
 - 不重叠：shell.left + shell.width <= collect.left（严格相邻，允许 0 间隙）
@@ -72,6 +73,23 @@ def _is_collect(pg):
     return "xiaohongshu.com" in u and "/login" not in u
 
 
+def _window_id(pg):
+    s = pg.context.new_cdp_session(pg)
+    return s.send("Browser.getWindowForTarget")["windowId"]
+
+
+def _is_app_window(b, pg):
+    """R-6.22c 应用模式判定：window.open 的新页落在新窗口（windowId 与本窗口
+    不同），而非本窗口内新 tab——即壳窗口无标签栏/Tab 页面（用户约定硬性要求）。"""
+    with b.contexts[0].expect_page(timeout=5000) as pinfo:
+        pg.evaluate("() => window.open('about:blank')")
+    newp = pinfo.value
+    try:
+        return _window_id(newp) != _window_id(pg)
+    finally:
+        newp.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--screenshot", default="", help="可选：验证后截屏路径")
@@ -101,6 +119,7 @@ def main() -> int:
         checks = [
             ("左窗=主APP（URL 127.0.0.1:8791）", _is_shell(shell)),
             ("右窗=采集调试（URL xiaohongshu）", _is_collect(collect)),
+            ("左窗应用模式（无Tab页：window.open开新窗口）", _is_app_window(b, shell)),
             ("左窗在右窗左侧（shell.left < collect.left）", sb["left"] < cb["left"]),
             ("左窗贴主屏左缘（left==0）", sb["left"] == 0),
             ("两窗等宽（%s==%s）" % (sb["width"], cb["width"]), sb["width"] == cb["width"]),
@@ -128,12 +147,14 @@ def main() -> int:
                 print(f"FAIL: round{i} 重建后窗口缺失")
                 return 1
             sb, cb = _bounds_of(shell), _bounds_of(collect)
+            app_ok = _is_app_window(b, shell)
             ok = (
-                sb["width"] == 960 and cb["width"] == 960
+                app_ok
+                and sb["width"] == 960 and cb["width"] == 960
                 and sb["left"] == 0 and cb["left"] == 960
                 and sb["left"] + sb["width"] <= cb["left"]
             )
-            print(f"  round{i}: shell={sb} collect={cb} overlap={not ok} -> {'PASS' if ok else 'FAIL'}")
+            print(f"  round{i}: shell={sb} collect={cb} app模式={app_ok} overlap={not ok} -> {'PASS' if ok else 'FAIL'}")
             if not ok:
                 return 1
             b.close()
@@ -148,11 +169,12 @@ def main() -> int:
             print(f"FAIL: 收尾异常 shell={len(shells)} collect={len(collects)}")
             return 1
         sb = _bounds_of(shells[0])
-        if sb["width"] != 960 or sb["left"] != 0:
-            print(f"FAIL: 收尾主APP布局 {sb}")
+        app_ok = _is_app_window(b, shells[0])
+        if sb["width"] != 960 or sb["left"] != 0 or not app_ok:
+            print(f"FAIL: 收尾主APP布局 {sb} app模式={app_ok}")
             return 1
         print("== 开关关后 ==")
-        print(f"  仅左主APP: {sb} -> PASS")
+        print(f"  仅左主APP: {sb} app模式={app_ok} -> PASS")
         b.close()
 
     if args.screenshot:
