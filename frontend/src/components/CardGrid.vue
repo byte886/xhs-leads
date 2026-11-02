@@ -37,10 +37,19 @@ function coverOf(note: Note): string {
   return note.local_cover || coverProxy(note.cover_url || note.local_images?.[0] || '')
 }
 
-const broken = new Set<string>()
+const broken = ref(new Set<string>())
 function onImgError(note: Note) {
-  broken.add(note.feed_id)
-}function phStyle(note: Note): Record<string, string> {
+  broken.value.add(note.feed_id)
+  // R-6.22n：CDN 封面瞬时失败不永久占位——4s 后自动重试（封面走远程
+  // cover_url 直连，刷新/慢加载可能瞬时失败；失败期间显示占位符）
+  setTimeout(() => {
+    if (broken.value.delete(note.feed_id)) {
+      broken.value = new Set(broken.value)
+    }
+  }, 4000)
+}
+
+function phStyle(note: Note): Record<string, string> {
   const palette = ['#9A6A2F', '#7B8C6B', '#B4553D', '#5A7D8C', '#8C6B7B']
   let h = 0
   for (const ch of note.feed_id || '') h = (h * 31 + ch.charCodeAt(0)) % 997
