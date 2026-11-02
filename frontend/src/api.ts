@@ -41,6 +41,12 @@ export async function apiLoginCancel(): Promise<{ ok: boolean }> {
   return j(await fetch(`${BASE}/api/auth/login_cancel`, { method: 'POST' }))
 }
 
+// R-6.22g：登录引导弹出时收起采集调试窗（右窗关闭），壳窗保留——「需要登录时右侧
+// 要么关闭要么有提示」用户约定。登录完成后再点采集，后端按登录态恢复调试窗。
+export async function apiCollapseDebugWindows(): Promise<{ ok: boolean; closed?: number }> {
+  return j(await fetch(`${BASE}/api/auth/collapse_debug_windows`, { method: 'POST' }))
+}
+
 export async function apiLicenseStatus(): Promise<{ ok: boolean; status: LicenseStatus }> {
   return j(await fetch(`${BASE}/api/license_status`))
 }

@@ -224,6 +224,27 @@ class ShellWindow:
         # ——与后端 /api/auth/import_cookies 期望格式一致，无需再转换。
         return await self.page.context.cookies()
 
+    async def clear_domain_cookies(self, domain_frag: str) -> int:
+        """删除壳窗口（登录页所在窗口）指定域 Cookie，返回删除条数。
+
+        R-6.22g：风控/已登录场景导航登录页前，登录页会因 Cookie 仍有效**自动跳过
+        登录界面**（用户无法扫码验证解除风控）。先清除 web_session 使登录页呈现
+        扫码界面，完成主动重新登录/验证。
+        """
+        cs = await self.cookies()
+        removed = 0
+        for c in cs:
+            if domain_frag in c.get("domain", ""):
+                try:
+                    await self.page.context.clear_cookies(
+                        name=c.get("name"), domain=c.get("domain"),
+                        path=c.get("path", "/"),
+                    )
+                    removed += 1
+                except Exception:  # noqa: BLE001（单条删除失败不影响整体）
+                    pass
+        return removed
+
 
 async def _launch_app_window(
     ctx, url: str, *, user_data_dir: str, executable: str,
@@ -420,7 +441,16 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
 
     def _inject_force_login() -> None:
         try:
-            win.evaluate_js(force_login_js)
+            # R-6.22g：evaluate_js 是协程——未 await 时协程从不执行（RuntimeWarning），
+            # 强制拉回实际无效；这里创建任务由事件循环执行。
+            _loop = asyncio.get_running_loop()
+            _loop.create_task(_safe_force_login())
+        except Exception as e:  # noqa: BLE001
+            print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+
+    async def _safe_force_login() -> None:
+        try:
+            await win.evaluate_js(force_login_js)
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
 
@@ -483,6 +513,15 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                 "[xhs-leads] 切换到小红书登录页"
                 f"（{'强制登录·不可关闭' if cur_force else '主动重登·可关闭'}）"
             )
+            # R-6.22g：强制登录导航前清除壳窗口 xiaohongshu Cookie——登录页若检测到
+            # 已登录会自动跳过界面（风控会话 Cookie 有效），用户将无法扫码验证；
+            # 清除后登录页呈现扫码/手机号界面，完成主动重新登录解除风控/被踢。
+            if cur_force:
+                try:
+                    n = await win.clear_domain_cookies("xiaohongshu.com")
+                    print(f"[xhs-leads] 强制登录前清除壳窗口小红书 Cookie {n} 条")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[xhs-leads] 清除壳窗口 Cookie 异常: {e!r}")
         else:
             continue
 

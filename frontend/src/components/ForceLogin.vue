@@ -5,7 +5,7 @@
 // 真实登录页（无叉）→ 登录成功回 APP 复查：已登录 → emit('done') 关闭本窗进工作台；
 // 仍未登录 → 保持强制（同一逻辑）。主动重登（设置页「重新登录」）不经过本窗。
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { apiLoginBegin, apiLoginStatus } from '../api'
+import { apiCollapseDebugWindows, apiLoginBegin, apiLoginStatus } from '../api'
 import { appState, toast } from '../store'
 
 const props = defineProps<{ open: boolean }>()
@@ -84,6 +84,9 @@ watch(() => props.open, (v) => {
     stateText.value = '正在检查登录状态…'
     busy.value = false
     wentLogin.value = false
+    // R-6.22g：登录引导弹出即收起右窗采集调试窗（壳窗保留）——「需要登录时
+    // 右侧要么关闭要么有提示」；扫码成功后再点采集由后端按登录态恢复。
+    apiCollapseDebugWindows().catch(() => {})
     startCheck()
   } else {
     stopTimer()

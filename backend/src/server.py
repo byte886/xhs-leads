@@ -381,17 +381,17 @@ async def login_status():
                 risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
             except Exception:  # noqa: BLE001
                 pass
+        # R-6.22f：**异常信号不缓存**——被踢/风控需验证是实时状态，登录引导（ForceLogin）
+        # 每秒复查必须立即感知，命中 15s 缓存内「风控前」旧判定会误显示「当前已登录」
+        # （实测：采集风控后 ForceLogin 复查命中缓存显示已登录，文案与行为不符）。
+        # 仅正常状态（有效登录/未登录）走 15s 缓存兜底轮询频率。
+        if not kicked and not risk_verify:
+            _LOGIN_CACHE["t"] = now
+            _LOGIN_CACHE["data"] = result
+        return result
     except Exception as e:  # noqa: BLE001
         result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
-
-    # R-6.22f：**异常信号不缓存**——被踢/风控需验证是实时状态，登录引导（ForceLogin）
-    # 每秒复查必须立即感知，命中 15s 缓存内「风控前」旧判定会误显示「当前已登录」
-    # （实测：采集风控后 ForceLogin 复查命中缓存显示已登录，文案与行为不符）。
-    # 仅正常状态（有效登录/未登录）走 15s 缓存兜底轮询频率。
-    if not kicked and not risk_verify:
-        _LOGIN_CACHE["t"] = now
-        _LOGIN_CACHE["data"] = result
-    return result
+        return result
 
 
 # ================= 真实登录页方案（R-6.5）=================
@@ -426,7 +426,31 @@ async def login_begin(req: LoginBeginReq | None = None):
     force = bool(req and req.force)
     _LOGIN_GATE["pending"] = True
     _LOGIN_GATE["force"] = force
+    # R-6.22g：登录引导触发即收起采集调试窗（右窗关闭），壳窗（登录页所在）保留——
+    # 用户约定「触发需要登录时右侧要么关闭要么有提示」；扫码成功后 new_page 按登录态恢复。
+    try:
+        from src import engine_pool  # noqa: PLC0415
+
+        eng = await engine_pool.pool.get("default")
+        n = await eng.collapse_debug_windows()
+        if n:
+            log.info("登录引导：收起采集调试窗 %s 个", n)
+    except Exception:  # noqa: BLE001（收起失败不阻断登录导航）
+        pass
     return {"ok": True, "already_logged_in": False, "force": force}
+
+
+@app.post("/api/auth/collapse_debug_windows")
+async def collapse_debug_windows():
+    """R-6.22g：ForceLogin 弹出时前端调用——立即收起采集调试窗（关闭右窗），壳窗保留。"""
+    try:
+        from src import engine_pool  # noqa: PLC0415
+
+        eng = await engine_pool.pool.get("default")
+        n = await eng.collapse_debug_windows()
+        return {"ok": True, "closed": n}
+    except Exception:  # noqa: BLE001
+        return {"ok": True, "closed": 0}
 
 
 @app.get("/api/auth/login_begin_state")

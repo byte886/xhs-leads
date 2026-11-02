@@ -315,9 +315,57 @@ class AccountEngine:
                 pass
             self._task_page = None
         ctx = await self.context()
+        # R-6.22g（用户约定）：未登录 / 风控需验证时**不创建独立采集调试窗口**——
+        # 右窗只在登录有效时用于采集调试；未登录时登录引导统一由左 APP ForceLogin
+        # 承接（避免右窗直接弹出小红书平台登录层造成困惑）。任务页退回引擎内新页
+        # （无独立调试窗），采集照常失败并触发前端登录引导。
+        try:
+            cs = await self.read_cookies()
+            has_ws = any(c.get("name") == "web_session" for c in cs)
+            blocked = not has_ws
+            if has_ws:  # 风控/被踢信号（与 login_status 同源文案）
+                for pg in ctx.pages:
+                    if "xiaohongshu" not in (pg.url or ""):
+                        continue
+                    try:
+                        txt = (await pg.inner_text("body")) or ""
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
+                                               "人工验证", "验证后重试", "登录超限",
+                                               "请重新登录", "登录已过期")):
+                        blocked = True
+                        break
+        except Exception:  # noqa: BLE001（判定失败保守不开窗）
+            blocked = True
+        if blocked:
+            log.info("账号 %s 未登录/风控需验证——跳过独立采集调试窗口，任务页走引擎内新页", self.account_id)
+            # 未登录不显示调试窗口（用户约定）：引擎独立窗口最小化收起，
+            # 登录引导统一由左 APP ForceLogin 承接
+            try:
+                cdp = await ctx.new_cdp_session(ctx.pages[0])
+                t = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds",
+                               {"windowId": t["windowId"], "bounds": {"windowState": "minimized"}})
+            except Exception:  # noqa: BLE001（最小化失败不影响任务页可用性）
+                pass
+            p = await ctx.new_page()
+            self._task_page = p
+            return p
         try:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
+            # 登录有效：恢复引擎调试窗口为右半屏（与布局约定一致）
+            try:
+                w2, h2, _, l2 = shell_window.shell_window_geometry()
+                cdp = await ctx.new_cdp_session(ctx.pages[0])
+                t = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds",
+                               {"windowId": t["windowId"],
+                                "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
+                                           "windowState": "normal"}})
+            except Exception:  # noqa: BLE001（恢复失败不影响任务页可用性）
+                pass
             src_page = ctx.pages[0]
             executable = None
             try:
@@ -402,6 +450,14 @@ class AccountEngine:
         except Exception as exc:  # noqa: BLE001
             log.warning("账号 %s cleanup_tabs 失败（非阻断）: %s", self.account_id, exc)
             return 0
+
+    async def collapse_debug_windows(self) -> int:
+        """R-6.22g：登录引导时收起采集调试窗——关闭非壳窗口页面，壳窗（APP/登录页）保留。
+
+        触发时机：ForceLogin 弹出（前端调用）/ 点「去登录」（login_begin 后端调用）。
+        登录完成后用户再次点采集，new_page 按登录态恢复调试窗（登录有效恢复右半屏）。
+        """
+        return await self.cleanup_tabs()
 
     # ---------------- Cookie 辅助（按账号落盘） ----------------
 
