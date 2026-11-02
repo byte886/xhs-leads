@@ -49,3 +49,10 @@ cp build_resources/icon/XHSLeadsIcon.icns \
 
 echo ">> 产物: dist/XHSLeads.app"
 ls -d dist/XHSLeads.app
+
+# 5) 压分发 zip 到桌面（XHS Leads · 小红书获客助手 分发给朋友的交付物；Intel x86_64）
+ZIP_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.zip"
+echo ">> 压缩分发 zip → ${ZIP_OUT}"
+rm -f "${ZIP_OUT}"
+zip -ry -q "${ZIP_OUT}" dist/XHSLeads.app
+ls -lh "${ZIP_OUT}"
