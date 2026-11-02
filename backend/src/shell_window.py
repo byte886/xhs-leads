@@ -66,14 +66,20 @@ async def open_tab2_window(
     命令行路由不可用时（无 CFT/实例未起）退回 window.open 普通窗口（能力兜底）。
     """
     page = None
+    from src import engine_pool  # noqa: PLC0415（与文件内其他延迟导入一致）
+
     if executable and user_data_dir:
         try:
             async with ctx.expect_page(timeout=8000) as pinfo:
+                # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
+                win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
                 subprocess.Popen(
                     [
                         executable,
                         f"--user-data-dir={user_data_dir}",
                         f"--app={url}",
+                        f"--window-size={win_w},{win_h}",
+                        f"--window-position={win_left},0",
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -84,8 +90,10 @@ async def open_tab2_window(
             page = None
     if page is None:
         async with ctx.expect_page(timeout=8000) as pinfo:
+            win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
             await shell.evaluate(
-                "(u) => window.open(u, 'xhs_collect', 'width=1280,height=800,left=160,top=90')",
+                "(u) => window.open(u, 'xhs_collect', "
+                f"'width={win_w},height={win_h},left={win_left},top=0')",
                 url,
             )
         page = await pinfo.value
@@ -94,6 +102,9 @@ async def open_tab2_window(
     except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
         pass
     await _ensure_debug_title(page)
+    # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
+    win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
+    await _calibrate_window(page, win_left, 0, win_w, win_h)
     try:
         await page.bring_to_front()
     except Exception:  # noqa: BLE001
@@ -227,6 +238,31 @@ class ShellWindow:
         return await self.page.context.cookies()
 
 
+async def _calibrate_window(page, left: int, top: int, width: int, height: int) -> None:
+    """R-6.22 双窗口左右分屏：CDP Browser.setWindowBounds 精确摆位/定尺寸。
+
+    launch_persistent_context 的 viewport 会覆盖 --window-size（实测窗口仍 1280
+    宽），但 --window-position 生效；故用 CDP 后置校准窗口 bounds：壳窗口放
+    主屏左半 (0,0)、采集调试窗口放右半 (win_left,0)，等宽并排互不重叠。
+    失败静默（CDP 不可用不阻断启动/创建）。
+    """
+    try:
+        cdp = await page.context.new_cdp_session(page)
+        t = await cdp.send("Browser.getWindowForTarget")  # 缺省 targetId = 当前 session 页面
+        await cdp.send(
+            "Browser.setWindowBounds",
+            {
+                "windowId": t["windowId"],
+                "bounds": {
+                    "left": left, "top": top, "width": width, "height": height,
+                    "windowState": "normal",
+                },
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"[xhs-leads] 窗口校准失败（{left},{top} {width}x{height}）: {e!r}", flush=True)
+
+
 async def ensure_shell(base_url: str):
     """强制引擎有头启动，打开前端 tab 并置前（壳窗口 = CFT 引擎窗口）。"""
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
@@ -273,6 +309,9 @@ async def ensure_shell(base_url: str):
                 await p.close()
             except Exception:  # noqa: BLE001
                 pass
+    # R-6.22 双窗口左右分屏：壳窗口（主 APP）放主屏左半
+    win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+    await _calibrate_window(page, 0, 0, win_w, win_h)
     try:
         await page.bring_to_front()
     except Exception:  # noqa: BLE001

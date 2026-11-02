@@ -17,6 +17,8 @@ import asyncio
 import json
 import os
 import pathlib
+import re
+import subprocess
 import sys
 import time
 
@@ -24,6 +26,46 @@ from playwright.async_api import async_playwright
 
 from src import config, logger as xlog, risk
 from src import browser_client
+
+# 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
+_SCREEN: tuple[int, int] | None = None
+
+def probe_screen_size() -> tuple[int, int]:
+    """探测主屏分辨率 (宽, 高)。macOS：system_profiler 第一行 Resolution（主屏优先）；
+    失败回退 Finder 合成桌面 bounds；再失败回退 1920x1200。结果模块级缓存。
+
+    用途：启动时壳窗口（主 APP）放主屏左半、采集调试窗口放右半，两个窗口
+    等宽并排、互不重叠（窗口宽 = min(1280, 主屏宽 // 2)）。
+    """
+    global _SCREEN
+    if _SCREEN:
+        return _SCREEN
+    w, h = 1920, 1200
+    try:
+        out = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType"],
+            capture_output=True, text=True, timeout=20,
+        ).stdout
+        for line in out.splitlines():
+            if "Resolution:" in line and " x " in line:
+                nums = re.findall(r"(\d+)\s*[xX]\s*(\d+)", line)
+                if nums:
+                    w, h = int(nums[0][0]), int(nums[0][1])
+                    break
+    except Exception:  # noqa: BLE001（探测失败走回退）
+        pass
+    _SCREEN = (w, h)
+    return _SCREEN
+
+def shell_window_geometry() -> tuple[int, int, int, int]:
+    """双窗口并排布局（R-6.22）：返回 (壳窗口宽, 壳窗口高, 壳窗口 left, 采集窗口 left)。
+
+    主屏宽 SW：壳窗口宽 = min(1280, SW // 2)，位置 (0, 0)（主屏左半）；
+    采集调试窗口同宽，位置 (win_w, 0)（主屏右半）。两窗等宽并排、互不重叠。
+    """
+    sw, _ = probe_screen_size()
+    win_w = min(1280, sw // 2)
+    return win_w, 800, 0, win_w
 
 # R-6.19：Tab2（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
@@ -175,7 +217,11 @@ class AccountEngine:
                         f"http://127.0.0.1:{config.front_port()}/"
                     )
                     launch_kwargs["args"].append(f"--app={shell_url}")  # 壳窗口应用模式
-                    launch_kwargs["args"].append("--window-size=1280,800")  # 壳窗口尺寸（CFT 承载前端）
+                    # R-6.22 双窗口左右分屏：主 APP 放主屏左半、采集调试窗口右半，
+                    # 等宽并排不重叠（win_w = min(1280, 主屏宽 // 2)）
+                    win_w, win_h, _, _ = shell_window_geometry()
+                    launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
+                    launch_kwargs["args"].append("--window-position=0,0")
                 # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
                 # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
                 # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
