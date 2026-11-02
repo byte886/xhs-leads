@@ -222,9 +222,17 @@ def main() -> int:
     async def _shell_main_async(url: str) -> None:
         """壳主流程：与 uvicorn 同一事件循环（CFT 引擎窗口承载前端 + 登录守卫）。
 
-        R-6.18：壳窗口双 Tab——Tab1（应用/登录）固定不可关（keep_shell_tab 监护，
-        关闭即自动恢复）；Tab2（采集）由设置页 collect_tab_visible 开关控制显示。
+        R-6.22p：关主窗=关闭应用——壳窗 close 事件由 keep_shell_tab 调 _request_exit()
+        置位退出信号（srv.should_exit + stop），服务优雅停止、引擎整体清理，两窗口一起关。
+        采集窗（Tab2）关闭仅关闭自身，不重建不退出。
         """
+
+        def _request_exit() -> None:
+            if stop.is_set():
+                return
+            srv.should_exit = True
+            stop.set()
+
         # 先等后端 HTTP 就绪：防止 8791 尚未监听时 goto 被拒 / 守卫误判未登录强制登录
         await _wait_ready()
         from src import shell_window  # noqa: PLC0415
@@ -236,7 +244,9 @@ def main() -> int:
             print(f"[xhs-leads] 壳窗口启动异常（服务仍可用）: {e!r}", file=sys.stderr)
             return
         guard = asyncio.create_task(shell_window.login_guard(win, url, stop))
-        keeper = asyncio.create_task(shell_window.keep_shell_tab(url, stop))
+        keeper = asyncio.create_task(
+            shell_window.keep_shell_tab(url, stop, on_shell_closed=_request_exit)
+        )
         try:
             await asyncio.gather(guard, keeper)
         except asyncio.CancelledError:  # noqa: PERF203（服务停止时随 _amain 取消）
@@ -277,10 +287,18 @@ def main() -> int:
                     f"{config.frontend_base_url()}/（vite HMR，/api 反代到本服务）；"
                     "该 URL 为本后端 API 入口。"
                 )
-        await serve_task  # 返回 = 服务已停止（should_exit 被信号/监控置位）
+        await serve_task  # 返回 = 服务已停止（should_exit 被信号/监控/关窗置位）
         for t in tasks:
             t.cancel()
         watcher.cancel()
+        # R-6.22p：退出清理全部引擎（关主窗退出路径同样经过此处）——
+        # 否则 CFT 子进程残留，用户感知「窗口关了但进程还在」。
+        try:
+            from src import engine_pool  # noqa: PLC0415
+
+            await engine_pool.pool.close_all()
+        except Exception as e:  # noqa: BLE001（清理失败不影响主退出）
+            print(f"[xhs-leads] 引擎清理异常: {e!r}", file=sys.stderr)
 
     asyncio.run(_amain(url))
     print("[xhs-leads] 已退出")

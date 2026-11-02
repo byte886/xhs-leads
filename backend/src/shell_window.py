@@ -657,26 +657,29 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
     return False
 
 
-async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
-    """R-6.21 双窗口监护（事件驱动即时恢复；承接 R-6.19 语义）。
+async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed: "Callable[[], None] | None" = None) -> None:
+    """R-6.22p 窗口监护（关窗语义重定义；承接 R-6.21 双窗口形态）。
 
-    窗口一（Tab1，应用/登录，固定不可关）：
-    - 持有壳 page 引用，close 事件触发**即时重建**（goto 前端 + bring_to_front），
-      用户感知 ≈ 关不掉；引用判活——登录导航（URL 变为小红书登录页）不影响存活判定。
-    - 兜底轮询 5s（事件丢失 / 引擎重建场景）。
+    窗口一（Tab1，应用/登录，主窗口）：
+    - **关主窗 = 关闭应用**：壳窗 close 事件 → 调用 on_shell_closed()（launcher 置位
+      退出信号 + 停 uvicorn + 清理引擎），**不再即时重建**（历史 R-6.18/6.21 语义为
+      防误关即时恢复，用户实测「关闭了就会重启」体验差，R-6.22p 拍板改回直觉关闭）。
+    - 引用判活：登录导航（URL 变为小红书登录页）不影响存活判定。
+    - 兜底轮询 5s：壳窗缺失（close 事件丢失场景）→ 同样触发 on_shell_closed 退出。
+    - 启动早期（ensure_shell 尚未完成）仍允许 _rebuild_shell 兜底创建（初始块）。
+
     窗口二（Tab2 采集，collect_tab_visible 开关控制，独立 CFT 窗口）：
-    - 开关开：采集窗口（explore，任务页即采集窗口）被关闭 → 重建并置前
-      （「只能由开关关闭」）；开关关：不守护、不创建（空闲采集窗口由 /api/app_config
-      联动关闭）。窗口二 = 任务页所在窗口（engine_pool.new_page 独立窗口创建，
-      keep_shell_tab 与开关联动共用同一任务页缓存，杜绝双开窗口）。
-    兜底清理：about:blank 等空白残留 tab（引擎启动默认页如未被复用）随时关闭。
+    - **关采集窗 = 仅关闭采集窗，不重建、不退出应用**（用户主动关闭即保持关闭；
+      重开采集窗 = 设置页开关动作或重启应用，不再由监护自动复活）。
+    - 仅启动初始（开关开）创建一次。
+
+    兜底清理：about:blank 等空白残留 tab 随时关闭。
     """
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
 
     base = base_url.rstrip("/")
     shell_ref: list = [None]  # 当前壳 page 对象（引用判活；登录导航 URL 变化不影响）
-    _recovering: list = [False]  # 防重入：close 事件可能对同一销毁派发多次
-    _last_recover: list = [0.0]  # 时间窗：迟到重发事件（1s 内）直接忽略
+    _watched_pages: set = set()  # R-6.22p：已挂 close 监听的 page 集合（幂等防重挂）
 
     async def _find_shell(ctx):
         # R-6.22j：shell_ref 引用判活优先——壳窗可能正被守卫导航到登录页/搜索页
@@ -698,12 +701,24 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 return p
         return None
 
-    def _watch(page) -> None:
+    def _watch(page, is_shell: bool = False) -> None:
+        # R-6.22p：幂等挂载——初始块/兜底轮询可能对同一 page 重复调用，避免
+        # close 时触发多次回调与重复日志（用对象引用本身去重，防 id 复用误判）。
+        if any(p is page for p in _watched_pages):
+            return
+        _watched_pages.add(page)
+
         def _on_close() -> None:
             if stop.is_set():
                 return
             try:
-                asyncio.get_running_loop().create_task(_recover())
+                if is_shell:
+                    # R-6.22p：主窗被关 = 用户关闭应用 → 整体退出（不重建）
+                    if on_shell_closed is not None:
+                        print("[xhs-leads] 壳窗被关闭，触发应用退出", flush=True)
+                        on_shell_closed()
+                else:
+                    print("[xhs-leads] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
             except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
                 pass
 
@@ -746,53 +761,8 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
         # R-6.22：重建的新窗口默认尺寸/位置，重新校准为左半屏（主 APP 左、调试右）
         await _calibrate_window(page, 0, 0, win_w, win_h)
         shell_ref[0] = page
-        _watch(page)
-        print("[xhs-leads] 壳 Tab1 被关闭，已即时恢复前端 tab（R-6.19 事件驱动）", flush=True)
-
-    async def _recover() -> None:
-        """close 事件处理器：Tab1 / Tab2 被关，按开关状态即时恢复（防重入+时间窗）。"""
-        now = time.monotonic()
-        if stop.is_set() or _recovering[0] or (now - _last_recover[0]) < 1.0:
-            return
-        _last_recover[0] = now
-        _recovering[0] = True
-        try:
-            eng = await engine_pool.pool.get("default")
-            ctx = await eng.context()
-            shell = await _find_shell(ctx)
-            if shell is not None:
-                shell_ref[0] = shell
-            elif shell_ref[0] is None or shell_ref[0].is_closed():
-                await _rebuild_shell(ctx)
-            if config.get_config().get("collect_tab_visible"):
-                async with engine_pool.TAB2_GUARD_LOCK:
-                    if await _find_tab2(ctx, shell_ref[0]) is None:
-                        try:
-                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
-                            await page.goto(
-                                "https://www.xiaohongshu.com/explore",
-                                wait_until="domcontentloaded", timeout=10000,
-                            )
-                            await _ensure_debug_title(page)  # 调试窗口标题守护
-                            # R-6.22：重建的采集窗口重新校准为右半屏（等宽并排不重叠）
-                            win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
-                            await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
-                        except Exception as e:  # noqa: BLE001（导航失败：兜底轮询接管）
-                            print(f"[xhs-leads] Tab2 采集窗口重建失败（兜底轮询接管）: {e!r}", flush=True)
-                        else:
-                            _watch(page)  # 采集窗口被关（窗口×/关 tab）即时重建（R-6.21）
-                            try:
-                                await page.bring_to_front()
-                            except Exception:  # noqa: BLE001
-                                pass
-                            print("[xhs-leads] Tab2 采集窗口被关闭，已按开关重建（独立窗口）", flush=True)
-            # 重建后清理残留空白页（goto 失败页 / 并发残留）
-            await _sweep_blank(ctx, shell_ref[0])
-        except Exception as e:  # noqa: BLE001
-            if not stop.is_set():
-                print(f"[xhs-leads] Tab 监护恢复暂不可用（兜底轮询接管）: {e!r}", flush=True)
-        finally:
-            _recovering[0] = False
+        _watch(page, is_shell=True)
+        print("[xhs-leads] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
 
     async def _sweep_blank(ctx, shell) -> None:
         for p in list(ctx.pages):
@@ -804,22 +774,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 except Exception:  # noqa: BLE001
                     pass
 
-    async def _sweep_tab2_dup(ctx, shell) -> None:
-        """兜底收敛：并发双建时多余 explore 骨架只保留一个（绝不触碰采集结果页）。"""
-        t2s = [
-            p for p in ctx.pages
-            if p is not shell and not p.is_closed()
-            and (p.url or "").startswith("https://www.xiaohongshu.com/explore")
-        ]
-        if len(t2s) > 1:
-            for p in t2s[1:]:
-                try:
-                    await p.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            print(f"[xhs-leads] 收敛重复 Tab2 骨架（{len(t2s)} → 1）", flush=True)
-
-    # 初始：确保 Tab1 存在并挂监听；顺带清理空白残留
+    # 初始：确保 Tab1 存在并挂监听；Tab2 按开关初始创建一次；清理空白残留
     while not stop.is_set():
         try:
             eng = await engine_pool.pool.get("default")
@@ -829,30 +784,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                 await _rebuild_shell(ctx)
             else:
                 shell_ref[0] = shell
-                _watch(shell)
-            await _sweep_blank(ctx, shell_ref[0])
-            break
-        except Exception as e:  # noqa: BLE001
-            if not stop.is_set():
-                print(f"[xhs-leads] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
-            await asyncio.sleep(2.0)
-
-    # 兜底轮询：事件丢失 / 引擎重建场景下仍恢复 Tab1、守护 Tab2、清理空白
-    while not stop.is_set():
-        await asyncio.sleep(5.0)
-        try:
-            eng = await engine_pool.pool.get("default")
-            ctx = await eng.context()
-            shell = await _find_shell(ctx)
-            if shell is not None:
-                shell_ref[0] = shell
-                _watch(shell)
-            elif shell_ref[0] is None or shell_ref[0].is_closed():
-                await _rebuild_shell(ctx)
-            t2 = await _find_tab2(ctx, shell_ref[0])
-            if t2 is not None:
-                _watch(t2)  # 无论谁创建的 Tab2（server 开关联动/引擎），轮询补挂事件监护
-            elif config.get_config().get("collect_tab_visible"):
+                _watch(shell, is_shell=True)
+            # R-6.22p：采集窗仅启动初始创建一次（开关开）；用户关闭后不再自动复活
+            if config.get_config().get("collect_tab_visible"):
                 async with engine_pool.TAB2_GUARD_LOCK:
                     if await _find_tab2(ctx, shell_ref[0]) is None:
                         try:
@@ -862,19 +796,37 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                                 wait_until="domcontentloaded", timeout=10000,
                             )
                             await _ensure_debug_title(page)  # 调试窗口标题守护
-                            # R-6.22：重建的采集窗口重新校准为右半屏（等宽并排不重叠）
                             win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
                             await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
-                        except Exception as e:  # noqa: BLE001（窗口创建失败：下轮再试）
-                            print(f"[xhs-leads] Tab2 采集窗口兜底创建失败（下轮重试）: {e!r}", flush=True)
-                        else:
-                            _watch(page)  # 采集窗口同样事件监护（R-6.21）
-                            try:
-                                await page.bring_to_front()
-                            except Exception:  # noqa: BLE001
-                                pass
-                            print("[xhs-leads] Tab2 采集窗口兜底重建（开关开，独立窗口）", flush=True)
+                            _watch(page, is_shell=False)
+                        except Exception as e:  # noqa: BLE001（创建失败：应用仍可用，仅记录）
+                            print(f"[xhs-leads] Tab2 采集窗口初始创建失败（可稍后经设置开关重开）: {e!r}", flush=True)
             await _sweep_blank(ctx, shell_ref[0])
-            await _sweep_tab2_dup(ctx, shell_ref[0])  # 兜底收敛：并发双建的多余 explore 骨架
-        except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）
+            break
+        except Exception as e:  # noqa: BLE001
+            if not stop.is_set():
+                print(f"[xhs-leads] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
+            await asyncio.sleep(2.0)
+
+    # 兜底轮询：壳窗缺失（close 事件丢失场景）→ 触发应用退出；仅监护不重建
+    while not stop.is_set():
+        await asyncio.sleep(5.0)
+        try:
+            eng = await engine_pool.pool.get("default")
+            ctx = await eng.context()
+            shell = await _find_shell(ctx)
+            if shell is not None:
+                shell_ref[0] = shell
+                _watch(shell, is_shell=True)
+            elif shell_ref[0] is None or shell_ref[0].is_closed():
+                # R-6.22p：主窗已关闭 → 兜底确认退出（不再重建）
+                if on_shell_closed is not None:
+                    print("[xhs-leads] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
+                    on_shell_closed()
+                    break
+            t2 = await _find_tab2(ctx, shell_ref[0])
+            if t2 is not None:
+                _watch(t2, is_shell=False)  # 仅补挂关闭监听（关闭=仅关采集窗）
+            await _sweep_blank(ctx, shell_ref[0])
+        except Exception as e:  # noqa: BLE001（引擎未就绪：下轮再试）
             pass
