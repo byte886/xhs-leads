@@ -16,6 +16,11 @@ async function poll() {
 
 onMounted(() => { poll(); timer = setInterval(poll, 2000) })
 onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
+
+// 壳窗（--app）无浏览器工具栏，内置刷新入口：重新加载前端（登录态/采集数据在库，不受影响）
+function refreshApp() {
+  window.location.reload()
+}
 </script>
 
 <template>
@@ -25,9 +30,11 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
       {{ st.action }}<template v-if="st.keyword">「{{ st.keyword }}」</template>
       第 {{ st.collected }}/{{ st.limit }} 条<template v-if="st.detail"> · {{ st.detail }}</template>
     </span>
+    <button class="sb-refresh" title="刷新应用（重新加载前端）" @click="refreshApp">⟳ 刷新</button>
   </div>
   <div v-else class="status-bar idle">
     <span class="sb-text">{{ st.action }}</span>
+    <button class="sb-refresh" title="刷新应用（重新加载前端）" @click="refreshApp">⟳ 刷新</button>
   </div>
 </template>
 
@@ -35,6 +42,11 @@ onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
 .status-bar {
   font-size: 12px; line-height: 1; padding: 6px 22px; display: flex; align-items: center; gap: 8px;
 }
+.sb-refresh {
+  margin-left: auto; font-size: 12px; line-height: 1; padding: 3px 10px; border-radius: 6px;
+  border: 1px solid #e0e0e0; background: #fff; color: #666; cursor: pointer;
+}
+.sb-refresh:hover { border-color: #c9c9c9; color: #333; }
 .status-bar.busy { background: #fff7e6; color: #b26a00; border-bottom: 1px solid #ffe9c7; }
 .status-bar.idle { background: #fafafa; color: #b0b0b0; border-bottom: 1px solid #f0f0f0; }
 .pulse {
