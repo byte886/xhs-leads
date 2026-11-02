@@ -8,9 +8,11 @@
 前置：8791；9333 headless；引擎登录态在 data/cookies.json（已由 refresh_cookie 落盘）。
 """
 import os, json, urllib.request
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.expanduser('~/Desktop/xhs-leads')
+# 仓库重构（xhs-leads→codex-zhuke）后取可移植路径：脚本向上 2 级 = 仓库根
+ROOT = Path(__file__).resolve().parents[2]
 
 def api_try(cookie_text):
     req = urllib.request.Request('http://127.0.0.1:8791/api/import_cookie',

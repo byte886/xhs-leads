@@ -47,10 +47,12 @@ with sync_playwright() as p:
     if stop_btn.count() == 0:
         stop_btn = pg.locator('button:has-text("开始采集")')
     stop_btn.first.click()
-    pg.wait_for_timeout(2500)
+    # 停止收尾（实测）：toast「已请求停止」瞬态消失快、searchNote 收尾回默认——
+    # 稳定断言 = 状态回落「空闲」且 body 不再有「采集中」
+    pg.wait_for_selector('text=空闲', timeout=30000)
 
     body = pg.inner_text('body')
-    stopped_hint = ('已请求停止' in body) or ('停止' in body and '采集中' not in body)
+    stopped_hint = ('空闲' in body) and ('采集中' not in body)
     print('2) 停止提示/状态回落:', stopped_hint)
 
     # 采集状态应不再显示「采集中」

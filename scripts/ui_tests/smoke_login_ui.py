@@ -18,9 +18,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path('/Users/wenjiechen/Desktop/codex-zhuke')
+ROOT = Path(__file__).resolve().parents[2]
 APP_BIN = str(ROOT / 'dist/XHSLeads.app/Contents/MacOS/XHSLeads')
-REAL_DATA = Path(os.path.expanduser('~/Library/Application Support/xhs-leads/data'))
+# 数据目录可移植：dev/打包统一走仓库 data（此前硬编码 ~/Library/Application Support/xhs-leads/data 已随仓库迁移失效）
+REAL_DATA = ROOT / 'data'
 SMOKE = Path('/tmp/xhsleads_smoke')
 SEQ = Path('/tmp/smoke_seq')
 API = 'http://127.0.0.1:8791'  # 占位；launch 后按日志实际端口覆盖
