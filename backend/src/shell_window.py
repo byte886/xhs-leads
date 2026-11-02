@@ -345,7 +345,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
     ls = await _get_json("/api/login_status")
     kicked_at_start = bool(ls and ls.get("kicked"))
     if ls and ls.get("logged_in") and not kicked_at_start:
-        print("[xhs-leads] 启动已登录——守卫进入运行时轮询（被踢检测）")
+        print("[xhs-leads] 启动已登录——守卫待命（仅响应登录引导 pending）")
     elif kicked_at_start:
         print("[xhs-leads] 启动检测到登录已被平台踢出——APP 前端显示强制登录对话框")
     else:
@@ -353,7 +353,6 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
 
     in_login = False
     cur_force = False
-    _last_kick_notify = 0.0
     while True:
         if stop.is_set():
             return
@@ -368,29 +367,15 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         st = await _get_json("/api/auth/login_begin_state")
         pending = bool(st and st.get("pending"))
         pending_force = bool(st and st.get("force"))
-        ls = await _get_json("/api/login_status")
-        kicked_now = bool(ls and ls.get("kicked"))
+        # R-6.21e（用户拍板）：移除运行时 login_status 被踢轮询——登录失效由**交互异常
+        # 驱动**（采集/发布/客户失败 detail 携带登录信号 → 前端弹强制登录框 → login_begin
+        # pending → 本守卫导航登录页）。守卫只响应 pending（登录引导），不再后台刷登录态。
         if pending:
             cur_force = pending_force
             print(
                 "[xhs-leads] 切换到小红书登录页"
                 f"（{'强制登录·不可关闭' if cur_force else '主动重登·可关闭'}）"
             )
-        elif kicked_now:
-            if time.monotonic() - _last_kick_notify >= 5.0:
-                _last_kick_notify = time.monotonic()
-                print("[xhs-leads] 运行时检测到登录被踢——通知 APP 前端弹强制登录对话框")
-                try:
-                    await win.evaluate_js(
-                        "window.dispatchEvent(new CustomEvent('xhs-leads:kicked'))"
-                    )
-                except Exception as e:  # noqa: BLE001
-                    print(f"[xhs-leads] 前端事件通知失败，刷新 APP 触发检测: {e!r}")
-                    try:
-                        await win.load_url(f"{base}/")
-                    except Exception:  # noqa: BLE001
-                        pass
-            continue
         else:
             continue
 

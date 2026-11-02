@@ -4,8 +4,9 @@ import { appState, coverProxy, setStage, setTab, toast } from '../store'
 import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStats } from '../api'
 import type { DraftItem } from '../api'
 import type { LogItem, Note } from '../types'
+import { isLoginAbnormal } from '../lib/auth'
 
-const emit = defineEmits<{ (e: 'back'): void }>()
+const emit = defineEmits<{ (e: 'back'): void; (e: 'open-login'): void }>()
 
 const title = ref('')
 const body = ref('')
@@ -257,8 +258,10 @@ async function publish() {
       visible: visible.value
     })
     toast(rr.ok ? '发布成功' : `发布失败：${rr.note || '未知原因'}`)
+    if (!rr.ok && isLoginAbnormal(String(rr.note || rr.error || ''))) emit('open-login')
   } catch (e) {
     toast(`发布失败：${(e as Error).message}`)
+    if (isLoginAbnormal((e as Error).message)) emit('open-login')
   } finally {
     publishing.value = false
   }

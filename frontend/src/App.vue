@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { appState, setStage, setTab, toast } from './store'
 import type { Note } from './types'
 import FlowBar from './components/FlowBar.vue'
@@ -12,6 +12,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import ForceLogin from './components/ForceLogin.vue'
 import StatusBar from './components/StatusBar.vue'
 import { apiLoginStatus, apiCleanupImages, apiNotes } from './api'
+import { isLoginAbnormal } from './lib/auth'
 
 // v1.5 工作流 4-Tab：采集 / 创作 / 客户 / 设置（创作、客户、设置用 v-show 保持状态）
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
@@ -23,9 +24,10 @@ const menuPos = ref({ x: 0, y: 0 })
 // 登录 UI 改版（用户拍板）：未登录 / 启动被踢 / 采集中被踢与异常 → 统一弹 APP 内部
 // **强制登录对话框**（ForceLogin，不可关闭），点「去登录」才切小红书登录页。
 // 主动重登（设置页「重新登录」）由 SettingsPanel 直接触发（force=false，可关闭）。
+// R-6.21e（用户拍板）：运行时不再定时轮询刷新登录态——只在**交互失败**携带登录失效
+// 信号时弹框（collectClients / CollectPanel / PublishPage 各失败分支统一 isLoginAbnormal）；
+// 启动/刷新时的 checkLogin / ensureLoginChecked 一次性判定保留。
 const forceOpen = ref(false)
-
-let kickTimer: ReturnType<typeof setInterval> | null = null
 
 function checkLogin() {
   apiLoginStatus(8000).then((lg) => {
@@ -33,29 +35,6 @@ function checkLogin() {
     // 未登录或被踢 → 强制登录对话框（采集中不抢占：让当前采集收尾，失败路径再弹）
     if ((!lg.logged_in || lg.kicked) && !appState.collecting) forceOpen.value = true
   }).catch(() => { /* 后端未就绪静默 */ })
-}
-
-// 运行时被踢兜底：① launcher 守卫 dispatchEvent('xhs-leads:kicked') 通知；② 本页 30s 周期轮询
-// （后端 _LOGIN_CACHE 30s 缓存兜底，轮询打缓存不反复连 CDP）。命中 kicked → 弹强制对话框。
-function onKickedEvent() {
-  apiLoginStatus(8000).then((lg) => {
-    if (!lg.kicked) return // 事件到但状态已恢复（竞态）→ 忽略
-    appState.login = { logged_in: false, nickname: '', kicked: true }
-    forceOpen.value = true
-  }).catch(() => {})
-}
-
-function startKickWatch() {
-  if (kickTimer) clearInterval(kickTimer)
-  // R-6.21d：运行时轮询口径与 checkLogin 统一——只要未登录（含被踢/403 风控墙/
-  // cookie 假阳性等 kicked=False 但页面判否的异常形态）且空闲即弹强制登录对话框；
-  // 不再只认 kicked 字段（修复「登录失效/异常不弹窗」：被踢文案检测盲区兜底）。
-  kickTimer = setInterval(() => {
-    apiLoginStatus(8000).then((lg) => {
-      appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-      if ((!lg.logged_in || lg.kicked) && !appState.collecting) forceOpen.value = true
-    }).catch(() => {})
-  }, 15000)
 }
 
 function openMenu(payload: { note: Note; x: number; y: number }) {
@@ -102,8 +81,8 @@ async function collectClients(note: Note) {
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
       toast('采集失败：' + msg.slice(0, 120))
-      // 登录态/被踢/风控（403 验证码）异常 → 弹 APP 强制登录对话框（用户拍板：异常也弹）
-      if (msg.includes('登录态') || msg.includes('验证码') || msg.includes('被踢')) forceOpen.value = true
+      // R-6.21e：交互异常驱动登录引导——detail 命中登录失效信号（登录/被踢/验证码）→ 弹强制登录框
+      if (isLoginAbnormal(msg)) forceOpen.value = true
       return
     }
     const data = await resp.json()
@@ -147,9 +126,8 @@ async function ensureLoginChecked() {
 
 // 启动/刷新时自动检测登录态（登录 UI 改版：未登录/被踢 → APP 内部强制登录对话框；
 // 不依赖 launcher 直接导航登录页——launcher 仅负责 pending 后导航登录页）。
+// R-6.21e：仅启动判定，无定时轮询——运行时登录失效由交互失败驱动（见 isLoginAbnormal 各分支）。
 onMounted(async () => {
-  window.addEventListener('xhs-leads:kicked', onKickedEvent)
-  startKickWatch()
   await ensureLoginChecked()
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
@@ -170,11 +148,6 @@ onMounted(async () => {
     setTab('collect')
   }
 })
-
-onBeforeUnmount(() => {
-  window.removeEventListener('xhs-leads:kicked', onKickedEvent)
-  if (kickTimer) { clearInterval(kickTimer); kickTimer = null }
-})
 </script>
 
 <template>
@@ -192,7 +165,7 @@ onBeforeUnmount(() => {
 
     <!-- 创作 Tab：克隆编辑器 + AI 工具条 + 发布前质检（v-show 保持编辑状态） -->
     <div v-show="appState.tab === 'create'" class="publish-wrap">
-      <PublishPage ref="publishRef" />
+      <PublishPage ref="publishRef" @open-login="forceOpen = true" />
     </div>
 
     <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
 import { apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes } from '../api'
+import { isLoginAbnormal } from '../lib/auth'
 
 const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void }>()
 
@@ -43,11 +44,9 @@ function buildTaskLabel(): string {
   return `${p.keyword}${f.length ? ' · ' + f.join(' · ') : '（未选筛选）'}`
 }
 
-// 登录 UI 改版（用户拍板）：采集中失败/异常（登录态 / 被踢 / 验证码风控）→ emit open-login
+// 登录 UI 改版（用户拍板）：采集中失败/异常（登录失效/被踢/验证码风控）→ emit open-login
 // → App 弹 APP 内部强制登录对话框（不可关闭），点「去登录」才切小红书登录页。
-function isLoginAbnormal(msg: string): boolean {
-  return msg.includes('登录态') || msg.includes('被踢') || msg.includes('验证码')
-}
+// R-6.21e：统一判定取自 lib/auth（交互异常驱动，无后台轮询）。
 
 let collectTaskId = ''
 let collectTimer: ReturnType<typeof setInterval> | null = null
