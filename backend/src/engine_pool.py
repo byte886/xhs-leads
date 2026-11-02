@@ -331,6 +331,19 @@ class AccountEngine:
         except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
             log.warning("独立采集窗口创建失败，退化为前台新页: %r", e)
         p = await ctx.new_page()
+        # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
+        try:
+            w2, h2, _, l2 = shell_window_geometry()
+            cdp = await p.context.new_cdp_session(p)
+            t = await cdp.send("Browser.getWindowForTarget")
+            await cdp.send(
+                "Browser.setWindowBounds",
+                {"windowId": t["windowId"],
+                 "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
+                            "windowState": "normal"}},
+            )
+        except Exception:  # noqa: BLE001（校准失败不影响任务页可用性）
+            pass
         self._task_page = p
         return p
 

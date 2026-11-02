@@ -540,6 +540,9 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
             for p in ctx.pages:
                 if not p.is_closed() and (p.url or "").startswith(base):
                     win.rebind(p)
+                    # R-6.22：重绑定目标若是重建的新窗口，校准为左半屏布局
+                    win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+                    await _calibrate_window(p, 0, 0, win_w, win_h)
                     print("[xhs-leads] login_guard 已重绑定重建的壳 tab", flush=True)
                     return True
     except Exception:  # noqa: BLE001
@@ -611,6 +614,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
             await page.bring_to_front()
         except Exception:  # noqa: BLE001
             pass
+        # R-6.22：重建的新窗口默认尺寸/位置，重新校准为左半屏（主 APP 左、调试右）
+        win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+        await _calibrate_window(page, 0, 0, win_w, win_h)
         shell_ref[0] = page
         _watch(page)
         print("[xhs-leads] 壳 Tab1 被关闭，已即时恢复前端 tab（R-6.19 事件驱动）", flush=True)
@@ -640,6 +646,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                                 wait_until="domcontentloaded", timeout=10000,
                             )
                             await _ensure_debug_title(page)  # 调试窗口标题守护
+                            # R-6.22：重建的采集窗口重新校准为右半屏（等宽并排不重叠）
+                            win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
+                            await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
                         except Exception as e:  # noqa: BLE001（导航失败：兜底轮询接管）
                             print(f"[xhs-leads] Tab2 采集窗口重建失败（兜底轮询接管）: {e!r}", flush=True)
                         else:
@@ -725,6 +734,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event") -> None:
                                 wait_until="domcontentloaded", timeout=10000,
                             )
                             await _ensure_debug_title(page)  # 调试窗口标题守护
+                            # R-6.22：重建的采集窗口重新校准为右半屏（等宽并排不重叠）
+                            win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
+                            await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
                         except Exception as e:  # noqa: BLE001（窗口创建失败：下轮再试）
                             print(f"[xhs-leads] Tab2 采集窗口兜底创建失败（下轮重试）: {e!r}", flush=True)
                         else:

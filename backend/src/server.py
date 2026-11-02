@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
+from src import shell_window as _shell_window  # noqa: E402（R-6.22 窗口校准：模块级导入，避免各函数重复延迟导入）
 
 log = _log.get("server")
 
@@ -314,6 +315,9 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool]:
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
+            # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
+            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+            await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
             await asyncio.sleep(3)
         await page.evaluate(browser_client._EXTRACT_SRC)
         page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
@@ -465,6 +469,9 @@ async def import_cookies(req: ImportCookiesReq):
             page = await eng.new_page()
             await page.goto("https://www.xiaohongshu.com/explore",
                             wait_until="domcontentloaded", timeout=30000)
+            # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
+            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+            await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
         await page.reload(wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
     except Exception as e:  # noqa: BLE001
@@ -2411,6 +2418,11 @@ async def _sync_tab2_visibility(visible: bool) -> None:
                             from src import shell_window  # noqa: PLC0415
 
                             await shell_window._ensure_debug_title(page)  # 采集调试窗口标题守护
+                            # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
+                            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+                            await shell_window._calibrate_window(
+                                page, _w_l, 0, _w_w, _w_h,
+                            )
                             await page.bring_to_front()
                             log.info("app_config：已创建 Tab2 采集骨架（开关开）")
                         except Exception:  # noqa: BLE001
