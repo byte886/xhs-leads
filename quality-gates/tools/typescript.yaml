@@ -15,9 +15,9 @@ coverage_install: frontend 已装 vitest@2 + @vitest/coverage-v8 + jsdom
 coverage_cmd: cd frontend && npm run coverage
 
 architecture_tool: dependency-cruiser
-architecture_install: （未启用，待组件测试基建落地后再配 .cjs 配置防 ESM 假 PASS）
-architecture_config: dependency-cruiser.config.cjs  # 待建
-architecture_cmd: npx dependency-cruiser --config dependency-cruiser.config.cjs src
+architecture_install: frontend 已装 dependency-cruiser@18
+architecture_config: frontend/.dependency-cruiser.cjs  # R-6.37f（.cjs 防 ESM 假 PASS）
+architecture_cmd: (cd frontend && npx depcruise --config .dependency-cruiser.cjs src --output-type err)
 
 dry_tool: dryer
 dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn frontend/src

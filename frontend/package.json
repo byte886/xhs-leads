@@ -9,7 +9,8 @@
     "build:only": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "cruise": "depcruise --config .dependency-cruiser.cjs src --output-type err"
   },
   "dependencies": {
     "vue": "^3.5.13"
@@ -19,6 +20,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "@vitest/coverage-v8": "^2.1.9",
     "@vue/test-utils": "^2.5.1",
+    "dependency-cruiser": "^18.7.2",
     "jsdom": "^30.1.3",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
