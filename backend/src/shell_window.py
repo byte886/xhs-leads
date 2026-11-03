@@ -608,23 +608,28 @@ async def _guard_monitor_voluntary(win: "ShellWindow", base: str, cs, state) -> 
     return None
 
 
+async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
+    """R-6.36g 拆自 _guard_monitor_forced：捕获到 id_token 分支（等待遮罩→导入验证→成功/回退）。"""
+    try:
+        await injections.inject_once(win.page, "waiting_overlay")
+    except Exception:  # noqa: BLE001
+        pass
+    if await _guard_try_import_cookies(win, base, cs, state):
+        print("[xhs-leads][guard] 登录成功，Cookie 已注入引擎，返回 APP", flush=True)
+        return True
+    print("[xhs-leads][guard] 已捕获登录 Cookie 但引擎验证未通过", flush=True)
+    try:
+        await win.evaluate_js(injections.get("remove_waiting_overlay"))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> bool | None:
     """强制登录单步：返回 True=登录成功 / None=继续监视（离开登录页自动拉回）。"""
     has_id = bool(cs and any(c.get("name") == "id_token" for c in cs))
     if has_id:
-        try:
-            await injections.inject_once(win.page, "waiting_overlay")
-        except Exception:  # noqa: BLE001
-            pass
-        if await _guard_try_import_cookies(win, base, cs, state):
-            print("[xhs-leads][guard] 登录成功，Cookie 已注入引擎，返回 APP", flush=True)
-            return True
-        print("[xhs-leads][guard] 已捕获登录 Cookie 但引擎验证未通过", flush=True)
-        try:
-            await win.evaluate_js(injections.get("remove_waiting_overlay"))
-        except Exception:  # noqa: BLE001
-            pass
-        return None
+        return await _guard_handle_id_token(win, base, cs, state)
     now = time.monotonic()
     if now - state["inject"] >= 10.0:
         state["inject"] = now

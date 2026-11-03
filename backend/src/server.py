@@ -336,14 +336,9 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
     return has_ws, page_logged_in, kicked, risk_verify
 
 
-def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> dict:
-    """R-6.36e 拆自 login_status：判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
-    global _LOGIN_INVALID
-    logged_in = has_ws and page_logged_in and not kicked
-    if kicked or risk_verify:
-        _LOGIN_INVALID = True
-    final_logged_in = logged_in and not _LOGIN_INVALID
-    result = {
+def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in) -> dict:
+    """R-6.36g 拆自 _build_login_status_result：组装结果 dict（状态机+raw 诊断文案）。"""
+    return {
         "status": "kicked" if kicked else ("logged_in" if final_logged_in else "not_logged_in"),
         "logged_in": final_logged_in,
         "kicked": kicked,
@@ -351,6 +346,16 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
         "nickname": "",
         "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'} 风控需验证={'是' if risk_verify else '否'} 失效记忆={'是' if _LOGIN_INVALID else '否'}",
     }
+
+
+def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> dict:
+    """R-6.36e 拆自 login_status：判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
+    global _LOGIN_INVALID
+    logged_in = has_ws and page_logged_in and not kicked
+    if kicked or risk_verify:
+        _LOGIN_INVALID = True
+    final_logged_in = logged_in and not _LOGIN_INVALID
+    result = _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in)
     if final_logged_in and not kicked:
         try:
             risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
