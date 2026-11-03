@@ -265,35 +265,3 @@ class TestCdpSetup:
         assert r.json()["ok"] is False and "未检测到远程调试开启" in r.json()["note"]
 
 
-# ---------- login_status 异常分支 ----------
-class TestLoginStatusError:
-    def test_cookie_read_error(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
-
-        def boom(p):
-            raise ValueError("bad json")
-
-        monkeypatch.setattr(server, "_read_cookie_status", boom)
-        r = client.get("/api/login_status")
-        assert r.json()["status"] == "unknown" and "失败" in r.json()["raw"]
-
-
-# ---------- 真实 cookies.json 解析（补 _read_cookie_status 分支） ----------
-class TestCookieStatusReal:
-    def test_missing_file(self, tmp_path):
-        assert server._read_cookie_status(tmp_path / "cookies.json") == (False, "", True)
-
-    def test_valid_session(self, tmp_path):
-        p = tmp_path / "cookies.json"
-        p.write_text(json.dumps({"cookies": [{"name": "web_session", "value": "abc123"}]}), encoding="utf8")
-        assert server._read_cookie_status(p) == (True, "abc123", True)
-
-    def test_expired_session(self, tmp_path):
-        p = tmp_path / "cookies.json"
-        p.write_text(json.dumps({"cookies": [{"name": "web_session", "value": "abc", "expires": 1}]}), encoding="utf8")
-        assert server._read_cookie_status(p) == (False, "abc", False)
-
-    def test_no_web_session(self, tmp_path):
-        p = tmp_path / "cookies.json"
-        p.write_text(json.dumps({"cookies": [{"name": "other", "value": "x"}]}), encoding="utf8")
-        assert server._read_cookie_status(p) == (False, "", True)

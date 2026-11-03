@@ -9,7 +9,7 @@ from src.server import (
     _cleanup_orphan_images, _cookie_items, _duplicate_published, _img_name,
     _last_publish_ago_minutes, _parse_cookie_text, _publish_count_today,
     _publish_guard, _publish_guard_quota, _publish_guard_time, _publish_week_days,
-    _rank_and_insert, _read_cookie_status, _risk_blocked_until,
+    _rank_and_insert, _risk_blocked_until,
 )
 
 NOON = datetime.datetime(2026, 1, 1, 12, 0)
@@ -42,24 +42,6 @@ class TestParseCookieText:
         c = {x["name"]: x for x in _parse_cookie_text("web_session=1; a1=2; other=3")}
         assert c["web_session"]["httpOnly"] is True
         assert c["other"]["httpOnly"] is False
-
-
-class TestReadCookieStatus:
-    def test_logged_in(self, tmp_path):
-        p = tmp_path / "cookies.json"
-        p.write_text(json.dumps({"cookies": [{"name": "web_session", "value": "abc", "expires": None}]}))
-        ok, ws, exp = _read_cookie_status(p)
-        assert ok and ws == "abc" and exp
-
-    def test_expired(self, tmp_path):
-        p = tmp_path / "cookies.json"
-        p.write_text(json.dumps({"cookies": [{"name": "web_session", "value": "abc", "expires": 1}]}))
-        ok, ws, exp = _read_cookie_status(p)
-        assert not ok and exp is False
-
-    def test_missing_file(self, tmp_path):
-        ok, ws, exp = _read_cookie_status(tmp_path / "nope.json")
-        assert not ok and not ws and exp
 
 
 class TestRankAndInsert:

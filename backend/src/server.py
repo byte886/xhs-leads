@@ -250,43 +250,6 @@ _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半
 # 否则 ForceLogin 文案会误显示「当前已登录」、登录引导无法形成重新登录闭环。
 _LOGIN_INVALID = False
 
-def _read_cookie_status(p: Path) -> tuple[bool, str, bool]:
-    """【R 批 v1.5 已停用留档】读本地 cookies.json 判定登录态（方案 A「读系统 Chrome 落盘副本」遗留）。
-
-    R 批口径：登录态只存引擎独立 profile（引擎 CDP 内存判定，见 login_status / _require_real_login）；
-    本函数不再被 login_status 调用，保留供回溯与旧链路测试参考。
-    返回 (logged_in, web_session 摘要, expires 是否有效)。
-    expires=None 是会话级 Cookie（浏览器会话内一直有效，Chrome 导出不携带过期时间）
-    → 视为有效；有 expires 且在未来才有效。
-    """
-    if not p.exists():
-        return False, "", True
-    ws, exp_ok = _parse_web_session(p)
-    return bool(ws) and exp_ok, ws, exp_ok
-
-
-def _parse_web_session(p: Path) -> tuple[str, bool]:
-    """从 cookies.json 提取 web_session 值及其过期有效性。"""
-    data = json.loads(p.read_text(encoding="utf8"))
-    cookies = data.get("cookies", [])
-    return _web_session_value(cookies), _expires_ok(_web_session_expires(cookies))
-
-
-def _web_session_value(cookies: list) -> str:
-    return next((c.get("value", "") for c in cookies if c.get("name") == "web_session"), "")
-
-
-def _web_session_expires(cookies: list) -> list:
-    return [c.get("expires") for c in cookies if c.get("name") == "web_session"]
-
-
-def _expires_ok(exps: list) -> bool:
-    """expires=None 视为会话级 Cookie（一直有效）；有 expires 且在未来才有效。"""
-    if not exps:
-        return True
-    now_ts = int(time.time())
-    return any(e is None or (e or 0) >= now_ts for e in exps)
-
 
 async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
     """引擎真实登录态（R 批 v1.5；R-6.6 判定升级；R-6.8 被踢检测统一；
@@ -384,7 +347,7 @@ async def login_status():
     **引擎 CDP 内存 Cookie 判定**（web_session 存在即视为有效，与 _require_real_login 同源）。
 
     - 引擎 headless 无窗口（R2），拉取无 Dock/窗口干扰；30s 缓存兜底登录轮询频率。
-    - 旧 cookies.json 链路已停用留档（函数体保留可回溯，见 _read_cookie_status）。
+    - 旧 cookies.json 文件链路（方案 A）已随 R-6.34 收敛移除；登录态唯一权威 = 引擎 CDP。
     """
     import time
     global _LOGIN_INVALID  # R-6.26 失效记忆：函数内赋值 → 须声明全局，否则读为局部 UnboundLocal
@@ -971,123 +934,6 @@ class SearchReq(BaseModel):
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
     account_id: str = ""
 
-
-# ====== R 批 v1.4 下线留档（方案 A/B 旧链路，不删除、保留可回溯） ======
-# 以下函数均属「读系统/目标 Chrome Cookie 库自动续命」旧链路（方案 A 遗留）。
-# R 批拍板：登录态 100% 只依赖引擎独立 profile（R2），不再读系统 Chrome。
-# 函数保留仅供回溯与测试参照，正式链路不调用（见 _require_real_login R 批版）。
-
-
-def _target_chrome_cookie_db(profile_dir: str) -> str | None:
-    """目标调试 Chrome（独立 Profile）的 Cookie 库路径。
-
-    Chrome 156+ 在 Default/Network/Cookies；旧版本在 Default/Cookies。
-    返回 None 表示独立 Profile 尚未创建 / 未初始化（CDP 未配置或从未登录）。
-    """
-    for cand in (
-        os.path.join(profile_dir, "Default", "Network", "Cookies"),
-        os.path.join(profile_dir, "Default", "Cookies"),
-    ):
-        if os.path.exists(cand):
-            return cand
-    return None
-
-
-def _chrome_cookies_to_saved(cookies: list) -> list:
-    """cookie_reader 读取结果（{name,value,domain,path,expires}）→ cookies.json 落盘格式。
-
-    cookies.json 供 Playwright add_cookies 注入，需 secure/httpOnly/sameSite：
-    按域名推断 secure（点前缀 https-only 域名），httpOnly/sameSite 取常见安全默认。
-    """
-    out = []
-    for c in cookies:
-        if not c.get("name") or not c.get("value"):
-            continue
-        domain = c.get("domain", "")
-        out.append({
-            "name": c["name"],
-            "value": c["value"],
-            "domain": domain,
-            "path": c.get("path") or "/",
-            "secure": domain.startswith("."),
-            "httpOnly": c.get("name") in ("web_session", "a1", "xsecappid", "gid"),
-            "sameSite": "Lax",
-        })
-    return out
-
-
-def _persist_restored_cookies(cookies: list) -> int:
-    """把恢复的 Cookie 落盘 cookies.json（方案 A 格式），返回条数。"""
-    import datetime as _dt
-    p = DATA_DIR / "cookies.json"
-    payload = {
-        "cookies": _chrome_cookies_to_saved(cookies),
-        "imported_at": _dt.datetime.now().isoformat(timespec="seconds"),
-    }
-    p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf8")
-    return len(payload["cookies"])
-
-
-def _has_valid_web_session(cookies: list[dict], now_us: int) -> bool:
-    """cookie 列表中是否存在未过期的有效 web_session。"""
-    return any(
-        c.get("name") == "web_session"
-        and c.get("value")
-        and int(c.get("expires") or 0) > now_us
-        for c in cookies
-    )
-
-
-async def _check_target_or_daily(browser_client, cookie_reader, profile_dir: str, now_us: int) -> dict | None:
-    """【R 批 v1.4 已下线留档】旧链路 ②：目标 Chrome（独立 Profile）真实校验。
-
-    不再被 _require_real_login 调用（R 批改走引擎独立 profile 单链路）。
-    仅保留供回溯与测试参照。
-    """
-    """① 目标 Chrome（独立 Profile）真实校验；非独立 Profile 模式直接校验日常 Chrome。
-
-    返回命中结果 dict；都未命中返回 None（继续走恢复链路）。
-    """
-    db = _target_chrome_cookie_db(profile_dir)
-    try:
-        if db is not None:
-            if _has_valid_web_session(cookie_reader.read_cookie_db(db), now_us):
-                return {"ok": True, "code": "ok", "note": "目标 Chrome 真实登录有效"}
-        elif os.environ.get("XHS_BROWSER_MODE") != "profile":
-            # 非独立 Profile 模式（连日常 Chrome 采集）：目标即日常 Chrome，直接校验其 Cookie
-            if _has_valid_web_session(cookie_reader.read_chrome_cookies(), now_us):
-                return {"ok": True, "code": "ok", "note": "日常 Chrome 真实登录有效"}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "code": "read_fail", "note": f"读取 Chrome 登录态失败: {str(e)[:100]}"}
-    return None
-
-
-async def _try_restore_daily(browser_client, cookie_reader, now_us: int) -> dict | None:
-    """【R 批 v1.4 已下线留档】旧链路 ③：自动读日常 Chrome 恢复登录态。
-
-    不再被 _require_real_login 调用（R 批改走引擎独立 profile 单链路）。
-    仅保留供回溯与测试参照。
-    """
-    try:
-        daily = cookie_reader.read_chrome_cookies()
-        if _has_valid_web_session(daily, now_us):
-            n = _persist_restored_cookies(daily)
-            try:
-                await browser_client.inject_saved_cookies_now()
-            except Exception:  # noqa: BLE001
-                pass  # 未连接则下次连接自动注入
-            return {
-                "ok": True, "code": "restored",
-                "note": f"已自动读取日常 Chrome 登录态恢复（{n} 条 Cookie，账号已登录），无需扫码",
-            }
-    except Exception as e:  # noqa: BLE001
-        return {
-            "ok": False, "code": "daily_fail",
-            "note": f"目标 Chrome 未登录，读取日常 Chrome 登录态失败: {str(e)[:80]}（可能需先在钥匙串授权）",
-        }
-    return None
-
-
 async def _require_real_login() -> dict:
     """真实登录校验（采集/搜索前置，解决「纸面登录」空跑问题）。
 
@@ -1099,10 +945,7 @@ async def _require_real_login() -> dict:
     ① 引擎 CDP（登录发生在引擎独立 profile 内，内存 Cookie 最实时）→ 有有效 web_session → OK；
     ② 无 → 拦截，提示在 app 内登录小窗完成登录（扫码/手机号/微信途径不限）。
 
-    旧链路（方案 A/B 遗留，R 批下线留档，代码保留可回溯）：
-    - ② 目标 Chrome（独立 Profile）磁盘 Cookie 库校验 → _check_target_or_daily()
-    - ③ 自动读日常 Chrome（用户已登录账号）恢复 → _try_restore_daily()
-    均不再使用：避免依赖用户日常 Chrome 登录态（隐私 + 「完全独立」口径）。
+    （方案 A/B「读系统/目标 Chrome Cookie 库自动续命」旧链路已随 R-6.34 收敛删除。）
     """
     from src import engine_pool
 
@@ -2099,31 +1942,6 @@ def _save_cookies_file(cookies: list[dict]):
         {"cookies": cookies, "imported_at": datetime.datetime.now().isoformat(timespec="seconds")},
         ensure_ascii=False, indent=2,
     ))
-
-
-def _read_chrome_cookies() -> tuple[list | None, dict | None]:
-    """【R 批 v1.4 已下线留档】读 .xhs-leads-profile 的 Chrome Cookie 库（钥匙串解密）。
-
-    不再被任何正式接口调用（refresh_cookie_from_chrome 已改走引擎独立 profile 单链路）。
-    仅保留供回溯与测试参照；返回 (cookies, 错误响应)；成功时错误为 None。
-    """
-    profile_dir = os.environ.get("XHS_PROFILE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".xhs-leads-profile"
-    )
-    os.environ["XHS_CHROME_USER_DATA_DIR"] = profile_dir
-    from src import cookie_reader
-
-    try:
-        return cookie_reader.read_chrome_cookies(), None
-    except cookie_reader.ChromeCookieReadError as e:
-        status = cookie_reader.keychain_status()
-        if status == "pending":
-            return None, {
-                "ok": False,
-                "need_auth": True,
-                "error": "首次自动读取需要授权：请在弹出的系统钥匙串窗口中输入密码并点「始终允许」，然后重试。",
-            }
-        return None, {"ok": False, "need_auth": False, "error": f"读取 Chrome 登录态失败：{str(e)[:120]}"}
 
 
 @app.post("/api/refresh_cookie_from_chrome")

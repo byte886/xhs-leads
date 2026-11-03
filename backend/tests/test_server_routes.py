@@ -13,9 +13,6 @@ from fastapi.testclient import TestClient
 from src import server
 from src.server import _rank_and_insert, _startup_cleanup, _verify_cookies_or_raise
 
-# fixture 会把 _read_cookie_status 替换为恒真 lambda；需要测真实登录态判定时还原
-_REAL_READ_COOKIE_STATUS = server._read_cookie_status
-
 
 @pytest.fixture()
 def client(monkeypatch, tmp_path):
@@ -583,68 +580,6 @@ class TestImportCookie:
         j = r.json()
         assert j["ok"] is True and j["valid"] is True and j["count"] == 2
         assert (tmp_path / "data" / "cookies.json").exists()
-
-
-class TestLoginStatus:
-    """【退役路径留档】R 批 v1.5 后 /api/login_status 走引擎 CDP 判定（见 _engine_login_state）；
-    文件链路 _read_cookie_status 已停用留档，此处直测其本体（旧链路 expires 语义）。
-    保留目的：保持留档代码诚实——若有人改动留档函数体，expires 三分支语义必须仍成立。"""
-
-    def test_ws_without_expires(self, tmp_path):
-        # web_session 无 expires 字段（exps 空）→ exp_ok=True 视为已登录（or 分支应被杀）
-        d = tmp_path / "data"
-        d.mkdir()
-        (d / "cookies.json").write_text(
-            json.dumps({"cookies": [{"name": "web_session", "value": "abcdef012345"}]}))
-        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
-        assert logged_in is True
-
-    def test_ws_expires_future(self, tmp_path):
-        d = tmp_path / "data"
-        d.mkdir()
-        (d / "cookies.json").write_text(
-            json.dumps({"cookies": [{"name": "web_session", "value": "x",
-                                     "expires": int(time.time()) + 3600}]}))
-        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
-        assert logged_in is True
-
-    def test_ws_expires_past(self, tmp_path):
-        d = tmp_path / "data"
-        d.mkdir()
-        (d / "cookies.json").write_text(
-            json.dumps({"cookies": [{"name": "web_session", "value": "x",
-                                     "expires": int(time.time()) - 60}]}))
-        logged_in, _, exp_ok = server._read_cookie_status(d / "cookies.json")
-        assert logged_in is False
-
-
-class TestReadChromeCookies:
-    """【退役路径留档】server._read_chrome_cookies() 已 R 批 v1.4 下线留档（不再被任何
-    正式接口调用）；保留本类目的 = 保持留档代码诚实——钥匙串 pending/denied 两分支的
-    错误映射若被改动，本类应立即报警，防止留档代码被误改坏。"""
-    def test_pending_auth(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("XHS_PROFILE_DIR", str(tmp_path / "p"))
-        from src import cookie_reader
-
-        def boom(*a, **k):
-            raise cookie_reader.ChromeCookieReadError("未找到库")
-
-        monkeypatch.setattr(cookie_reader, "read_chrome_cookies", boom)
-        monkeypatch.setattr(cookie_reader, "keychain_status", lambda: "pending")
-        cookies, err = server._read_chrome_cookies()
-        assert cookies is None and err["need_auth"] is True and "始终允许" in err["error"]
-
-    def test_other_error(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("XHS_PROFILE_DIR", str(tmp_path / "p"))
-        from src import cookie_reader
-
-        def boom(*a, **k):
-            raise cookie_reader.ChromeCookieReadError("解密失败")
-
-        monkeypatch.setattr(cookie_reader, "read_chrome_cookies", boom)
-        monkeypatch.setattr(cookie_reader, "keychain_status", lambda: "denied")
-        cookies, err = server._read_chrome_cookies()
-        assert cookies is None and err["need_auth"] is False and "读取 Chrome 登录态失败" in err["error"]
 
 
 class TestSaveDraft:
