@@ -1,5 +1,7 @@
 # 容器登录风控诊断记录（2026-10-26）
 
+> ⛔ **退役注（2026-11-03）**：本文属**容器 xhs-mcp 时代**诊断（Docker 无头 + windows 伪指纹 + `--enable-automation` 被平台限流）。R 批已改为 Playwright 引擎独立 profile + stealth、登录态存引擎 profile、登录走壳窗官方登录页 + 守卫捕 id_token，本文的「已排除路径 4 条 / 根治路径 A·B·C」均针对旧容器架构，不再适用。**仅「登录链路抓包成果」一节**（qrcode create/userinfo 接口、X-s 签名要求、二维码渲染方式）作为登录协议知识可回溯。文件保留存档。
+
 ## 现象
 - 容器 xhs-mcp 打开小红书 explore → 被重定向到 `website-login/captcha`「安全验证：请勿频繁操作，稍后重试」
 - `get_login_qrcode` 调用 timed out（多次触发后被限流）

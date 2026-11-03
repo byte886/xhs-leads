@@ -4,6 +4,13 @@
 覆盖清单用例：C5 全选图文 / C6 清空选择 / C7 单选 / C8 下载图片包 / C9 导出 JSON / C10 导出 CSV。
 前置：8791 已启动（free 模式）；引擎 9223 已启动；notes 表有数据（采集页有卡片；无数据自动 SKIP=exit 2）。
 """
+import sqlite3
+import sys
+from pathlib import Path
+
+if not sqlite3.connect(Path(__file__).resolve().parents[2] / 'data' / 'xhs_notes.db').execute('select count(*) from notes').fetchone()[0]:
+    print('SKIP: 无笔记数据（notes 为空，需先采集；不进入 UI 交互）')
+    sys.exit(2)
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
