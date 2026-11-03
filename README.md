@@ -1,6 +1,6 @@
 # xhs-leads
 
-小红书「低粉爆文」采集 / 克隆 / 发布本地工具（FastAPI 后端 + Vue3 前端 + 外部 Chrome CDP，macOS 壳）。
+小红书「低粉爆文」采集 / 克隆 / 发布本地工具（FastAPI 后端 + Vue3 前端 + 有头 CFT 引擎池，macOS 壳）。
 
 **核心产品目标**：帮助个人创业者 / 小商家寻找高价值可参考的低粉爆文笔记进行模仿。
 
@@ -8,7 +8,7 @@
 - **一键克隆**：拉取爆款笔记 + 封面优先/去重提取图片 → 生成可编辑新稿（标题/正文/标签/图片可调）
 - **客户库**：笔记互动用户价值视图（评论区线索 → 意向分级 → 聚合 → 去联系）
 - **草稿 / 发布**：保存草稿后可再编辑再发布；**发布永远手动（红线）**
-- **登录**：外部 Chrome CDP（独立 profile `~/.xhs-leads-profile`），扫码登录 + 读 Chrome Cookie 库
+- **登录**：启动后壳窗（左半）承载前端、未登录弹 ForceLogin，点「去登录」→ 壳窗导航真实小红书登录页 → 捕 `id_token` 注入引擎独立 profile（`<数据目录>/profile`）；采集调试窗在右半（未登录=/login-hint，已登录=explore）。由 `engine_pool.launch_persistent_context` 自动拉起 CFT，无「允许远程调试」弹窗、无钥匙串。
 
 ## 快速开始
 
@@ -39,11 +39,10 @@ bash scripts/packaging/build_mac.sh
 | UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
 | PRD / 调研 / 质检历史 | `docs/`（含 `research/`、`project/`） |
 
-## 状态（2026-10-31）
+## 状态（2026-11-03）
 
-- ✅ 命名与目录结构重构批完成（提交 `8d4f432` + `08a963f`）；仓库改名 `byte886/xhs-leads`（PUBLIC）
-- ✅ 后端 A 批非登录态回归全绿：**100 passed / 8 deselected**
-- ✅ 前端重建成功（`frontend/dist/`）；`.app` 重打包冒烟通过（HTTP 200，标题「XHS Leads · 小红书获客助手」）
-- ✅ UI 回归 t 系列：**PASS=9 / FAIL=0 / SKIP=2**（数据依赖自动跳过）
-- ⏳ e1 真实链路六场景待补跑（需 9223 可见 Chrome + 小红书已登录；登录失效为外部阻塞）
-- ⏳ push 待 e1 全绿后执行（成功前不 push）；C 批 Windows 打包未开工
+- ✅ 命名与目录结构重构批完成；仓库 `byte886/xhs-leads`（PUBLIC）
+- ✅ 壳形态定稿：有头 CFT 应用窗（R-6.16 路线A）+ 双窗布局（壳窗左半 / 采集调试窗右半，960×800）+ 登录闭环（ForceLogin→壳窗真实登录页→id_token 注入）
+- ✅ 后端 A 批非登录态回归全绿；UI 回归 t 系列 PASS=9 / FAIL=0 / SKIP=2
+- ℹ️ e1 真实链路连本机引擎实例 9223（同一登录态 profile），无需另开外部 Chrome
+- ℹ️ `roles/` 与 `constitution/` 的 swarm-forge 六角色（specifier→coder→…→QA）为 clean-code-gauntlet 框架模板，**本仓实际工作流 = SOP 文档 + Playwright 脚本 + pytest**，未启用 Gherkin 流水线，勿按六角色流程开工。
