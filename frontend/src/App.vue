@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { appState, setStage, setTab, toast } from './store'
 import type { Note } from './types'
 import FlowBar from './components/FlowBar.vue'
@@ -127,11 +127,29 @@ async function ensureLoginChecked() {
 // 启动/刷新时自动检测登录态（登录 UI 改版：未登录/被踢 → APP 内部强制登录对话框；
 // 不依赖 launcher 直接导航登录页——launcher 仅负责 pending 后导航登录页）。
 // R-6.21e：仅启动判定，无定时轮询——运行时登录失效由交互失败驱动（见 isLoginAbnormal 各分支）。
+// R-6.26（用户对齐）：恢复**低频**运行时守护——被动失效（cookie 静默过期/被踢/风控拦截
+// 且无交互失败）时，主窗口 APP 必须出现登录提示框，不能只靠调试窗口暴露登录页。
+// 30s 间隔 + 弹框期间跳过：不产生「每几秒弹一次」风暴（ForceLogin 打开时不再查询）。
 onMounted(async () => {
   await ensureLoginChecked()
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
+  // R-6.26 运行时登录守护：低频轮询，发现失效（未登录/被踢/风控需验证）即弹 ForceLogin
+  const loginGuardTimer = window.setInterval(async () => {
+    if (forceOpen.value) return  // 弹框已打开（ForceLogin 内部自行复查），不再重复触发
+    try {
+      const lg = await apiLoginStatus(6000)
+      // R-6.26：未登录 / 被踢 / 风控需人工验证 均视为"需要登录引导"（risk_verify 时
+      // ForceLogin 须保持打开引导扫码，见 R-6.22e）
+      const ok = !!(lg && lg.logged_in) && !lg.kicked && !lg.risk_verify
+      if (!ok) {
+        appState.login = { logged_in: false, nickname: '', kicked: !!(lg && lg.kicked) }
+        forceOpen.value = true
+      }
+    } catch { /* 后端未就绪/瞬时失败：静默，下轮再查 */ }
+  }, 30000)
+  onUnmounted(() => window.clearInterval(loginGuardTimer))
   // 显式 ?stage=pick 调试入口：不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）
   const urlStage = new URLSearchParams(location.search).get('stage')
   if (urlStage === 'pick') {

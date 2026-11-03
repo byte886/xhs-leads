@@ -243,6 +243,11 @@ def _init_tables(con):
 # 因此缓存检测结果 TTL=30s，轮询打缓存，不反复连 Chrome。
 _LOGIN_CACHE = {"t": 0.0, "data": None}
 _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半（CDP inner_text 开销可控）
+# R-6.26 登录失效记忆：登录失效（被踢/风控拦截/页面被平台重定向登录页）是**权威事实**。
+# 即使随后采集调试窗被收起、页面信号消失（id_token 残留 → 判定假阳性 logged_in），
+# 也必须**持续判失效**直到用户真正重新登录成功（import_cookies 引擎验证通过）才解除——
+# 否则 ForceLogin 文案会误显示「当前已登录」、登录引导无法形成重新登录闭环。
+_LOGIN_INVALID = False
 
 def _read_cookie_status(p: Path) -> tuple[bool, str, bool]:
     """【R 批 v1.5 已停用留档】读本地 cookies.json 判定登录态（方案 A「读系统 Chrome 落盘副本」遗留）。
@@ -325,6 +330,7 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
     # 后续 xhsIsLoggedIn 注入判定；body 取全部页面文本拼接。
     bodies: list[str] = []
     page = None
+    login_redirect = False
     if ctx is not None:
         for p in ctx.pages:
             if not p.is_closed() and "xiaohongshu" in (p.url or ""):
@@ -335,8 +341,13 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
                 except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
                     txt = ""
                 bodies.append(txt)
+                # R-6.26：页面 URL 被平台重定向到登录页 → 会话失效的权威信号。
+                # 静默过期时平台不渲染「登录超限」等文本（kicked 文本检测漏掉），
+                # 只把 explore 等页面 302 到 /login——id_token 残留分支据此不再误判已登录。
+                if "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login"):
+                    login_redirect = True
     body = "\n".join(bodies)
-    kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body)
+    kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body) or login_redirect
     # R-6.22e：风控需人工验证信号（与 risk_manual 审计文案同源）。cookie 与页面登录
     # 标记都在但会话被平台风控拦截（「登录后查看」「需人工扫码/验证后重试」）——登录
     # 引导不得据此自动关闭，须保持打开引导用户扫码验证。
@@ -378,10 +389,19 @@ async def login_status():
     - 旧 cookies.json 链路已停用留档（函数体保留可回溯，见 _read_cookie_status）。
     """
     import time
+    global _LOGIN_INVALID  # R-6.26 失效记忆：函数内赋值 → 须声明全局，否则读为局部 UnboundLocal
 
     now = time.monotonic()
     if _LOGIN_CACHE["data"] is not None and now - _LOGIN_CACHE["t"] < _LOGIN_CACHE_TTL:
-        return _LOGIN_CACHE["data"]
+        # R-6.26：失效记忆**覆盖缓存假阳性**——失效信号出现后（kicked 不写新缓存），
+        # 旧缓存里可能还是「正常已登录」，TTL 内命中会误返回 logged_in；失效记忆置位
+        # 时一律按未登录返回，不等 15s 缓存过期。
+        _d = _LOGIN_CACHE["data"]
+        if _LOGIN_INVALID and _d.get("logged_in"):
+            _d = dict(_d)
+            _d["logged_in"] = False
+            _d["status"] = "not_logged_in"
+        return _d
 
     try:
         from src import engine_pool
@@ -390,18 +410,24 @@ async def login_status():
         has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
         # R-6.8：被踢（平台登录超限/请重新登录，cookie 残留假阳性）→ 一律视为未登录
         logged_in = has_ws and page_logged_in and not kicked
+        # R-6.26 失效记忆置位：任一失效信号（被踢/风控需验证；login_redirect 已并入 kicked）
+        # → 记住失效事实，解除只发生在用户真正重新登录成功（import_cookies 验证通过）。
+        # 防「explore 收起后 id_token 残留 → 判定假阳性 logged_in → 文案误显示已登录」。
+        if kicked or risk_verify:
+            _LOGIN_INVALID = True
+        final_logged_in = logged_in and not _LOGIN_INVALID
         result = {
-            "status": "kicked" if kicked else ("logged_in" if logged_in else "not_logged_in"),
-            "logged_in": logged_in,
+            "status": "kicked" if kicked else ("logged_in" if final_logged_in else "not_logged_in"),
+            "logged_in": final_logged_in,
             "kicked": kicked,
             # R-6.22e：风控拦截需人工扫码/验证（cookie 在但会话被平台拦）——登录引导
             # 不得据此自动关闭（前端 ForceLogin 据此保持打开引导扫码）。
             "risk_verify": risk_verify,
             "nickname": "",
-            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'} 风控需验证={'是' if risk_verify else '否'}",
+            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'} 风控需验证={'是' if risk_verify else '否'} 失效记忆={'是' if _LOGIN_INVALID else '否'}",
         }
         # 登录恢复闭环：引擎真实登录态有效 → 自动解除该账号软风控
-        if logged_in and not kicked:
+        if final_logged_in and not kicked:
             try:
                 risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
             except Exception:  # noqa: BLE001
@@ -495,6 +521,7 @@ async def login_cancel():
 @app.post("/api/auth/import_cookies")
 async def import_cookies(req: ImportCookiesReq):
     """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
+    global _LOGIN_INVALID  # R-6.26 失效记忆解除点（登录成功验证通过时置 False）
     from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
 
     pw = []
@@ -559,6 +586,8 @@ async def import_cookies(req: ImportCookiesReq):
     logged_in = has_ws and page_logged_in and not kicked
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
+        # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
+        _LOGIN_INVALID = False
         _LOGIN_GATE["pending"] = False
         _LOGIN_GATE["force"] = False
     return {
