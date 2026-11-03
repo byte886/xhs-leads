@@ -12,12 +12,14 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   │   ├── server.py          #   FastAPI 应用 :8791（采集/评分/克隆/客户库/草稿/发布护栏）
 │   │   ├── config.py          #   统一配置中心（ROOT/DATA_DIR/profile 归一）
 │   │   ├── browser_client.py  #   Chrome/CFT 驱动封装（CDP + 引擎层）
-│   │   ├── engine_pool.py     #   多账户引擎池 + 生命周期管理
+│   │   ├── engine_pool.py     #   CFT 引擎拉起 + 生命周期 + 壳窗几何
+│   │   ├── shell_window.py    #   有壳窗/采集窗双窗（--app 路由）+ 登录守卫
+│   │   ├── mirror.py          #   设置→调试视图截图流
 │   │   ├── collect_pipeline.py#   采集流水线
 │   │   ├── score.py           #   低粉爆款 4 维评分
-│   │   ├── cookie_reader.py   #   Cookie 读取（Chrome 库）
+│   │   ├── cookie_reader.py   #   （历史留档；读系统 Chrome Cookie 链路已停用）
 │   │   ├── intent.py / llm_service.py / risk.py   # 意向分级 / LLM 门控 / 风控状态机
-│   │   ├── license.py / jsonio.py / logger.py     # 激活码 / JSON 存取 / 日志审计
+│   │   ├── license.py / jsonio.py / logger.py / injections.py  # 激活码 / JSON / 日志 / 页面注入
 │   ├── tests/                 # pytest 套件（17 文件；登录态链路单列 test_real_login.py）
 │   ├── pyproject.toml         # 后端工程与 import-linter 契约
 │   ├── pytest.ini             # pythonpath=src / testpaths=tests / timeout=60
