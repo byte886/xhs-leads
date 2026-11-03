@@ -3,12 +3,13 @@ root_package = "src"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "leaf modules stay pure (score/cookie_reader 无内部依赖)"
+name = "纯叶子模块保持独立（config/logger/score/jsonio/intent/injections/llm_service 互不依赖）"
 type = "independence"
-modules = ["src.score", "src.cookie_reader"]
+modules = ["src.config", "src.logger", "src.score", "src.jsonio", "src.intent", "src.injections", "src.llm_service"]
 
 [[tool.importlinter.contracts]]
-name = "server is top layer (任何模块不得依赖 server，防循环)"
+name = "server 是顶层（任何模块不得依赖 server，防循环）"
 type = "forbidden"
 source_modules = ["src"]
 forbidden_modules = ["src.server"]
+# 基线已知违规：mirror.py 懒加载 src.server._COLLECT_TASKS（merge 门阶段需裁决）

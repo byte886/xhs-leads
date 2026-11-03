@@ -1,33 +1,26 @@
-# Quality Gates — 维度与阈值声明（语言无关）
-# 只声明"查什么 + 阈值"；具体工具与命令见 tools/<语言>.yaml（生成器按语言注入）。
-# 修改纪律：阈值改动必须同步本文件 + constitution/engineering.prompt + README.md。
-#
-# when 触发时机四档（落地 4 决策：关卡按成本裁剪）
-#   commit    = 每次提交必跑（低成本高收益，别拖慢开发）
-#   merge     = 合并/发布前跑（成本高收益高，关键时刻再上）
-#   optional  = 可选维度（quality-check.sh --with-dry 等显式启用）
-#   on-demand = 按需启用（如多 Agent 流水线，测试/评估体系时用）
-#
-# 阈值默认值 = Bob 建议（人 ≤4 / agent 6~8），使用中发现不对再按建议方向调整。
+# Quality Gates — codex-zhuke 质量关卡（commit/merge 阈值声明）
+# 模板出处：clean-code-gauntlet skill templates/project/quality-gates/gates.yaml
+# 本文件只声明"查什么+阈值"；工具命令见 tools/python.yaml。
 
 维度:
   复杂度_CRAP:
     when: commit
-    圈复杂度: { 阈值: "≤8", 说明: "Bob 对 Agent 的放宽阈值；人类标准 ≤4" }
-    CRAP分:  { 阈值: "<30", 说明: "≥30 高风险，必须重构或补测试" }
+    圈复杂度: { 阈值: "≤8", 说明: "Bob 对 Agent 放宽阈值；人类标准 ≤4" }
+    CRAP分:  { 阈值: "<30", 说明: "≥30 高风险：重构或补测试" }
   覆盖率:
     when: commit
-    行覆盖: { 阈值: "核心模块 ≥80%，其余 ≥60%", 说明: "可按项目调整；P4 实验证明覆盖率是弱判别器，只当底线不当目标" }
+    行覆盖:
+      核心模块: { 阈值: "≥80%", 模块: [server, engine_pool, browser_client, collect_pipeline, shell_window, mirror] }
+      其余模块: { 阈值: "≥60%", 说明: "config/logger/score/risk/license/injections/intent/jsonio/llm_service" }
   变异测试:
     when: merge
-    存活变异体: { 阈值: "=0", 说明: "允许交接的唯一标准；等价变异体人工标注后可跳过" }
+    存活变异体: { 阈值: "=0", 说明: "等价变异体人工登记后豁免（EQUIVALENT-MUTANTS.md）" }
   架构依赖:
     when: merge
-    依赖违规: { 阈值: "=0", 说明: "依赖方向只允许高层→低层；有明确分层边界时才启用" }
-    循环依赖: { 阈值: "=0", 说明: "A→B→A 死结，任何循环都必须打破" }
+    依赖违规: { 阈值: "=0", 说明: "契约见 backend/pyproject.toml [tool.importlinter]" }
+    循环依赖: { 阈值: "=0", 说明: "engine_pool↔browser_client/shell_window 现存 lazy-import 环为基线已知项" }
 
-# 可选维度（按需启用）
 可选维度:
   DRY重复代码:
     when: optional
-    说明: "dryer（Bob 多语言版，覆盖 TS/Go/Rust/Python）或 dry4go（Go 专用）；命令见各语言映射表 dry_* 字段，quality-check.sh --with-dry 启用（merge 阶段）"
+    说明: "dryer --threshold 0.82；quality-check.sh --with-dry（merge 阶段）"
