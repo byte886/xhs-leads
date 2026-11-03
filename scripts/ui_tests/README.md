@@ -57,7 +57,7 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | b05 | b05_misc_cards.py | 结论标签/打开原作品/复制链接 | ❌ | 已评分卡片 |
 | b06 | b06_clients_export.py | 导出线索 CSV | ❌ | clients 表有数据 |
 | b07 | b07_license_ui.py | free 状态条+activation 激活 | ❌ | 8791 free + 8792 activation 双实例 + /tmp/b07_code.txt 激活码 |
-| 待办 | G4 登录闭环 E2E 重写 | 旧登录闭环脚本的替代：未登录弹窗→去登录→壳窗导航官方登录页→扫码闸口→Tab2 联动 explore→ForceLogin 自动关→重采。**需用户扫码闸口**，下一迭代（2026-11-03 关闭本轮，不产无法验证的脚本） | — | — |
+| g4 | g4_login_e2e_skeleton.py | **登录闭环 E2E 骨架（只观察不模拟）**：前提校验→等用户点「去登录」→上报二维码出现→停住等扫码（5min）→login_status 落定后跑 A1-A5 断言（四元组/gate 清/explore 页面集/.force-mask 关/引擎 id_token） | ❌ | ⚠️ **需用户扫码闸口**：未登录 2 页基线实例 + 手机小红书 App 扫壳窗二维码；不写死模拟逻辑 |
 
 ## E1 真实链路系列（连引擎调试端口 9223）
 
