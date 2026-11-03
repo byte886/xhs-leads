@@ -136,7 +136,7 @@ async def _shutdown_close_engines():
         from src import browser_client
         await asyncio.wait_for(browser_client.stop(), timeout=20)
     except Exception as e:  # noqa: BLE001
-        print(f"[shutdown] 引擎关闭异常（非阻断）: {e}")
+        print(f"[xhs-leads][server] 引擎关闭异常（非阻断）: {e}")
 
 
 @app.post("/api/cleanup_images")

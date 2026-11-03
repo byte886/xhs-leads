@@ -232,7 +232,7 @@ async def _launch_app_window(
             except Exception as e:  # noqa: BLE001（路由失败：重试，仍失败则调用方兜底）
                 import traceback as _tb
                 print(
-                    f"[xhs-leads] --app 窗口路由失败（第{attempt + 1}/3 次）: {e!r}\n"
+                    f"[xhs-leads][shell] --app 窗口路由失败（第{attempt + 1}/3 次）: {e!r}\n"
                     f"  cwd={os.getcwd()} executable={executable!r}\n"
                     f"  user_data_dir={user_data_dir!r} url={url!r}\n"
                     f"  {''.join(_tb.format_exception_only(type(e), e)).strip()}",
@@ -271,7 +271,7 @@ async def _calibrate_window(page, left: int, top: int, width: int, height: int) 
             last_err = e
             await asyncio.sleep(1.0)
     print(
-        f"[xhs-leads] 窗口校准失败（{left},{top} {width}x{height}，"
+        f"[xhs-leads][shell] 窗口校准失败（{left},{top} {width}x{height}，"
         f"重试 3 次仍失败）: {last_err!r}",
         flush=True,
     )
@@ -315,7 +315,7 @@ async def ensure_shell(base_url: str):
             last_err = e
         await asyncio.sleep(0.5)
     else:
-        print(f"[xhs-leads] 壳 tab 导航前端未成功（最后错误: {last_err!r}）", flush=True)
+        print(f"[xhs-leads][shell] 壳 tab 导航前端未成功（最后错误: {last_err!r}）", flush=True)
     # R-6.19：导航成功后清理其余空白残留 tab（启动默认页已复用，此处仅清理异常残留）
     for p in list(ctx.pages):
         if p is not page and not p.is_closed() and (p.url or "").strip() in ("", "about:blank"):
@@ -398,14 +398,14 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             _loop = asyncio.get_running_loop()
             _loop.create_task(_safe_force_login())
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+            print(f"[xhs-leads][guard] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
 
     async def _safe_force_login() -> None:
         try:
             if not await injections.inject_once(win.page, "force_login"):
-                print("[xhs-leads] 强制登录 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
+                print("[xhs-leads][guard] 强制登录 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+            print(f"[xhs-leads][guard] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
 
     # R-6.26c：登录页窗口适配注入（居中 + 需要滚动条就出现）——幂等，未就绪静默等补注
     def _inject_login_fit() -> None:
@@ -413,20 +413,20 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             _loop = asyncio.get_running_loop()
             _loop.create_task(_safe_login_fit())
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
+            print(f"[xhs-leads][guard] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
 
     async def _safe_login_fit() -> None:
         try:
             if not await injections.inject_once(win.page, "login_fit"):
-                print("[xhs-leads] 登录页适配 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
+                print("[xhs-leads][guard] 登录页适配 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
+            print(f"[xhs-leads][guard] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
 
     async def _inject_active_close() -> None:
         try:
             await win.evaluate_js(injections.get("active_close").replace("__BASE__", f"{base}/"))
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] 主动重登关闭按钮注入暂未成功: {e!r}", flush=True)
+            print(f"[xhs-leads][guard] 主动重登关闭按钮注入暂未成功: {e!r}", flush=True)
 
     async def _get_json(path: str):
         # R-6.16 关键修复：守卫与 uvicorn 同事件循环后，同步 urllib 每 0.5s 轮询会
@@ -450,11 +450,11 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
     ls = await _get_json("/api/login_status")
     kicked_at_start = bool(ls and ls.get("kicked"))
     if ls and ls.get("logged_in") and not kicked_at_start:
-        print("[xhs-leads] 启动已登录——守卫待命（仅响应登录引导 pending）")
+        print("[xhs-leads][guard] 启动已登录——守卫待命（仅响应登录引导 pending）")
     elif kicked_at_start:
-        print("[xhs-leads] 启动检测到登录已被平台踢出——APP 前端显示强制登录对话框")
+        print("[xhs-leads][guard] 启动检测到登录已被平台踢出——APP 前端显示强制登录对话框")
     else:
-        print("[xhs-leads] 启动未登录——APP 前端显示强制登录对话框")
+        print("[xhs-leads][guard] 启动未登录——APP 前端显示强制登录对话框")
 
     in_login = False
     cur_force = False
@@ -478,7 +478,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         if pending:
             cur_force = pending_force
             print(
-                "[xhs-leads] 切换到小红书登录页"
+                "[xhs-leads][guard] 切换到小红书登录页"
                 f"（{'强制登录·不可关闭' if cur_force else '主动重登·可关闭'}）"
             )
             # R-6.22g：强制登录导航前清除壳窗口 xiaohongshu Cookie——登录页若检测到
@@ -487,23 +487,23 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             if cur_force:
                 try:
                     n = await win.clear_domain_cookies("xiaohongshu.com")
-                    print(f"[xhs-leads] 强制登录前清除壳窗口小红书 Cookie {n} 条")
+                    print(f"[xhs-leads][guard] 强制登录前清除壳窗口小红书 Cookie {n} 条")
                 except Exception as e:  # noqa: BLE001
-                    print(f"[xhs-leads] 清除壳窗口 Cookie 异常: {e!r}")
+                    print(f"[xhs-leads][guard] 清除壳窗口 Cookie 异常: {e!r}")
         else:
             continue
 
         # ---- 导航到小红书真实登录页（双保险） ----
         try:
             await win.load_url(XHS_LOGIN_URL)
-            print("[xhs-leads] load_url 已调用（无异常）")
+            print("[xhs-leads][guard] load_url 已调用（无异常）")
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] load_url 异常: {e!r}")
+            print(f"[xhs-leads][guard] load_url 异常: {e!r}")
         try:
             await win.evaluate_js(f"window.location.href = '{XHS_LOGIN_URL}'")
-            print("[xhs-leads] evaluate_js 导航已下发（双保险）")
+            print("[xhs-leads][guard] evaluate_js 导航已下发（双保险）")
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads] evaluate_js 异常: {e!r}")
+            print(f"[xhs-leads][guard] evaluate_js 异常: {e!r}")
         in_login = True
         ok = False
         _t_last_import = 0.0
@@ -535,7 +535,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                     _t_last_import = time.monotonic()
                     r = await _post_json("/api/auth/import_cookies", {"cookies": cs})
                     if r and r.get("logged_in"):
-                        print("[xhs-leads] 主动重登成功，Cookie 已注入引擎，返回 APP")
+                        print("[xhs-leads][guard] 主动重登成功，Cookie 已注入引擎，返回 APP")
                         ok = True
                         break
                 try:
@@ -543,7 +543,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                 except Exception:  # noqa: BLE001
                     cur = ""
                 if cur.startswith(base):
-                    print("[xhs-leads] 主动重登已关闭（回 APP，登录态不变）")
+                    print("[xhs-leads][guard] 主动重登已关闭（回 APP，登录态不变）")
                     await _post_json("/api/auth/login_cancel", {})
                     break
             else:
@@ -558,11 +558,11 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                         _t_last_import = time.monotonic()
                         r = await _post_json("/api/auth/import_cookies", {"cookies": cs})
                         if r and r.get("logged_in"):
-                            print("[xhs-leads] 登录成功，Cookie 已注入引擎，返回 APP")
+                            print("[xhs-leads][guard] 登录成功，Cookie 已注入引擎，返回 APP")
                             ok = True
                             break
                         print(
-                            "[xhs-leads] 已捕获登录 Cookie 但引擎验证未通过:",
+                            "[xhs-leads][guard] 已捕获登录 Cookie 但引擎验证未通过:",
                             (r or {}).get("error", "未知原因（等待下次判定）"),
                         )
                         try:
@@ -579,7 +579,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                     except Exception:  # noqa: BLE001
                         cur = ""
                     if cur and "/login" not in cur:
-                        print(f"[xhs-leads] 离开登录页（{cur[:70]}），强制拉回登录页")
+                        print(f"[xhs-leads][guard] 离开登录页（{cur[:70]}），强制拉回登录页")
                         try:
                             await win.load_url(XHS_LOGIN_URL)
                         except Exception:  # noqa: BLE001
@@ -622,7 +622,7 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
                     # R-6.22：重绑定目标若是重建的新窗口，校准为左半屏布局
                     win_w, win_h, _, _ = engine_pool.shell_window_geometry()
                     await _calibrate_window(p, 0, 0, win_w, win_h)
-                    print("[xhs-leads] login_guard 已重绑定重建的壳 tab", flush=True)
+                    print("[xhs-leads][guard] login_guard 已重绑定重建的壳 tab", flush=True)
                     return True
     except Exception:  # noqa: BLE001
         pass
@@ -674,7 +674,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             u = p.url or ""
             if ("xiaohongshu.com" in u and "/login" not in u) or "login-hint" in u:
                 print(
-                    f"[xhs-leads] _find_tab2 命中: url={u[:60]!r} "
+                    f"[xhs-leads][tab2] _find_tab2 命中: url={u[:60]!r} "
                     f"shell_ref_is_self={(shell is not None and p is shell)}",
                     flush=True,
                 )
@@ -694,17 +694,17 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
                 if is_shell:
                     # R-6.22p：主窗被关 = 用户关闭应用 → 整体退出（不重建）
                     if on_shell_closed is not None:
-                        print("[xhs-leads] 壳窗被关闭，触发应用退出", flush=True)
+                        print("[xhs-leads][keeper] 壳窗被关闭，触发应用退出", flush=True)
                         on_shell_closed()
                 else:
-                    print("[xhs-leads] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
+                    print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
             except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
                 pass
 
         try:
             # R-6.22j 取证：记录壳窗 close 时的 URL，定位「壳窗被关」来源
             page.on("close", lambda: print(
-                f"[xhs-leads] 壳窗 close 事件（url={page.url!r}）", flush=True))
+                f"[xhs-leads][keeper] 壳窗 close 事件（url={page.url!r}）", flush=True))
             page.on("close", _on_close)
         except Exception:  # noqa: BLE001
             pass
@@ -741,7 +741,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         await _calibrate_window(page, 0, 0, win_w, win_h)
         shell_ref[0] = page
         _watch(page, is_shell=True)
-        print("[xhs-leads] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
+        print("[xhs-leads][keeper] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
 
     async def _tab2_target_url():
         """Tab2 采集窗的目标 URL：未登录 → /login-hint 提示页；已登录 → None（explore）。
@@ -793,7 +793,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             if _urls != _last_urls:
                 _last_urls = _urls
                 print(
-                    "[xhs-leads] keeper 页面集="
+                    "[xhs-leads][keeper] keeper 页面集="
                     + " | ".join((p.url or "")[:45] for p in ctx.pages if not p.is_closed())
                     + "  shell_ref=" + ((shell_ref[0].url or "")[:30] if shell_ref[0] else "None"),
                     flush=True,
@@ -816,7 +816,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
                     if t2 is not None:
                         try:
                             print(
-                                f"[xhs-leads] Tab2 复用前 url={t2.url[:60]!r} t2_url={_t2_url!r}",
+                                f"[xhs-leads][tab2] Tab2 复用前 url={t2.url[:60]!r} t2_url={_t2_url!r}",
                                 flush=True,
                             )
                             if _t2_url and "login-hint" not in (t2.url or ""):
@@ -825,10 +825,10 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
                             await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
                             _watch(t2, is_shell=False)
                         except Exception as e:  # noqa: BLE001
-                            print(f"[xhs-leads] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
+                            print(f"[xhs-leads][tab2] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
                     else:
                         print(
-                            f"[xhs-leads] Tab2 无残留，新建（t2_url={_t2_url!r}）", flush=True,
+                            f"[xhs-leads][tab2] Tab2 无残留，新建（t2_url={_t2_url!r}）", flush=True,
                         )
                         for _attempt in range(2):
                             try:
@@ -844,15 +844,15 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
                                 break
                             except Exception as e:  # noqa: BLE001（创建失败：应用仍可用，仅记录）
                                 if _attempt == 0:
-                                    print(f"[xhs-leads] Tab2 采集窗口首次创建失败（延迟重试）: {e!r}", flush=True)
+                                    print(f"[xhs-leads][tab2] Tab2 采集窗口首次创建失败（延迟重试）: {e!r}", flush=True)
                                     await asyncio.sleep(4.0)
                                 else:
-                                    print(f"[xhs-leads] Tab2 采集窗口初始创建失败（可稍后经设置开关重开）: {e!r}", flush=True)
+                                    print(f"[xhs-leads][tab2] Tab2 采集窗口初始创建失败（可稍后经设置开关重开）: {e!r}", flush=True)
             await _sweep_blank(ctx, shell_ref[0])
             break
         except Exception as e:  # noqa: BLE001
             if not stop.is_set():
-                print(f"[xhs-leads] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
+                print(f"[xhs-leads][keeper] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
             await asyncio.sleep(2.0)
 
     # 兜底轮询：壳窗缺失（close 事件丢失场景）→ 触发应用退出；仅监护不重建
@@ -865,7 +865,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             if _urls != _last_urls:
                 _last_urls = _urls
                 print(
-                    "[xhs-leads] keeper 页面集="
+                    "[xhs-leads][keeper] keeper 页面集="
                     + " | ".join((p.url or "")[:45] for p in ctx.pages if not p.is_closed())
                     + "  shell_ref=" + ((shell_ref[0].url or "")[:30] if shell_ref[0] else "None"),
                     flush=True,
@@ -877,7 +877,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             elif shell_ref[0] is None or shell_ref[0].is_closed():
                 # R-6.22p：主窗已关闭 → 兜底确认退出（不再重建）
                 if on_shell_closed is not None:
-                    print("[xhs-leads] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
+                    print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
                     on_shell_closed()
                     break
             t2 = await _find_tab2(ctx, shell_ref[0])
