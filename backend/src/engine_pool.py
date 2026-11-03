@@ -25,7 +25,7 @@ import time
 from playwright.async_api import async_playwright
 
 from src import config, injections, logger as xlog, risk
-from src import browser_client
+from src.engine_types import builtin_cft_candidates
 
 # 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
 _SCREEN: tuple[int, int] | None = None
@@ -196,7 +196,7 @@ class AccountEngine:
                 # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
                 # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
                 # CFT 缺失时回退 channel="chrome"（系统 Google Chrome 兜底）。
-                cft = browser_client._builtin_cft_candidates()
+                cft = builtin_cft_candidates()
                 if cft:
                     launch_kwargs["executable_path"] = cft
                     launch_kwargs.pop("channel", None)
@@ -332,7 +332,7 @@ class AccountEngine:
             src_page = ctx.pages[0]
             executable = None
             try:
-                cfts = browser_client._builtin_cft_candidates()
+                cfts = builtin_cft_candidates()
                 if cfts:
                     executable = cfts  # 返回值为单个路径 str（非列表），勿取 [0]
             except Exception:  # noqa: BLE001（CFT 探测失败：走 window.open 普通窗口兜底）

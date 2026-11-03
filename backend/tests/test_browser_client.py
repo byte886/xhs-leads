@@ -4,6 +4,7 @@ import sys
 
 from src import browser_client as bc
 from src import config
+from src import engine_types as etc
 
 
 class TestShouldStopCollect:
@@ -55,7 +56,7 @@ class TestBuiltinCftCandidates:
     def test_dev_mode_no_meipass_returns_none_or_home(self, monkeypatch):
         """开发态无 _MEIPASS：候选=home 下 CFT；不存在则 None。"""
         monkeypatch.delattr(sys, "_MEIPASS", raising=False)
-        r = bc._builtin_cft_candidates()
+        r = etc.builtin_cft_candidates()
         # 开发机未必装 CFT → None 或 home 路径都接受（只固化不抛异常）
         assert r is None or "chrome.for.testing" in r.lower() or "Chrome for Testing" in r
 

@@ -5,7 +5,9 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "纯叶子模块保持独立（config/logger/score/jsonio/intent/injections/llm_service 互不依赖）"
 type = "independence"
-modules = ["src.config", "src.logger", "src.score", "src.jsonio", "src.intent", "src.injections", "src.llm_service"]
+modules = ["src.config", "src.logger", "src.score", "src.intent", "src.injections", "src.llm_service"]
+# R-6.36c 用户拍板：llm_service→jsonio 为合法依赖（jsonio 保持叶子身份，
+# 从本 independence 清单移除；其余模块仍不得 import jsonio）
 
 [[tool.importlinter.contracts]]
 name = "server 是顶层（任何模块不得依赖 server，防循环）"

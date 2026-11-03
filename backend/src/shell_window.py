@@ -452,9 +452,9 @@ async def ensure_shell(base_url: str):
     # （窗口仍是带菜单栏/标签栏的普通 Chrome 窗口）。统一改走 --app 命令行路由
     # （与采集调试窗口同法）：同实例弹出应用模式窗口（无菜单栏/标签栏/地址栏），
     # 成功后关闭初始普通窗口（keep_shell_tab 此时尚未启动，close 无监听者，无竞态）。
-    from src import browser_client  # noqa: PLC0415
+    from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
 
-    cfts = browser_client._builtin_cft_candidates()
+    cfts = builtin_cft_candidates()
     app_page = await _launch_app_window(
         ctx, base,
         user_data_dir=eng.user_data_dir,
@@ -826,9 +826,9 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         # 路由不可用时退回普通 tab（能力兜底）。
         win_w, win_h, _, _ = engine_pool.shell_window_geometry()
         eng = await engine_pool.pool.get("default")
-        from src import browser_client  # noqa: PLC0415
+        from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
 
-        cfts = browser_client._builtin_cft_candidates()
+        cfts = builtin_cft_candidates()
         page = await _launch_app_window(
             ctx, base,
             user_data_dir=eng.user_data_dir,
