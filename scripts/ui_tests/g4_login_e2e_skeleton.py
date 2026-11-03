@@ -49,7 +49,7 @@ def api(path, method="GET", body=None):
 
 def cdp_pages():
     with urllib.request.urlopen(CDP + "/json/list", timeout=5) as r:
-        return json.loads(r.read().decode())
+        return [p for p in json.loads(r.read().decode()) if p.get("type") == "page"]
 
 
 def die(code, msg):
@@ -82,7 +82,7 @@ def wait_qrcode():
     """步骤③观察：壳窗导航到官方登录页 = 二维码出现。脚本不点「去登录」，
     由用户在 ForceLogin 弹框上物理点击（或提醒用户点）。"""
     print("[G4] 请用户在 ForceLogin 弹框点「去登录」（脚本不代点）…")
-    for i in range(60):  # 最长 60s 等用户点
+    for i in range(180):  # 最长 180s 等用户点（人类操作节奏）
         for p in cdp_pages():
             if "xiaohongshu.com/login" in (p.get("url") or ""):
                 print("[G4] ✓ 二维码页已出现（壳窗已导航 xiaohongshu.com/login）")
@@ -90,7 +90,7 @@ def wait_qrcode():
                       "最长等 5 分钟。")
                 return
         time.sleep(1)
-    die(1, "60s 内壳窗未导航到登录页——用户未点「去登录」？或守卫未轮询到 pending？")
+    die(1, "180s 内壳窗未导航到登录页——用户未点「去登录」？或守卫未轮询到 pending？")
 
 
 def wait_logged_in():
