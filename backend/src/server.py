@@ -243,6 +243,11 @@ _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半
 _LOGIN_INVALID = False
 
 
+def _is_login_redirect_url(u: str) -> bool:
+    """R-6.37i 拆自 _scan_one_xhs_page：URL 是否登录重定向页。"""
+    return "/login" in u or u.rstrip("/").endswith(".xiaohongshu.com/login")
+
+
 async def _scan_one_xhs_page(p, page):
     """R-6.37g 拆自 _scan_xhs_pages_for_signals：单页处理（首匹配页+正文+登录重定向）。"""
     if p.is_closed() or "xiaohongshu" not in (p.url or ""):
@@ -253,7 +258,7 @@ async def _scan_one_xhs_page(p, page):
         txt = (await p.inner_text("body")) or ""
     except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
         txt = ""
-    is_login = "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login")
+    is_login = _is_login_redirect_url(p.url or "")
     return page, txt, is_login
 
 
@@ -356,6 +361,15 @@ def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final
     }
 
 
+def _resolve_risk_if_valid(final_logged_in: bool, kicked: bool) -> None:
+    """R-6.37i 拆自 _build_login_status_result：登录有效时解除风控（失败静默）。"""
+    if final_logged_in and not kicked:
+        try:
+            risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> dict:
     """R-6.36e 拆自 login_status：判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
     global _LOGIN_INVALID
@@ -364,11 +378,7 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
         _LOGIN_INVALID = True
     final_logged_in = logged_in and not _LOGIN_INVALID
     result = _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in)
-    if final_logged_in and not kicked:
-        try:
-            risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
-        except Exception:  # noqa: BLE001
-            pass
+    _resolve_risk_if_valid(final_logged_in, kicked)
     return result
 
 
@@ -536,33 +546,40 @@ async def login_cancel():
     return {"ok": True}
 
 
+def _to_playwright_cookie(c) -> dict | None:
+    """R-6.37i 拆自 _filter_xhs_cookies：单 cookie 转 Playwright 格式（非小红书域返回 None）。"""
+    dom = str(c.get("domain", ""))
+    if "xiaohongshu" not in dom and "xhscdn" not in dom:
+        return None
+    item = {
+        "name": str(c.get("name", "")),
+        "value": str(c.get("value", "")),
+        "domain": dom,
+        "path": str(c.get("path", "/")),
+    }
+    exp = c.get("expires")
+    if exp is not None:
+        try:
+            item["expires"] = float(exp)
+        except (TypeError, ValueError):
+            pass  # 解析失败则 session cookie（不持久）
+    if c.get("secure"):
+        item["secure"] = True
+    if c.get("httpOnly"):
+        item["httpOnly"] = True
+    ss = c.get("sameSite")
+    if ss in ("Lax", "Strict", "None"):
+        item["sameSite"] = ss
+    return item
+
+
 def _filter_xhs_cookies(raw) -> list:
     """R-6.37a 拆自 import_cookies：过滤小红书/xhscdn 域 Cookie 并转 Playwright 格式。"""
     pw = []
     for c in raw:
-        dom = str(c.get("domain", ""))
-        if "xiaohongshu" not in dom and "xhscdn" not in dom:
-            continue
-        item = {
-            "name": str(c.get("name", "")),
-            "value": str(c.get("value", "")),
-            "domain": dom,
-            "path": str(c.get("path", "/")),
-        }
-        exp = c.get("expires")
-        if exp is not None:
-            try:
-                item["expires"] = float(exp)
-            except (TypeError, ValueError):
-                pass  # 解析失败则 session cookie（不持久）
-        if c.get("secure"):
-            item["secure"] = True
-        if c.get("httpOnly"):
-            item["httpOnly"] = True
-        ss = c.get("sameSite")
-        if ss in ("Lax", "Strict", "None"):
-            item["sameSite"] = ss
-        pw.append(item)
+        item = _to_playwright_cookie(c)
+        if item is not None:
+            pw.append(item)
     return pw
 
 
@@ -1260,6 +1277,28 @@ class OpenFolderReq(BaseModel):
     path: str
 
 
+def _download_remote_cover(con, zf, fid: str) -> bool:
+    """R-6.37i 拆自 _pack_feed_images：远程 cover_url 补下载入包，成功返回 True。"""
+    row = con.execute("SELECT cover_url FROM notes WHERE feed_id = ?", (fid,)).fetchone()
+    url = (row["cover_url"] if row else "") or ""
+    if not url:
+        return False
+    try:
+        reqh = urllib.request.Request(
+            url,
+            headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
+        )
+        data = urllib.request.urlopen(reqh, timeout=20).read()
+        if len(data) > 4096:  # 过滤装饰性小图
+            fname = _img_name(fid, suffix="cover")
+            (IMAGES_DIR / fname).write_bytes(data)
+            zf.write(IMAGES_DIR / fname, arcname=fname)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
     """R-6.37a 拆自 download_images：单篇笔记入包（本地缓存优先，缺失回退远程 cover_url）。"""
     prefix = fid.replace("#", "_")
@@ -1268,23 +1307,8 @@ def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
         for f in files:
             zf.write(f, arcname=f.name)
         return
-    # 本地无缓存：回退远程 cover_url 补下载（与克隆下载同策略）
-    row = con.execute("SELECT cover_url FROM notes WHERE feed_id = ?", (fid,)).fetchone()
-    url = (row["cover_url"] if row else "") or ""
-    if url:
-        try:
-            reqh = urllib.request.Request(
-                url,
-                headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
-            )
-            data = urllib.request.urlopen(reqh, timeout=20).read()
-            if len(data) > 4096:  # 过滤装饰性小图
-                fname = _img_name(fid, suffix="cover")
-                (IMAGES_DIR / fname).write_bytes(data)
-                zf.write(IMAGES_DIR / fname, arcname=fname)
-                return
-        except Exception:  # noqa: BLE001
-            pass
+    if _download_remote_cover(con, zf, fid):
+        return
     missing.append(fid)
 
 
@@ -1601,6 +1625,26 @@ def _build_week_timeline(day_counts: dict) -> list:
     return days
 
 
+def _tally_row_aux(r, ip_counts, day_counts) -> None:
+    """R-6.37i：单行属地/日累计。"""
+    ip = (r["ip_location"] or "").strip()
+    if ip:
+        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+    d = (r["created_at"] or "")[:10]
+    if d:
+        day_counts[d] = day_counts.get(d, 0) + 1
+
+
+def _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact) -> int:
+    """R-6.37i 拆自 _aggregate_client_rows：单行累计意向/属地/日/联系方式命中。"""
+    it = r["intent"] or "low"
+    dist[it] = dist.get(it, 0) + 1
+    _tally_row_aux(r, ip_counts, day_counts)
+    if is_contact(r["comment"] or "", r["matched_word"] or ""):
+        contact += 1
+    return contact
+
+
 def _aggregate_client_rows(rows):
     """R-6.37g 拆自 clients_agg：逐行聚合意向分布/属地/日计数/联系方式命中。"""
     from src.intent import is_contact
@@ -1609,16 +1653,7 @@ def _aggregate_client_rows(rows):
     day_counts: dict[str, int] = {}
     contact = 0
     for r in rows:
-        it = r["intent"] or "low"
-        dist[it] = dist.get(it, 0) + 1
-        ip = (r["ip_location"] or "").strip()
-        if ip:
-            ip_counts[ip] = ip_counts.get(ip, 0) + 1
-        d = (r["created_at"] or "")[:10]
-        if d:
-            day_counts[d] = day_counts.get(d, 0) + 1
-        if is_contact(r["comment"] or "", r["matched_word"] or ""):
-            contact += 1
+        contact = _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact)
     return dist, ip_counts, day_counts, contact
 
 
@@ -2371,6 +2406,20 @@ _AI_PROMPTS = {
 }
 
 
+def _build_ai_system_prompt() -> str:
+    """R-6.37i 拆自 ai_generate：组装系统提示（基础人设 + 已配置账号人设注入）。"""
+    system_parts = ["你是一个专业的小红书内容创作助手，输出精炼、可直接使用，不要客套。"]
+    persona = _load_persona()
+    if persona.get("industry") or persona.get("tone") or persona.get("topics"):
+        system_parts.append(
+            "账号人设：行业【{}】、口吻【{}】、常发主题【{}】。生成内容保持该人设一致，"
+            "避免“宝子们/家人们/谁懂啊”式通用AI味。".format(
+                persona.get("industry", ""), persona.get("tone", ""), persona.get("topics", "")
+            )
+        )
+    return "\n".join(system_parts)
+
+
 @app.post("/api/ai_generate")
 async def ai_generate(req: AIGenReq):
     """AI 文稿生成（Key 门控，O1-2 + 质量保障）：未配置 LLM 时 400 拒绝（前端按钮灰态+提示）。
@@ -2386,17 +2435,8 @@ async def ai_generate(req: AIGenReq):
     keyword = (req.note.get("keyword") or "")[:200]
     try:
         prompt = _AI_PROMPTS[req.action].format(title=title, desc=desc, keyword=keyword)
-        # 人设注入：已配置账号人设时拼入系统提示（未配置退化为通用助手，行为不变）
-        persona = _load_persona()
-        system_parts = ["你是一个专业的小红书内容创作助手，输出精炼、可直接使用，不要客套。"]
-        if persona.get("industry") or persona.get("tone") or persona.get("topics"):
-            system_parts.append(
-                "账号人设：行业【{}】、口吻【{}】、常发主题【{}】。生成内容保持该人设一致，"
-                "避免“宝子们/家人们/谁懂啊”式通用AI味。".format(
-                    persona.get("industry", ""), persona.get("tone", ""), persona.get("topics", "")
-                )
-            )
-        result = await llm_service.chat("\n".join(system_parts), prompt)
+        system_prompt = _build_ai_system_prompt()
+        result = await llm_service.chat(system_prompt, prompt)
         return {"ok": True, "action": req.action, "result": result}
     except ValueError as e:  # 未配置 Key / 请求失败 → 400
         raise HTTPException(400, str(e)) from e

@@ -288,19 +288,28 @@ class WindowCoordinator:
         """Tab2 显示未登录提示页（R-6.28 未登录闭环）。"""
         await self.navigate_tab2(f"http://127.0.0.1:{front_port}/login-hint")
 
+def _is_orphan_explore_url(u: str) -> bool:
+    """R-6.37i：URL 是否孤儿 explore 页（小红书域且非 /login）。"""
+    return "xiaohongshu.com" in u and "/login" not in u
+
+
+async def _close_if_orphan_explore(p, shell, t2) -> None:
+    """R-6.37i 拆自 close_orphan_explore：单页若为孤儿 explore 则关闭（壳/Tab2 保留）。"""
+    if p is shell or p is t2 or p.is_closed():
+        return
+    if _is_orphan_explore_url(p.url or ""):
+        try:
+            await p.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
     async def close_orphan_explore(self, ctx) -> None:
         """未登录时关闭孤儿 explore 判定页（login_status 轮询可能新开）；
         壳窗与 Tab2 引用无条件保留。"""
         shell, t2 = self.shell(), self.tab2()
         for p in list(ctx.pages):
-            if p is shell or p is t2 or p.is_closed():
-                continue
-            u = p.url or ""
-            if "xiaohongshu.com" in u and "/login" not in u:
-                try:
-                    await p.close()
-                except Exception:  # noqa: BLE001
-                    pass
+            await _close_if_orphan_explore(p, shell, t2)
 
 
 _COORD: WindowCoordinator | None = None
@@ -453,15 +462,20 @@ async def _promote_shell_to_app_window(ctx, eng, base, win_w, win_h):
     return app_page
 
 
+def _find_blank_default_tab(ctx):
+    """R-6.37i 拆自 _pick_initial_shell_page：复用 about:blank/空默认 tab。"""
+    return next(
+        (p for p in ctx.pages if not p.is_closed() and (p.url or "").strip() in ("", "about:blank")),
+        None,
+    )
+
+
 async def _pick_initial_shell_page(ctx, base):
     """ensure_shell 初始页：优先已有壳 tab；否则复用 about:blank 默认 tab；无则新开。"""
     for p in ctx.pages:
         if (p.url or "").startswith(base) and not p.is_closed():
             return p
-    page = next(
-        (p for p in ctx.pages if not p.is_closed() and (p.url or "").strip() in ("", "about:blank")),
-        None,
-    )
+    page = _find_blank_default_tab(ctx)
     if page is None:
         page = await ctx.new_page()
     return page
@@ -709,6 +723,15 @@ async def _guard_wait_pending(win: "ShellWindow", base: str, stop: "threading.Ev
     return bool(st.get("force"))
 
 
+async def _guard_announce_and_navigate(win, base, force) -> None:
+    """R-6.37i 拆自 login_guard：打印切换日志并导航到登录页（R-6.21e 只响应 pending）。"""
+    print(
+        "[xhs-leads][guard] 切换到小红书登录页"
+        f"（{'强制登录·不可关闭' if force else '主动重登·可关闭'}）", flush=True,
+    )
+    await _guard_navigate_to_login(win, base, force)
+
+
 async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") -> None:
     """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录；R-6.9 主动重登；R-6.10 首页模式）。
 
@@ -738,17 +761,28 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         force = await _guard_wait_pending(win, base, stop)
         if force is None:
             continue
-        print(
-            "[xhs-leads][guard] 切换到小红书登录页"
-            f"（{'强制登录·不可关闭' if force else '主动重登·可关闭'}）", flush=True,
-        )
-        # R-6.21e（拍板）：守卫只响应 pending，不再后台刷登录态。
-        await _guard_navigate_to_login(win, base, force)
+        await _guard_announce_and_navigate(win, base, force)
         in_login = True
         ok = await _guard_monitor_loop(win, base, stop, force)
         in_login = False
         if ok:
             await _guard_return_to_app(win, base)
+
+async def _coord_or_scan_shell_page(base: str):
+    """R-6.37i 拆自 _rebind_if_closed：协调器壳引用；未就绪则回退 URL 扫描。"""
+    from src import engine_pool  # noqa: PLC0415
+
+    coord = get_coordinator()
+    p = coord.shell()
+    if p is None:
+        eng = await engine_pool.pool.get("default")
+        ctx = await eng.context()
+        for q in ctx.pages:
+            if not q.is_closed() and (q.url or "").startswith(base):
+                p = q
+                break
+    return p
+
 
 async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
     """R-6.19：壳 tab 被 keeper 重建后，旧 page 已关闭——登录守卫重绑定新壳 page。
@@ -760,15 +794,7 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
         if win.page.is_closed():
             from src import engine_pool  # noqa: PLC0415
 
-            coord = get_coordinator()
-            p = coord.shell()
-            if p is None:
-                eng = await engine_pool.pool.get("default")
-                ctx = await eng.context()
-                for q in ctx.pages:
-                    if not q.is_closed() and (q.url or "").startswith(base):
-                        p = q
-                        break
+            p = await _coord_or_scan_shell_page(base)
             if p is not None:
                 win.rebind(p)
                 # R-6.22：重绑定目标若是重建的新窗口，校准为左半屏布局
@@ -897,21 +923,26 @@ def _keeper_log_snapshot(ctx, coord, last):
     return last[0]
 
 
+async def _calibrate_reused_tab2(t2, _t2_url, coord, engine_pool) -> None:
+    """R-6.37i 拆自 _keeper_setup_tab2：复用残留 Tab2 时校准窗口并注册监听。"""
+    try:
+        if _t2_url and "login-hint" not in (t2.url or ""):
+            await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
+        win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
+        await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
+        coord.register_tab2(t2)
+        coord.watch(t2, is_shell=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"[xhs-leads][tab2] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
+
+
 async def _keeper_setup_tab2(ctx, eng, coord, engine_pool, config):
     """初始块 Tab2：复用残留 explore/login-hint 或新建采集窗（失败延迟重试 1 次）。"""
     async with engine_pool.TAB2_GUARD_LOCK:
         _t2_url = await _keeper_tab2_target_url(config, engine_pool)
         t2 = await _keeper_find_tab2(ctx, coord.shell(), coord)
         if t2 is not None:
-            try:
-                if _t2_url and "login-hint" not in (t2.url or ""):
-                    await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
-                win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
-                await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
-                coord.register_tab2(t2)
-                coord.watch(t2, is_shell=False)
-            except Exception as e:  # noqa: BLE001
-                print(f"[xhs-leads][tab2] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
+            await _calibrate_reused_tab2(t2, _t2_url, coord, engine_pool)
             return
         for _attempt in range(2):
             try:

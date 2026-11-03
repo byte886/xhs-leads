@@ -94,13 +94,8 @@ async def _perform_drag(page, evt: dict) -> None:
     await page.mouse.up()
 
 
-async def send_event(account: str, evt: dict) -> dict:
-    """转发用户交互到引擎镜像页（坐标相对视口 CSS 像素；type 前需先 click 聚焦）。
-
-    支持：click {x,y} / type {text} / scroll {dx,dy} / drag {x1,y1,x2,y2}
-    """
-    page = await login_page(account)
-    kind = (evt.get("type") or "").lower()
+async def _apply_mirror_event(page, evt: dict, kind: str) -> dict | None:
+    """R-6.37i 拆自 send_event：按 kind 分发交互（不支持返回错误 dict，成功返回 None）。"""
     if kind == "click":
         await page.mouse.click(int(evt["x"]), int(evt["y"]))
     elif kind == "type":
@@ -112,5 +107,18 @@ async def send_event(account: str, evt: dict) -> dict:
         await _perform_drag(page, evt)
     else:
         return {"ok": False, "error": f"不支持的事件类型: {kind}"}
+    return None
+
+
+async def send_event(account: str, evt: dict) -> dict:
+    """转发用户交互到引擎镜像页（坐标相对视口 CSS 像素；type 前需先 click 聚焦）。
+
+    支持：click {x,y} / type {text} / scroll {dx,dy} / drag {x1,y1,x2,y2}
+    """
+    page = await login_page(account)
+    kind = (evt.get("type") or "").lower()
+    err = await _apply_mirror_event(page, evt, kind)
+    if err is not None:
+        return err
     xlog.audit(account, action="mirror_event", ok=True, detail=f"type={kind}")
     return {"ok": True}

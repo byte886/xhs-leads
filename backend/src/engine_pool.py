@@ -100,6 +100,31 @@ async def _get_pw():
         return _pw
 
 
+
+
+def _is_blocked_risk_text(txt: str) -> bool:
+    """R-6.37i 拆自 _debug_window_blocked：正文是否命中风控/需验证关键词。"""
+    return any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
+                                  "人工验证", "验证后重试", "登录超限",
+                                  "请重新登录", "登录已过期"))
+
+
+
+
+async def _any_blocked_page(ctx) -> bool:
+    """R-6.37i：任一小红书页正文命中风控关键词则 True。"""
+    for pg in ctx.pages:
+        if "xiaohongshu" not in (pg.url or ""):
+            continue
+        try:
+            txt = (await pg.inner_text("body")) or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if _is_blocked_risk_text(txt):
+            return True
+    return False
+
+
 class AccountEngine:
     """单账号引擎：持久化上下文 + 生命周期 + 页面管理。"""
 
@@ -330,17 +355,8 @@ class AccountEngine:
             has_ws = any(c.get("name") == "web_session" for c in cs)
             if not has_ws:
                 return True
-            for pg in ctx.pages:
-                if "xiaohongshu" not in (pg.url or ""):
-                    continue
-                try:
-                    txt = (await pg.inner_text("body")) or ""
-                except Exception:  # noqa: BLE001
-                    continue
-                if any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
-                                           "人工验证", "验证后重试", "登录超限",
-                                           "请重新登录", "登录已过期")):
-                    return True
+            if await _any_blocked_page(ctx):
+                return True
             return False
         except Exception:  # noqa: BLE001（判定失败保守不开窗）
             return True
@@ -436,24 +452,24 @@ class AccountEngine:
         except Exception:  # noqa: BLE001
             return None
 
+    async def _close_if_unrelated(self, p, shell_pg, keep_url) -> int:
+        """R-6.37i 拆自 _close_unrelated_pages：单页无关则关闭，返回是否关闭（0/1）。"""
+        u = p.url or ""
+        if p is shell_pg or keep_url in u or u == "about:blank" or "xiaohongshu.com" in u:
+            return 0
+        try:
+            await p.close()
+            if self._task_page == p:
+                self._task_page = None
+            return 1
+        except Exception:  # noqa: BLE001
+            return 0
+
     async def _close_unrelated_pages(self, ctx, shell_pg, keep_url) -> int:
         """R-6.36e 拆自 cleanup_tabs()：遍历关闭无关 tab（壳窗/APP 页/空白/小红书 tab 保留）。"""
         closed = 0
         for p in ctx.pages:
-            u = p.url or ""
-            if p is shell_pg:
-                continue
-            if keep_url in u or u == "about:blank":
-                continue
-            if "xiaohongshu.com" in u:
-                continue
-            try:
-                await p.close()
-                if self._task_page == p:
-                    self._task_page = None
-                closed += 1
-            except Exception:  # noqa: BLE001
-                continue
+            closed += await self._close_if_unrelated(p, shell_pg, keep_url)
         return closed
 
     async def collapse_debug_windows(self) -> int:

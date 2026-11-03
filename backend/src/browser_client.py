@@ -102,6 +102,14 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
         raise
 
 
+def _find_shell_tab(page, base: str):
+    """R-6.37i 拆自 _switch_back_to_shell：定位壳窗口 Tab1（base 前缀、非当前页）。"""
+    for p in page.context.pages:
+        if not p.is_closed() and p != page and base and (p.url or "").startswith(base):
+            return p
+    return None
+
+
 async def _switch_back_to_shell(page) -> None:
     """后台采集：窗口焦点回到壳窗口 Tab1（base_url 前缀 tab），采集 tab 保持存在。
 
@@ -110,10 +118,9 @@ async def _switch_back_to_shell(page) -> None:
     """
     try:
         base = (os.environ.get("XHS_SHELL_URL") or "").rstrip("/")
-        for p in page.context.pages:
-            if not p.is_closed() and p != page and base and (p.url or "").startswith(base):
-                await p.bring_to_front()
-                return
+        shell = _find_shell_tab(page, base)
+        if shell is not None:
+            await shell.bring_to_front()
     except Exception:  # noqa: BLE001
         pass
 

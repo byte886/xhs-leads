@@ -92,11 +92,8 @@ def _verify_rsa_signature(blob_b64: str, sig: bytes) -> bool:
         return False
 
 
-def _verify_activation_code(code: str) -> tuple[bool, str]:
-    """验签激活码：blob.sig 格式，RSA 验签 + 机器码匹配 + 有效期。
-
-    blob = base64url(JSON{"m": machine_code, "e": exp_ts})，sig = RSA-SHA256(blob)。
-    """
+def _parse_activation_code(code: str):
+    """R-6.37i：解析 blob.sig 激活码；格式错误返回 None。"""
     import base64
 
     try:
@@ -105,9 +102,23 @@ def _verify_activation_code(code: str) -> tuple[bool, str]:
         sig = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
         payload = json.loads(blob.decode("utf-8"))
     except (ValueError, TypeError, json.JSONDecodeError):
-        return False, "激活码格式错误"
+        return None
     if not isinstance(payload, dict) or "m" not in payload or "e" not in payload:
+        return None
+    return blob_b64, sig, payload
+
+
+def _verify_activation_code(code: str) -> tuple[bool, str]:
+    """验签激活码：blob.sig 格式，RSA 验签 + 机器码匹配 + 有效期。
+
+    blob = base64url(JSON{"m": machine_code, "e": exp_ts})，sig = RSA-SHA256(blob)。
+    """
+    import base64
+
+    parsed = _parse_activation_code(code)
+    if parsed is None:
         return False, "激活码格式错误"
+    blob_b64, sig, payload = parsed
     if not _verify_rsa_signature(blob_b64, sig):
         return False, "激活码无效（签名不匹配）"
     if payload.get("m") != machine_code():
