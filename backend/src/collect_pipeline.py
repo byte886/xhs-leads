@@ -1,4 +1,4 @@
-"""M3/M4: 采集 + 评分 + 落库流水线（对 xiaohongshu-mcp HTTP MCP 的封装）。
+"""采集 + 评分 + 落库流水线：常驻账号引擎池 CDP 直连执行 DOM 采集（非外部 MCP）。
 
 用法:
   python3 collect_pipeline.py "翡翠" [--limit 50] [--out /path/db.sqlite3]

@@ -1,4 +1,4 @@
-"""G2 后端壳：把 xiaohongshu-mcp 封装成 REST API + SQLite 读写 + 静态前端服务。
+"""xhs-leads 后端壳：REST API + SQLite 读写 + 静态前端服务（engine_pool 引擎池 CDP 直连，非外部 MCP 封装）。
 
 运行:
   uvicorn server:app --host 127.0.0.1 --port 8791
