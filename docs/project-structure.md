@@ -33,7 +33,7 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   ├── browser/               # 浏览器辅助资源（extension/lib 等，随 .app 打包）
 │   ├── legacy/                # 旧引导脚本归档（setup_chrome.py / pick_chrome.py）
 │   └── gen_license.py         # 激活码签发工具
-├── docs/                      # PRD / 调研 / 质检 / 决策文档（历史，含 research/ 调研资产）
+├── docs/                      # PRD / 需求 / 质检 / 阶段门文档（立项调研已收敛进 PRD §10.1）
 ├── data/                      # 开发态本地数据目录（账号/采集/cookie/激活码，全部不入库）
 ├── .github/                   # CI 工作流（quality-gates）
 ├── constitution/ roles/       # 多 Agent 协作提示词（engineering/project/workflow + 六角色）
