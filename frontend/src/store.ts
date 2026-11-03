@@ -4,9 +4,8 @@ import type { Note, SearchParams, Stage } from './types'
 /** 工作流 4-Tab（v1.5 对齐同类产品模式）：采集 → 创作 → 客户 → 设置 */
 export type Tab = 'collect' | 'create' | 'clients' | 'settings'
 
-/** 全局共享观察状态（顶部状态条：登录 / CDP / AI Key） */
+/** 全局共享观察状态（顶部状态条：登录 / AI Key） */
 export interface SysStatus {
-  cdp: { ok: boolean; state: string; chrome_found: boolean; profile_dir: string; port: number }
   aiKey: boolean
 }
 
@@ -14,9 +13,8 @@ export interface SysStatus {
 export const appState = reactive({
   tab: 'collect' as Tab,
   stage: 'input' as Stage,
-  // 全局共享状态（跨页观察：登录态 / CDP / AI Key）
+  // 全局共享状态（跨页观察：登录态 / AI Key）
   sys: {
-    cdp: { ok: false, state: '', chrome_found: false, profile_dir: '', port: 0 },
     aiKey: false,
   } as SysStatus,
   // 采集配置
@@ -76,7 +74,7 @@ export function setTab(t: Tab) {
   appState.tab = t
 }
 
-/** 刷新全局共享状态（登录 / CDP / AI Key），由 FlowBar 状态条挂载时调用 */
+/** 刷新全局共享状态（登录 / AI Key），由 FlowBar 状态条挂载时调用 */
 export function refreshSysStatus(part: Partial<SysStatus>) {
   Object.assign(appState.sys, part)
 }

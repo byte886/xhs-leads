@@ -33,7 +33,7 @@ class TestUrlEncode:
 
 
 class TestHomeRelative:
-    """save_cdp_config 路径可移植：$HOME 下绝对路径 → ~ 相对形式。"""
+    """config.home_relative 路径可移植：$HOME 下绝对路径 → ~ 相对形式。"""
 
     def test_home_prefix_to_tilde(self):
         home = os.path.expanduser("~")
@@ -49,23 +49,3 @@ class TestHomeRelative:
     def test_empty_unchanged(self):
         assert config.home_relative("") == ""
 
-    def test_profile_settings_expands_tilde(self, tmp_path, monkeypatch):
-        from src import config
-        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
-        (tmp_path / "cdp_config.json").write_text('{"profile_dir": "~/.xhs-leads-profile"}', encoding="utf-8")
-        monkeypatch.delenv("XHS_PROFILE_DIR", raising=False)
-        _, profile_dir = bc._profile_settings()
-        assert profile_dir == os.path.expanduser("~/.xhs-leads-profile")
-        assert not profile_dir.startswith("~")
-
-    def test_save_cdp_config_normalizes(self, tmp_path, monkeypatch):
-        from src import config
-        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
-        home = os.path.expanduser("~")
-        bc.save_cdp_config(chrome_path="/Applications/Google Chrome.app",
-                           profile_dir=home + "/.xhs-leads-profile")
-        saved = config.get_config()
-        assert saved["profile_dir"] == "~/.xhs-leads-profile"
-        assert saved["chrome_path"] == "/Applications/Google Chrome.app"

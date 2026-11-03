@@ -1,16 +1,16 @@
 <script setup lang="ts">
 // FlowBar v1.5：工作流 4-Tab（采集 → 创作 → 客户 → 设置）+ 全局共享状态条
-// 状态条 = 共享观察落点：登录态 / CDP / AI Key 一屏可见，任何 Tab 都能看到，点击跳对应设置
+// 状态条 = 共享观察落点：登录态 / AI Key 一屏可见，任何 Tab 都能看到，点击跳对应设置
 import { onMounted } from 'vue'
 import { appState, setTab, refreshSysStatus } from '../store'
 import type { Tab } from '../store'
-import { apiLoginStatus, apiCdpStatus, apiGetLLMConfig } from '../api'
+import { apiLoginStatus, apiGetLLMConfig } from '../api'
 
 const tabs: { id: Tab; label: string; hint: string }[] = [
   { id: 'collect', label: '采集', hint: '关键词采集笔记 · 评分排序' },
   { id: 'create', label: '创作', hint: '克隆 + AI 文稿 + 发布前质检' },
   { id: 'clients', label: '客户', hint: '线索 / 聚合 / 获客指引' },
-  { id: 'settings', label: '设置', hint: 'AI Key / CDP / 账号人设' },
+  { id: 'settings', label: '设置', hint: 'AI Key / 账号人设' },
 ]
 
 function jumpToSettings() {
@@ -23,10 +23,6 @@ onMounted(async () => {
     const lg = await apiLoginStatus()
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪 */ }
-  try {
-    const c = await apiCdpStatus()
-    refreshSysStatus({ cdp: { ok: c.ok, state: c.state, chrome_found: c.chrome_found, profile_dir: c.profile_dir, port: c.port } })
-  } catch { /* 未就绪 */ }
   try {
     const m = await apiGetLLMConfig()
     refreshSysStatus({ aiKey: !!m.configured })
@@ -52,15 +48,11 @@ onMounted(async () => {
       <div class="flow-hint">{{ tabs.find(t => t.id === appState.tab)?.hint }}</div>
     </div>
 
-    <!-- 全局共享状态条（跨页观察：登录 / CDP / AI Key） -->
+    <!-- 全局共享状态条（跨页观察：登录 / AI Key） -->
     <div class="sysbar">
       <button class="sys-item" :class="appState.login.logged_in ? 'ok' : 'bad'" @click="appState.login.logged_in ? jumpToSettings() : undefined" title="点设置页查看连接详情">
         <span class="dot-s" :class="appState.login.logged_in ? 'on' : 'off'"></span>
         登录 {{ appState.login.kicked ? '已失效，请重新登录' : (appState.login.logged_in ? (appState.login.nickname || '已登录') : '未登录') }}
-      </button>
-      <button class="sys-item" :class="appState.sys.cdp.ok ? 'ok' : (appState.sys.cdp.state === 'not_configured' ? 'bad' : 'mid')" @click="jumpToSettings()">
-        <span class="dot-s" :class="appState.sys.cdp.ok ? 'on' : 'off'"></span>
-        CDP {{ appState.sys.cdp.ok ? '就绪' : (appState.sys.cdp.state === 'not_configured' ? '未配置' : '检测中') }}
       </button>
       <button class="sys-item" :class="appState.sys.aiKey ? 'ok' : 'bad'" @click="jumpToSettings()">
         <span class="dot-s" :class="appState.sys.aiKey ? 'on' : 'off'"></span>

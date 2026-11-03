@@ -303,36 +303,6 @@ export async function apiDraftDelete(id: number): Promise<{ ok: boolean; note?: 
   }))
 }
 
-export interface CdpStatus {
-  ok: boolean
-  port: number
-  port_ready: boolean
-  chrome_running: boolean
-  chrome_found: boolean
-  state: string
-  chrome_path: string
-  profile_dir: string
-}
-
-export async function apiCdpStatus(): Promise<CdpStatus> {
-  return j(await fetch(`${BASE}/api/cdp_status`))
-}
-
-export async function apiCdpSetup(restart = false): Promise<{ ok: boolean; status?: string; note?: string; need_restart?: boolean }> {
-  return j(await fetch(`${BASE}/api/cdp_setup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ restart }),
-  }))
-}
-
-export async function apiCdpOpenInspect(): Promise<{ ok: boolean; note?: string }> {
-  return j(await fetch(`${BASE}/api/cdp_open_inspect`, { method: 'POST' }))
-}
-
-export async function apiCdpPickChrome(): Promise<{ ok: boolean; chrome_path?: string; note?: string }> {
-  return j(await fetch(`${BASE}/api/cdp_pick_chrome`, { method: 'POST' }))
-}
 
 // ---- O1 AI 模块（Key 门控） ----
 export interface LlmConfig {

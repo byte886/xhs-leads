@@ -193,7 +193,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 设置 Tab：账号与登录 / AI Key / CDP / 账号人设 -->
+    <!-- 设置 Tab：账号与登录 / AI Key / 账号人设 -->
     <div v-show="appState.tab === 'settings'" class="work">
       <div style="max-width:1100px;margin:0 auto;padding:22px 26px">
         <SettingsPanel />

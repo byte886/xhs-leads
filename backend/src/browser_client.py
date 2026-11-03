@@ -29,7 +29,6 @@ if getattr(sys, "_MEIPASS", None):
 else:
     _ROOT = pathlib.Path(__file__).resolve().parents[2]  # backend/src -> 项目根
 # 提取脚本统一由 injections 注册表提供（R-6.30a）：extract 来源 = extension/lib/extract.js
-_PRESS_SCRIPT = _ROOT / "scripts" / "browser" / "cdp" / "press_allow.applescript"
 _XHS = "https://www.xiaohongshu.com"
 
 
@@ -69,38 +68,6 @@ async def cleanup_tabs(account_id: str = "default") -> int:
     return await (await _engine(account_id)).cleanup_tabs()
 
 
-# ===========================================================================
-# Chrome 发现 / CDP 配置（保留：CDP 面板接口仍在使用；B 方案引擎已不依赖）
-# ===========================================================================
-def save_cdp_config(chrome_path: str = "", profile_dir: str = "") -> dict:
-    """保存用户自定义 Chrome 路径 / Profile 路径（持久化，兼容旧 cdp_config.json）。"""
-    cfg = config.get_config()
-    if chrome_path:
-        cfg["chrome_path"] = config.home_relative(chrome_path)
-        config.set_config("chrome_path", cfg["chrome_path"])
-    if profile_dir:
-        cfg["profile_dir"] = config.home_relative(profile_dir)
-        config.set_config("profile_dir", cfg["profile_dir"])
-    return {"chrome_path": cfg.get("chrome_path", ""), "profile_dir": cfg.get("profile_dir", "")}
-
-
-def chrome_executable() -> str | None:
-    """定位引擎可执行文件：内置 CFT（Chrome for Testing，独立应用身份，不占用
-    用户日常 Chrome 的 LaunchServices 单实例）优先 → 用户自定义 → 平台探测（系统
-    Chrome 兜底）。R-6.11：内置 CFT 解决「APP 运行时日常 Chrome 无法新建窗口」。
-    """
-    builtin = _builtin_cft_candidates()
-    if builtin:
-        return builtin
-    user_path = config.chrome_path()
-    if user_path and os.path.exists(user_path):
-        return user_path
-    if sys.platform == "darwin":
-        return _mac_chrome_candidates()
-    if os.name == "nt":
-        return _first_existing(_win_chrome_candidates())
-    return None
-
 
 def _builtin_cft_candidates() -> str | None:
     """内置 Chrome for Testing 候选：打包态（.app 随包分发）优先，其次引擎数据目录
@@ -129,80 +96,6 @@ def _builtin_cft_candidates() -> str | None:
             return c
     return None
 
-
-def _mac_chrome_candidates() -> str | None:
-    """macOS Chrome 定位候选：/Applications 默认安装 + ~/Applications 用户级安装。"""
-    candidates = (
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        str(pathlib.Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    )
-    return _first_existing(list(candidates))
-
-
-def _first_existing(paths: list[str]) -> str | None:
-    for p in paths:
-        if p and os.path.exists(p):
-            return p
-    return None
-
-
-def _win_chrome_candidates() -> list[str]:
-    """Windows Chrome 定位候选（最佳实践顺序）：注册表 → 常见安装路径。"""
-    paths: list[str] = []
-    try:
-        import winreg
-        for hive, sub in [
-            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-        ]:
-            try:
-                with winreg.OpenKey(hive, sub) as k:
-                    val, _ = winreg.QueryValueEx(k, "")
-                    if val:
-                        paths.append(str(val))
-            except OSError:  # noqa: PERF203
-                continue
-    except ImportError:
-        pass
-    paths += [
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ]
-    return paths
-
-
-def _profile_settings() -> tuple[int, str]:
-    """CDP 端口与 default 账号 profile 目录（server 旧接口兼容；B 方案引擎不再使用）。"""
-    return config.engine_port(), config.default_user_data_dir()
-
-
-def chrome_running() -> bool:
-    """检测 Chrome 是否在运行（跨平台，引擎池模式下基本不再使用，保留兼容）。"""
-    try:
-        if os.name == "nt":
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
-                                 capture_output=True, text=True, timeout=10).stdout
-            return "chrome.exe" in out
-        return subprocess.run(["pgrep", "-x", "Google Chrome"], capture_output=True,
-                              timeout=5).returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def quit_chrome() -> bool:
-    """退出 Chrome（兼容旧接口；引擎池优雅关闭走 engine_pool.close_all）。"""
-    try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/IM", "chrome.exe", "/F"],
-                           capture_output=True, timeout=10)
-            return True
-        r = subprocess.run(["osascript", "-e", 'tell application "Google Chrome" to quit'],
-                           capture_output=True, timeout=10)
-        return r.returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
 
 
 # ===========================================================================
@@ -699,14 +592,6 @@ async def launch_profile_chrome() -> dict:
 
     引擎由 engine_pool 自动管理（launch_persistent_context），不再需要
     「带 --remote-debugging-port 启动」；本函数保留原名供旧 UI 调用。
-    """
-    return await open_front()
-
-
-async def open_inspect_remote_debugging() -> dict:
-    """（B 方案兼容）打开账号引擎的小红书登录页供扫码。
-
-    引擎自动管理调试能力，无需用户开启 chrome://inspect 远程调试设置。
     """
     return await open_front()
 

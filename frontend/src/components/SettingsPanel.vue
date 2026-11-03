@@ -1,11 +1,10 @@
 <script setup lang="ts">
-// SettingsPanel v1.5：设置 Tab（AI 模型 Key 门控 / CDP 连接 / 账号人设）
+// SettingsPanel v1.5：设置 Tab（AI 模型 Key 门控 / 账号人设）
 // 三卡收敛一页；配置后通过 appState.sys 全局状态条即时反映（共享观察）
 import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
-  apiCdpStatus, apiCdpSetup, apiCdpOpenInspect, apiCdpPickChrome,
   apiLicenseStatus, apiLicenseActivate,
   apiMirrorWindow,
   apiLoginStatus, apiLoginBegin, apiCookieInfo, apiImportCookieText,
@@ -241,54 +240,6 @@ async function testAi() {
   }
 }
 
-// ---- CDP 连接 ----
-const cdp = ref<{ ok: boolean; port: number; port_ready: boolean; chrome_running: boolean; chrome_found: boolean; state: string; chrome_path: string; profile_dir: string }>()
-const cdpBusy = ref('')
-
-async function loadCdp() {
-  try {
-    cdp.value = await apiCdpStatus()
-  } catch {
-    cdp.value = { ok: false, port: 0, port_ready: false, chrome_running: false, chrome_found: false, state: 'unknown', chrome_path: '', profile_dir: '' }
-  }
-  refreshSysStatus({
-    cdp: { ok: cdp.value.ok, state: cdp.value.state, chrome_found: cdp.value.chrome_found, profile_dir: cdp.value.profile_dir, port: cdp.value.port },
-  })
-}
-async function cdpVerify() {
-  cdpBusy.value = 'verify'
-  try {
-    const r = await apiCdpSetup(false)
-    toast(r.ok ? (r.note || 'CDP 验证通过') : `失败：${r.note || '未知原因'}`)
-    await loadCdp()
-  } catch (e) {
-    toast(`失败：${(e as Error).message}`)
-  } finally {
-    cdpBusy.value = ''
-  }
-}
-async function cdpRestart() {
-  cdpBusy.value = 'restart'
-  try {
-    const r = await apiCdpSetup(true)
-    toast(r.ok ? (r.note || '已重启调试连接') : `失败：${r.note || '未知原因'}`)
-    await loadCdp()
-  } catch (e) {
-    toast(`失败：${(e as Error).message}`)
-  } finally {
-    cdpBusy.value = ''
-  }
-}
-async function cdpOpenInspect() {
-  await apiCdpOpenInspect().catch(() => {})
-}
-async function cdpPick() {
-  const r = await apiCdpPickChrome().catch(() => ({ ok: false, note: '无法打开文件选择' }))
-  if (r.ok) toast('已选择 Chrome，保存后生效')
-  else toast(r.note || '未选择')
-  await loadCdp()
-}
-
 // ---- 账号人设 ----
 const persona = reactive({ industry: '', tone: '', topics: '' })
 const personaLoaded = ref(false)
@@ -325,15 +276,15 @@ async function savePersona() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadCdp(), loadPersona(), loadLicense(), loadAcct(), loadAppCfg()])
+  await Promise.all([loadAi(), loadPersona(), loadLicense(), loadAcct(), loadAppCfg()])
   fillAiForm()
 })
 </script>
 
 <template>
   <div>
-    <div class="page-title">设置 · AI 模型 / CDP 连接 / 账号人设</div>
-    <div class="page-desc">三个配置项收敛一页：AI Key 门控（文稿/质检共用）、CDP 连接（采集/克隆前置）、账号人设（AI 生成保持行业口吻）。未配置项按钮灰态并引导。</div>
+    <div class="page-title">设置 · AI 模型 / 账号人设</div>
+    <div class="page-desc">两个配置项收敛一页：AI Key 门控（文稿/质检共用）、账号人设（AI 生成保持行业口吻）。未配置项按钮灰态并引导。</div>
 
     <div v-if="lic" class="lic-bar">
       <span class="lic-tag" :class="{ on: lic.mode === 'activation' && lic.has_activation }">
@@ -411,31 +362,6 @@ onMounted(async () => {
         </div>
         <div class="gate-msg" :class="{ ok: aiCfg?.configured }">
           {{ aiCfg?.configured ? '✅ 已配置 AI 模型 —— 文稿生成 / 发布前质检可用' : '⚠ 当前未配置 AI 模型 —— AI 功能处于灰态' }}
-        </div>
-      </div>
-
-      <!-- CDP 连接 -->
-      <div class="set-card">
-        <div class="set-card-h">CDP 连接（Chrome 路径 / Profile）</div>
-        <label class="f-label">Chrome 路径</label>
-        <div class="cdp-row">
-          <input :value="cdp?.chrome_path || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'" readonly placeholder="未检测到 Chrome" />
-          <button class="btn sm" @click="cdpPick">浏览指定</button>
-        </div>
-        <label class="f-label">Profile（独立调试 Profile，已登录小红书）</label>
-        <input :value="cdp?.profile_dir || '（未检测）'" readonly style="width:100%" />
-        <label class="f-label">调试端口</label>
-        <input :value="cdp?.port ? String(cdp.port) : '—'" readonly style="width:100%" />
-        <div class="cdp-status">
-          <span v-if="cdp?.ok" class="ok">✓ Chrome 已检测到 · Profile 已登录小红书 · 调试可用</span>
-          <span v-else-if="cdp?.state === 'not_configured'" class="warn">未配置：请按「引导教程」开启远程调试（每个 Profile 勾选一次即持久化）</span>
-          <span v-else class="warn">检测中 / 未就绪：{{ cdp?.state || '…' }}</span>
-        </div>
-        <p class="set-hint">生产环境：macOS / Windows 双脚本带参数启动 Chrome 打开配置页；未找到 Chrome 时 APP 提示并提供链接，配置好后采集/克隆按钮才可用。</p>
-        <div class="set-actions">
-          <button class="btn" :disabled="cdpBusy === 'restart'" @click="cdpRestart">{{ cdpBusy === 'restart' ? '重启中…' : '重启调试连接' }}</button>
-          <button class="btn" @click="cdpOpenInspect">引导教程</button>
-          <button class="btn primary" :disabled="cdpBusy === 'verify'" @click="cdpVerify">{{ cdpBusy === 'verify' ? '验证中…' : '保存并验证' }}</button>
         </div>
       </div>
 
@@ -548,11 +474,6 @@ input {
 }
 .set-hint { font-size: 12px; color: var(--ink-3, #aaa); line-height: 1.6; margin: 4px 0 0; }
 .set-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.cdp-row { display: flex; gap: 8px; }
-.cdp-row input { flex: 1; min-width: 0; }
-.cdp-status { font-size: 12px; margin-top: 6px; }
-.cdp-status .ok { color: #1a7f4c; font-weight: 600; }
-.cdp-status .warn { color: #b45409; }
 .gate-msg {
   display: flex;
   align-items: center;
