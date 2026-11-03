@@ -79,3 +79,52 @@ def test_read_json_corrupted_returns_empty(tmp_path):
     f = tmp_path / "bad.json"
     f.write_text("{x", encoding="utf-8")
     assert config._read_json(f) == {}
+
+
+# ------------------------------------------------ engine_port / front_port / mode
+
+def test_engine_port_env_override(monkeypatch):
+    monkeypatch.setenv("XHS_PROFILE_PORT", "9333")
+    assert config.engine_port() == 9333
+
+
+def test_engine_port_env_bad_falls_through(monkeypatch):
+    monkeypatch.setenv("XHS_PROFILE_PORT", "notaport")
+    monkeypatch.delenv("XHS_SHELL_URL", raising=False)
+    # 回退到默认值
+    assert isinstance(config.engine_port(), int)
+
+
+def test_mode_dev(monkeypatch):
+    monkeypatch.setattr(config, "_MODE_ENV", "dev")
+    assert config.is_dev() is True
+    assert config.is_prod() is False
+
+
+def test_mode_prod(monkeypatch):
+    monkeypatch.setattr(config, "_MODE_ENV", "prod")
+    assert config.is_prod() is True
+
+
+# ------------------------------------------------ accounts 系列
+
+def test_accounts_crud(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ACCOUNTS_FILE", tmp_path / "acc.json")
+    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "profiles")
+    assert config.list_accounts() == {}
+    config.add_account("acc1", role="collector")
+    assert "acc1" in config.list_accounts()
+    assert config.get_account("acc1")["role"] == "collector"
+    config.update_account("acc1", role="publisher")
+    assert config.get_account("acc1")["role"] == "publisher"
+    assert config.set_active("acc1") is True
+    assert config.active_account() == "acc1"
+    assert config.remove_account("default") is False  # default 不可删
+    assert config.remove_account("acc1") is True
+    assert "acc1" not in config.list_accounts()
+
+
+def test_new_account_id_unique(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "ACCOUNTS_FILE", tmp_path / "acc.json")
+    aid = config.new_account_id("acc")
+    assert aid.startswith("acc_")
