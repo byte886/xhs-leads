@@ -448,6 +448,11 @@ class AccountEngine:
                     continue  # 壳窗无条件保留（引用判活优先）
                 if keep_url in u or u == "about:blank":
                     continue  # APP 页/空白页保留
+                if "xiaohongshu.com" in u:
+                    # R-6.28：小红书 tab 交给 keep_shell_tab 统一管理——explore 残留
+                    # 复用为采集窗（Tab2），登录残留由 sweep 清理；cleanup 不误关，
+                    # 避免与 Tab2 初始创建竞态（TargetClosedError，采集窗消失）。
+                    continue
                 try:
                     await p.close()
                     if self._task_page == p:

@@ -815,10 +815,23 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         print("[xhs-leads] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
 
     async def _sweep_blank(ctx, shell) -> None:
+        """清理空白残留与独立的登录残留 tab（R-6.28 启动时序优化）。
+
+        - about:blank / 空 URL：随时关闭；
+        - 独立小红书登录页残留（非壳窗、非采集窗）：关闭——避免启动时闪现
+          「先登录小红书」窗口。壳窗引用（shell）无条件跳过（壳窗可能正被
+          守卫导航到登录页）；explore 采集窗由 _find_tab2 复用，不在此关。
+        """
         for p in list(ctx.pages):
             if p is shell or p.is_closed():
                 continue
-            if (p.url or "").strip() in ("", "about:blank"):
+            u = (p.url or "").strip()
+            if u in ("", "about:blank"):
+                try:
+                    await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            elif "xiaohongshu.com" in u and "/login" in u:
                 try:
                     await p.close()
                 except Exception:  # noqa: BLE001
@@ -835,22 +848,40 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             else:
                 shell_ref[0] = shell
                 _watch(shell, is_shell=True)
+            # R-6.28：先清理登录/空白残留（壳窗引用跳过），避免启动闪现
+            await _sweep_blank(ctx, shell_ref[0])
             # R-6.22p：采集窗仅启动初始创建一次（开关开）；用户关闭后不再自动复活
+            # R-6.28：残留 explore 复用为采集窗（不新建、不闪现、不与 cleanup 竞态）；
+            # 无残留才新建，新建失败（server 侧 cleanup 竞态）延迟重试 1 次。
             if config.get_config().get("collect_tab_visible"):
                 async with engine_pool.TAB2_GUARD_LOCK:
-                    if await _find_tab2(ctx, shell_ref[0]) is None:
+                    t2 = await _find_tab2(ctx, shell_ref[0])
+                    if t2 is not None:
                         try:
-                            page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
-                            await page.goto(
-                                "https://www.xiaohongshu.com/explore",
-                                wait_until="domcontentloaded", timeout=10000,
-                            )
-                            await _ensure_debug_title(page)  # 调试窗口标题守护
                             win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
-                            await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
-                            _watch(page, is_shell=False)
-                        except Exception as e:  # noqa: BLE001（创建失败：应用仍可用，仅记录）
-                            print(f"[xhs-leads] Tab2 采集窗口初始创建失败（可稍后经设置开关重开）: {e!r}", flush=True)
+                            await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
+                            _watch(t2, is_shell=False)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"[xhs-leads] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
+                    else:
+                        for _attempt in range(2):
+                            try:
+                                page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
+                                await page.goto(
+                                    "https://www.xiaohongshu.com/explore",
+                                    wait_until="domcontentloaded", timeout=10000,
+                                )
+                                await _ensure_debug_title(page)  # 调试窗口标题守护
+                                win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
+                                await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
+                                _watch(page, is_shell=False)
+                                break
+                            except Exception as e:  # noqa: BLE001（创建失败：应用仍可用，仅记录）
+                                if _attempt == 0:
+                                    print(f"[xhs-leads] Tab2 采集窗口首次创建失败（延迟重试）: {e!r}", flush=True)
+                                    await asyncio.sleep(4.0)
+                                else:
+                                    print(f"[xhs-leads] Tab2 采集窗口初始创建失败（可稍后经设置开关重开）: {e!r}", flush=True)
             await _sweep_blank(ctx, shell_ref[0])
             break
         except Exception as e:  # noqa: BLE001
