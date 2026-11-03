@@ -14,6 +14,7 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   │   ├── config.py          #   统一配置中心（ROOT/DATA_DIR/profile 归一）
 │   │   ├── browser_client.py  #   Chrome/CFT 驱动封装（CDP + 引擎层）
 │   │   ├── engine_pool.py     #   CFT 引擎拉起 + 生命周期 + 壳窗几何
+│   │   ├── engine_types.py    #   引擎/账户 profile 类型定义
 │   │   ├── shell_window.py    #   有壳窗/采集窗双窗（--app 路由）+ 登录守卫
 │   │   ├── mirror.py          #   设置→调试视图截图流
 │   │   ├── collect_pipeline.py#   采集流水线
@@ -26,7 +27,7 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   ├── pytest.ini             # pythonpath=src / testpaths=tests / timeout=60
 │   └── .venv/                 # Python 3.12 虚拟环境（不入库）
 ├── frontend/                  # Vue3 前端源码
-│   ├── src/                   # App.vue / api.ts / store.ts / 10 个页面组件
+│   ├── src/                   # App.vue / api.ts / store.ts / 11 个 .vue 组件 + lib/auth.ts
 │   ├── vite.config.ts         # outDir: 'dist'（构建产物并入 frontend/dist/）
 │   ├── package.json           # 包名 xhs-leads-frontend
 │   └── dist/                  # 构建产物（打包进 .app，不入库）

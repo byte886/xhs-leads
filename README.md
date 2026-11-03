@@ -42,20 +42,41 @@ bash scripts/packaging/build_mac.sh
 | 多专家角色迭代开发工作流（现行 SOP） | [`docs/project/多专家角色迭代开发工作流.md`](docs/project/多专家角色迭代开发工作流.md) |
 | 治理梳理报告（2026-11-03） | [`docs/project/多专家治理梳理报告-2026-11-03.md`](docs/project/多专家治理梳理报告-2026-11-03.md) |
 | 质量报告（Gauntlet 最终态） | [`docs/QUALITY-REPORT-2026-11-03.md`](docs/QUALITY-REPORT-2026-11-03.md) |
+| **资产索引（唯一，全量清单）** | [`docs/project/项目资产与工具清单.md`](docs/project/项目资产与工具清单.md) |
+| 授权机制 ADR | [`docs/授权机制选型与薄层设计-ADR.md`](docs/授权机制选型与薄层设计-ADR.md) |
+| 枚举式全量审计报告（2026-11-03） | [`docs/project/枚举式全量审计报告-2026-11-03.md`](docs/project/枚举式全量审计报告-2026-11-03.md) |
 | 后端模块与测试 | [`backend/README.md`](backend/README.md) |
 | 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
 | macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |
 | UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
 
-## 提交前检查
+## 提交前检查（每轮 R 批强制）
 
-提交前跑 Gauntlet commit 门：
+**每轮 R 批：先读 [`docs/project/多专家角色迭代开发工作流.md`](docs/project/多专家角色迭代开发工作流.md)**（任务单按其 §七.4 模板带 mini-ADR 字段）→ 收尾验收出口（§六：pytest≥321、commit/merge 门全绿、0 断链、bash -n/py_compile/vue-tsc/vitest、决策记录入库）。
 
 ```bash
-bash /private/tmp/gauntlet/tooling/bin/quality-check.sh --stage commit
+# Gauntlet commit 门（vendor 在 clean-code-gauntlet 技能目录；新机器需先安装该技能）
+bash /Users/wenjiechen/Doubao/skills/clean-code-gauntlet/tooling/bin/quality-check.sh --stage commit
+# merge 阶段加 --stage merge
 ```
 
-（vendor 在 `/private/tmp/gauntlet`，gates 配置在仓库 `quality-gates/`；merge 阶段加 `--stage merge`。最新结果见 `docs/QUALITY-REPORT-2026-11-03.md`。）
+（gates 配置：[`quality-gates/gates.yaml`](quality-gates/gates.yaml)、[`tools/python.yaml`](quality-gates/tools/python.yaml)、[`tools/typescript.yaml`](quality-gates/tools/typescript.yaml)；等价变异体登记 [`EQUIVALENT-MUTANTS.md`](EQUIVALENT-MUTANTS.md)。）
+
+## UI 回归（一键入口）
+
+```bash
+# 一键 UI 回归（登录 e2e + smoke + 启动未登录校验）
+bash scripts/ui_tests/run_all.sh
+```
+
+入口脚本：[`scripts/ui_tests/run_all.sh`](scripts/ui_tests/run_all.sh)、[`g4_login_e2e_skeleton.py`](scripts/ui_tests/g4_login_e2e_skeleton.py)、[`smoke_login_ui.py`](scripts/ui_tests/smoke_login_ui.py)、[`startup_unlogged_verify.py`](scripts/ui_tests/startup_unlogged_verify.py)；说明见 [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md)。
+
+## 常用命令
+
+```bash
+cd frontend && npm test      # vitest（55 过）
+cd frontend && npm run cruise  # dependency-cruiser 架构检查
+```
 
 ## 状态（2026-11-03）
 

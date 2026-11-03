@@ -224,6 +224,7 @@
 - **评论区意向识别（采集客户逻辑依据）**：参考 MediaClaw 三层筛选+确认发送、Apify buyer intent、生财高意向筛选/需求聚类经验——现行 `intent.py` 高/上/中/低词表 + 留联系方式变体即由此落地；私信只做线索+风险提示，不做话术。
 - **竞品量级**：低粉爆文采集/获客工具典型单任务处理 200-500 条；本产品 MVP 上限 50 条/次。
 - **AI 文稿范式**：OpenAI 兼容 chat/completions 为事实标准；Key/BaseURL/Model Web 配置+测试连接、未配 Key 灰态门控（现行 SettingsPanel 即此范式）。
+- **低粉爆款评分模型（4 维权重，现行 `score.py` 即此）**：点赞粉丝比 40%（赞÷粉，>3 为爆，黄大路实战公式）+ 低粉权重 25%（粉<500 满分，500-2000 递减，银河/陈社长）+ 互动健康度 20%（藏/评与赞合理比例）+ 时效性 15%（30 天内高分，陈社长/Mona）。分级：粉<500 且赞粉比>3=🔥低粉爆款优先对标；赞≤300 过滤。垂直行业权重后置，待真实发布数据回流反哺。（原 research/评分模型-低粉爆款.md 已收敛入此）
 
 - 视频拆解：需求文档 v0.2（OCR/关键帧，OCR 文本见 `docs/ocr_result.md`）
 - 生财核心帖：乔川全自动获客工作流 https://scys.com/articleDetail/xq_topic/55188128214188214 / 大周·推舟AI https://scys.com/articleDetail/xq_topic/14588582154552442 / 亦仁超级标20 https://scys.com/articleDetail/xq_topic/82258281182815242 / 航海《小红书AI提效工作流》activityId=9631
