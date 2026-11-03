@@ -12,8 +12,11 @@
 
 ```bash
 npm install          # 首次/依赖变更后
+npm run dev          # 开发热更新（Vite dev server，代理到 8791）
 npm run build        # → frontend/dist/（改动后必须重建，否则 .app 内是旧产物）
-npm run dev          # 开发热更新（Vite dev server）
+npm test             # vitest run（组件/Store/API 单测，jsdom）
+npm run coverage     # vitest --coverage（v8，含 .vue 逻辑）
+npm run cruise       # dependency-cruiser 架构门（0 违规）
 ```
 
 ## 源码结构（frontend/src/）
@@ -21,7 +24,9 @@ npm run dev          # 开发热更新（Vite dev server）
 | 文件/组件 | 职责 |
 |---|---|
 | `main.ts` / `App.vue` | 入口与整体布局（四步 FlowBar + 工作区 + 登录弹窗） |
-| `api.ts` / `types.ts` / `store.ts` | 后端 API 封装 / 类型 / 全局状态 |
+| `api.ts` / `types.ts` / `store.ts` / `lib/auth.ts` | 后端 API 封装 / 类型 / 全局状态 / 登录态工具 |
+| `components/FlowBar.vue` / `StatusBar.vue` | 四步流程条 / 状态条 |
+| `components/ForceLogin.vue` | 强制登录弹窗（替代旧 LoginModal，未登录即弹） |
 | `components/CollectPanel.vue` | 采集页：关键词、筛选（排序/时间/采集方式）、参数透传 |
 | `components/CardGrid.vue` / `CardMenu.vue` | 卡片网格 / 卡片操作菜单（评分徽标、说明弹窗、tooltip、克隆、导出） |
 | `components/FilterRank.vue` | 筛选行与排序控件 |
@@ -29,7 +34,8 @@ npm run dev          # 开发热更新（Vite dev server）
 | `components/PublishPage.vue` | 草稿/发布（发布永远手动——红线） |
 | `components/ClientsPanel.vue` | 客户库：评论区线索 → 意向分级 → 聚合 → 去联系指引 |
 | `components/SettingsPanel.vue` | 设置：AI Key（门控/掩码）、CDP、账号人设 |
-| `components/LoginModal.vue` | 登录态与 Cookie 闭环界面 |
+
+> 组件级单测：`FlowBar.test.ts` / `ForceLogin.test.ts`；vitest 配置见 `vitest.config.ts`（jsdom + v8 含 .vue）。
 
 ## 边界
 
