@@ -107,7 +107,7 @@
 ### 5.2 组件选型（Step3 开源清单，均已验证存在）
 | 层 | 候选 | 说明 |
 |---|---|---|
-| 采集层 | **xiaohongshu-mcp**(Go) / **rednote-mcp**(Node) | MCP server，搜索/浏览/发布，Claude/Codex 可直接调 ⭐ 与视频工具同思路 |
+| 采集层 | ~~**xiaohongshu-mcp**(Go) / **rednote-mcp**(Node)~~【已被 engine_pool（Playwright 直驱 CFT）取代，见 v1.5】 | MCP server，搜索/浏览/发布，Claude/Codex 可直接调 ⭐ 与视频工具同思路（历史选型） |
 | 采集层备选 | XHS-Downloader / redbooks / xiaohongshu-cli / Spider_XHS | Python 生态，链接提取/作品采集/无水印下载 |
 | 自动化层 | Playwright / BrowserAct（反检测） | 登录态操作、DOM 级交互；多账号用指纹浏览器隔离 |
 | 环境隔离 | 比特浏览器 / 指纹浏览器 + 住宅 IP | 每账号独立指纹+IP，防关联 |
