@@ -439,6 +439,29 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         "}).observe(document.body,{childList:true,subtree:true});})();"
     )
 
+    # 登录页窗口适配 JS（R-6.26c，用户反馈「登录页随窗口大小自动居中，需要滚动条就出现」）：
+    # 小红书登录页是 fixed 遮罩（.reds-modal）+ reds-lock-scroll 锁滚动——窗口小于内容高度时
+    # 卡片底部被裁且无滚动条。适配：解除锁滚动 + 遮罩限高视口并允许纵向滚动 + 内容超高时
+    # 顶部对齐（初始可见头部）、未超高时垂直居中。幂等 + resize/MutationObserver/setInterval 兜底。
+    login_fit_js = (
+        "(function(){"
+        "if(window.__xhs_leads_login_fit)return;window.__xhs_leads_login_fit=true;"
+        "var st=document.createElement('style');st.id='xhs-leads-login-fit';"
+        "st.textContent='html,body{overflow:auto!important}.reds-modal{overflow-y:auto!important;max-height:100vh!important;height:auto!important;min-height:100vh!important}.login-container{flex:none!important}';"
+        "document.head.appendChild(st);"
+        "function fit(){"
+        "var m=document.querySelector('.reds-modal');var c=document.querySelector('.login-container');"
+        "if(!m||!c)return;"
+        "var need=c.getBoundingClientRect().height+24>window.innerHeight;"
+        "m.style.alignItems=need?'flex-start':'center';"
+        "}"
+        "fit();"
+        "window.addEventListener('resize',fit);"
+        "new MutationObserver(fit).observe(document.body,{childList:true,subtree:true});"
+        "setInterval(fit,2000);"
+        "})();"
+    )
+
     def _inject_force_login() -> None:
         try:
             # R-6.22g：evaluate_js 是协程——未 await 时协程从不执行（RuntimeWarning），
@@ -453,6 +476,20 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             await win.evaluate_js(force_login_js)
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+
+    # R-6.26c：登录页窗口适配注入（居中 + 需要滚动条就出现）——幂等，未就绪静默等补注
+    def _inject_login_fit() -> None:
+        try:
+            _loop = asyncio.get_running_loop()
+            _loop.create_task(_safe_login_fit())
+        except Exception as e:  # noqa: BLE001
+            print(f"[xhs-leads] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
+
+    async def _safe_login_fit() -> None:
+        try:
+            await win.evaluate_js(login_fit_js)
+        except Exception as e:  # noqa: BLE001
+            print(f"[xhs-leads] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
 
     async def _inject_active_close() -> None:
         try:
@@ -545,6 +582,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
             await win.evaluate_js(_OPEN_LOGIN_PANEL_JS)
         except Exception:  # noqa: BLE001（页面未就绪，下轮补注）
             pass
+        _inject_login_fit()  # R-6.26c：登录页窗口适配（居中 + 滚动条）——页面未就绪则由监视循环补注
         if not cur_force:
             await _inject_active_close()
         # 小红书页内监视循环：强制锁死（离开小红书拉回首页+重开面板）；主动可关闭（URL 回 APP 即结束）。
@@ -603,6 +641,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                     if time.monotonic() - _t_last_inject >= 10.0:
                         _t_last_inject = time.monotonic()
                         _inject_force_login()
+                        _inject_login_fit()  # R-6.26c：补注登录页窗口适配（页面导航后可能丢失）
                     try:
                         cur = await win.current_url()
                     except Exception:  # noqa: BLE001
@@ -614,6 +653,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                         except Exception:  # noqa: BLE001
                             pass
                         _inject_force_login()
+                        _inject_login_fit()  # R-6.26c：拉回登录页后补注窗口适配
             await asyncio.sleep(0.3)
         in_login = False
         if ok:
