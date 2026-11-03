@@ -83,6 +83,17 @@ async def screenshot_jpeg(account: str = "default") -> bytes:
     return shot
 
 
+async def _perform_drag(page, evt: dict) -> None:
+    """R-6.37a 拆自 send_event：分段拖拽（模拟人手轨迹，5 段线性插值）。"""
+    x1, y1 = int(evt.get("x1", 0)), int(evt.get("y1", 0))
+    x2, y2 = int(evt.get("x2", 0)), int(evt.get("y2", 0))
+    await page.mouse.move(x1, y1)
+    await page.mouse.down()
+    for i in range(1, 6):  # 分段移动，模拟人手轨迹
+        await page.mouse.move(x1 + (x2 - x1) * i // 5, y1 + (y2 - y1) * i // 5)
+    await page.mouse.up()
+
+
 async def send_event(account: str, evt: dict) -> dict:
     """转发用户交互到引擎镜像页（坐标相对视口 CSS 像素；type 前需先 click 聚焦）。
 
@@ -98,13 +109,7 @@ async def send_event(account: str, evt: dict) -> dict:
     elif kind == "scroll":
         await page.mouse.wheel(int(evt.get("dx") or 0), int(evt.get("dy") or 0))
     elif kind == "drag":
-        x1, y1 = int(evt.get("x1", 0)), int(evt.get("y1", 0))
-        x2, y2 = int(evt.get("x2", 0)), int(evt.get("y2", 0))
-        await page.mouse.move(x1, y1)
-        await page.mouse.down()
-        for i in range(1, 6):  # 分段移动，模拟人手轨迹
-            await page.mouse.move(x1 + (x2 - x1) * i // 5, y1 + (y2 - y1) * i // 5)
-        await page.mouse.up()
+        await _perform_drag(page, evt)
     else:
         return {"ok": False, "error": f"不支持的事件类型: {kind}"}
     xlog.audit(account, action="mirror_event", ok=True, detail=f"type={kind}")

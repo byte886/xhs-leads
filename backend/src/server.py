@@ -311,29 +311,36 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
         ctx = None
     page, body, login_redirect = await _scan_xhs_pages_for_signals(ctx)
     kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body) or login_redirect
-    # R-6.22e：风控需人工验证信号（与 risk_manual 审计文案同源）。cookie 与页面登录
-    # 标记都在但会话被平台风控拦截（「登录后查看」「需人工扫码/验证后重试」）——登录
-    # 引导不得据此自动关闭，须保持打开引导用户扫码验证。
-    risk_verify = (
+    risk_verify = _detect_risk_verify(body)
+    page_logged_in = await _decide_page_logged_in(page, has_id_token, has_ws, kicked)
+    return has_ws, page_logged_in, kicked, risk_verify
+
+
+def _detect_risk_verify(body: str) -> bool:
+    """R-6.37a 拆自 _engine_login_state：R-6.22e 风控需人工验证信号（与 risk_manual 审计文案同源）。"""
+    return (
         ("登录后查看" in body) or ("风控拦截" in body) or ("需人工扫码" in body)
         or ("人工验证" in body) or ("验证后重试" in body)
     )
+
+
+async def _decide_page_logged_in(page, has_id_token: bool, has_ws: bool, kicked: bool) -> bool:
+    """R-6.37a 拆自 _engine_login_state：页面登录判定（id_token 权威 / ws+页面注入 回退）。"""
     if has_id_token:
         # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）；
         # 被踢信号覆盖（平台已踢但 cookie 残留 → 判失效）
-        page_logged_in = not kicked
-    elif has_ws:
+        return not kicked
+    if has_ws and page is not None:
         # R-6.28：不再 new_page 开 explore 判定页——Tab2 为本地提示页（login-hint）时
         # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
         # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
         # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
-        if page is not None:
-            try:
-                await page.evaluate(injections.get("extract"))
-                page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
-            except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
-                page_logged_in = False
-    return has_ws, page_logged_in, kicked, risk_verify
+        try:
+            await page.evaluate(injections.get("extract"))
+            return bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
+        except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
+            return False
+    return False
 
 
 def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in) -> dict:
@@ -528,14 +535,10 @@ async def login_cancel():
     return {"ok": True}
 
 
-@app.post("/api/auth/import_cookies")
-async def import_cookies(req: ImportCookiesReq):
-    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
-    global _LOGIN_INVALID  # R-6.26 失效记忆解除点（登录成功验证通过时置 False）
-    from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
-
+def _filter_xhs_cookies(raw) -> list:
+    """R-6.37a 拆自 import_cookies：过滤小红书/xhscdn 域 Cookie 并转 Playwright 格式。"""
     pw = []
-    for c in req.cookies:
+    for c in raw:
         dom = str(c.get("domain", ""))
         if "xiaohongshu" not in dom and "xhscdn" not in dom:
             continue
@@ -559,6 +562,36 @@ async def import_cookies(req: ImportCookiesReq):
         if ss in ("Lax", "Strict", "None"):
             item["sameSite"] = ss
         pw.append(item)
+    return pw
+
+
+async def _refresh_engine_after_inject(eng) -> None:
+    """R-6.37a 拆自 import_cookies：注入后刷新引擎小红书页使登录态生效（无则开 explore）。"""
+    from src import engine_pool  # noqa: PLC0415
+    ctx = await eng.context()
+    page = None
+    for p in ctx.pages:
+        if not p.is_closed() and "xiaohongshu" in (p.url or ""):
+            page = p
+            break
+    if page is None:
+        page = await eng.new_page()
+        await page.goto("https://www.xiaohongshu.com/explore",
+                        wait_until="domcontentloaded", timeout=30000)
+        # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
+        _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+        await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
+    await page.reload(wait_until="domcontentloaded", timeout=30000)
+    await asyncio.sleep(3)
+
+
+@app.post("/api/auth/import_cookies")
+async def import_cookies(req: ImportCookiesReq):
+    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
+    global _LOGIN_INVALID  # R-6.26 失效记忆解除点（登录成功验证通过时置 False）
+    from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
+
+    pw = _filter_xhs_cookies(req.cookies)
     if not pw:
         return {"ok": False, "error": "未捕获到小红书域 Cookie"}
 
@@ -567,31 +600,12 @@ async def import_cookies(req: ImportCookiesReq):
     if not ok:
         return {"ok": False, "error": "注入引擎失败"}
 
-    # 刷新引擎小红书页使登录态生效（无则开 explore）
     try:
-        ctx = await eng.context()
-        page = None
-        for p in ctx.pages:
-            if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-                page = p
-                break
-        if page is None:
-            page = await eng.new_page()
-            await page.goto("https://www.xiaohongshu.com/explore",
-                            wait_until="domcontentloaded", timeout=30000)
-            # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
-            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-            await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
-        await page.reload(wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(3)
+        await _refresh_engine_after_inject(eng)
     except Exception as e:  # noqa: BLE001
         log.warning("注入后刷新引擎页面失败（不影响判定）: %s", e)
 
-    try:
-        has_ws, page_logged_in, kicked, _risk_verify = await _engine_login_state(eng)
-    except Exception as e:  # noqa: BLE001（引擎页面刷新/判定时序异常：返回未通过，守卫留在登录页重试）
-        log.warning("注入后引擎登录判定异常（不中断，按未通过处理）: %s", e)
-        has_ws, page_logged_in, kicked = False, False, False
+    has_ws, page_logged_in, kicked = await _judge_after_inject(eng)
     # R-6.8：被踢（登录超限/请重新登录）→ 视为未通过，守卫留在登录页重新登录
     logged_in = has_ws and page_logged_in and not kicked
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
@@ -600,6 +614,21 @@ async def import_cookies(req: ImportCookiesReq):
         _LOGIN_INVALID = False
         _LOGIN_GATE["pending"] = False
         _LOGIN_GATE["force"] = False
+    return _import_cookies_result(has_ws, page_logged_in, kicked, logged_in)
+
+
+async def _judge_after_inject(eng) -> tuple[bool, bool, bool]:
+    """R-6.37a 拆自 import_cookies：注入后真实判定（异常按未通过处理）。"""
+    try:
+        has_ws, page_logged_in, kicked, _risk_verify = await _engine_login_state(eng)
+    except Exception as e:  # noqa: BLE001（引擎页面刷新/判定时序异常：返回未通过，守卫留在登录页重试）
+        log.warning("注入后引擎登录判定异常（不中断，按未通过处理）: %s", e)
+        has_ws, page_logged_in, kicked = False, False, False
+    return has_ws, page_logged_in, kicked
+
+
+def _import_cookies_result(has_ws: bool, page_logged_in: bool, kicked: bool, logged_in: bool) -> dict:
+    """R-6.37a 拆自 import_cookies：组装注入结果 dict（状态+raw 诊断文案）。"""
     return {
         "ok": True,
         "logged_in": logged_in,
@@ -1225,6 +1254,34 @@ class OpenFolderReq(BaseModel):
     path: str
 
 
+def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
+    """R-6.37a 拆自 download_images：单篇笔记入包（本地缓存优先，缺失回退远程 cover_url）。"""
+    prefix = fid.replace("#", "_")
+    files = sorted(IMAGES_DIR.glob(f"{prefix}_*.jpg")) if IMAGES_DIR.exists() else []
+    if files:
+        for f in files:
+            zf.write(f, arcname=f.name)
+        return
+    # 本地无缓存：回退远程 cover_url 补下载（与克隆下载同策略）
+    row = con.execute("SELECT cover_url FROM notes WHERE feed_id = ?", (fid,)).fetchone()
+    url = (row["cover_url"] if row else "") or ""
+    if url:
+        try:
+            reqh = urllib.request.Request(
+                url,
+                headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
+            )
+            data = urllib.request.urlopen(reqh, timeout=20).read()
+            if len(data) > 4096:  # 过滤装饰性小图
+                fname = _img_name(fid, suffix="cover")
+                (IMAGES_DIR / fname).write_bytes(data)
+                zf.write(IMAGES_DIR / fname, arcname=fname)
+                return
+        except Exception:  # noqa: BLE001
+            pass
+    missing.append(fid)
+
+
 @app.post("/api/download_images")
 def download_images(req: DownloadImgsReq):
     """打包选中笔记的本地图片为 zip，落盘到固定目录并返回路径。
@@ -1245,30 +1302,7 @@ def download_images(req: DownloadImgsReq):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fid in req.feed_ids:
-            prefix = fid.replace("#", "_")
-            files = sorted(IMAGES_DIR.glob(f"{prefix}_*.jpg")) if IMAGES_DIR.exists() else []
-            if files:
-                for f in files:
-                    zf.write(f, arcname=f.name)
-                continue
-            # 本地无缓存：回退远程 cover_url 补下载（与克隆下载同策略）
-            row = con.execute("SELECT cover_url FROM notes WHERE feed_id = ?", (fid,)).fetchone()
-            url = (row["cover_url"] if row else "") or ""
-            if url:
-                try:
-                    reqh = urllib.request.Request(
-                        url,
-                        headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
-                    )
-                    data = urllib.request.urlopen(reqh, timeout=20).read()
-                    if len(data) > 4096:  # 过滤装饰性小图
-                        fname = _img_name(fid, suffix="cover")
-                        (IMAGES_DIR / fname).write_bytes(data)
-                        zf.write(IMAGES_DIR / fname, arcname=fname)
-                        continue
-                except Exception:  # noqa: BLE001
-                    pass
-            missing.append(fid)
+            _pack_feed_images(zf, con, fid, missing)
     data = buf.getvalue()
     if not data:
         raise HTTPException(400, "所选笔记没有可打包的图片")
@@ -1551,6 +1585,16 @@ def clients_list(feed_id: str = "", intent: str = ""):
 
 
 # ================= 客户库聚合（O1-4）：线索/意向分布/属地TOP/近7天/留联系方式 =================
+def _build_week_timeline(day_counts: dict) -> list:
+    """R-6.37a 拆自 clients_agg：近 7 天时间线（含今天往前 7 天，无数据的天补 0）。"""
+    days = []
+    today = datetime.date.today()
+    for i in range(6, -1, -1):
+        d = (today - datetime.timedelta(days=i)).isoformat()
+        days.append({"date": d, "count": day_counts.get(d, 0)})
+    return days
+
+
 @app.get("/api/clients_agg")
 def clients_agg():
     """数据聚合：线索总数 / 意向分布（四档计数）/ 属地 TOP / 近 7 天产出 / 留联系方式命中。
@@ -1583,12 +1627,7 @@ def clients_agg():
         for k in sorted(dist, key=intent_rank, reverse=True)
     ]
     ip_top = [{"ip": k, "count": v} for k, v in sorted(ip_counts.items(), key=lambda x: -x[1])[:6]]
-    # 近 7 天时间线：含今天往前 7 天，无数据的天补 0
-    days = []
-    today = datetime.date.today()
-    for i in range(6, -1, -1):
-        d = (today - datetime.timedelta(days=i)).isoformat()
-        days.append({"date": d, "count": day_counts.get(d, 0)})
+    days = _build_week_timeline(day_counts)
     return {
         "total": len(rows),
         "intent_dist": intent_dist,
@@ -2156,6 +2195,48 @@ async def app_config_set(req: AppConfigReq):
     return {"ok": True, "saved": list(data)}
 
 
+async def _ensure_tab2_skeleton(eng) -> None:
+    """R-6.37a 拆自 _sync_tab2_visibility：无任务 tab 时立即创建 Tab2 骨架（共享 TAB2_GUARD_LOCK）。"""
+    from src import engine_pool  # noqa: PLC0415
+    async with engine_pool.TAB2_GUARD_LOCK:
+        if eng.task_page_snapshot() is not None:
+            await eng.task_page_snapshot().bring_to_front()
+            return
+        page = await eng.new_page()
+        try:
+            await page.goto(
+                "https://www.xiaohongshu.com/explore",
+                wait_until="domcontentloaded", timeout=10000,
+            )
+            from src import shell_window  # noqa: PLC0415
+
+            await shell_window._ensure_debug_title(page)  # 采集调试窗口标题守护
+            # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
+            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+            await shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
+            await page.bring_to_front()
+            log.info("app_config：已创建 Tab2 采集骨架（开关开）")
+        except Exception:  # noqa: BLE001
+            log.warning("app_config：Tab2 骨架创建失败（keeper 兜底轮询接管）")
+
+
+async def _close_idle_tab2_family(eng) -> None:
+    """R-6.37a 拆自 _sync_tab2_visibility：空闲时收起所有 Tab2 家族页（explore 骨架/残留采集页）。"""
+    ctx = await eng.context()
+    closed = 0
+    for p in list(ctx.pages):
+        if p.is_closed():
+            continue
+        u = p.url or ""
+        if "xiaohongshu.com" in u and "/login" not in u:
+            try:
+                await p.close()
+            except Exception:  # noqa: BLE001
+                pass
+            closed += 1
+    log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
+
+
 async def _sync_tab2_visibility(visible: bool) -> None:
     """R-6.19 开关即时联动：开→Tab2 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
     try:
@@ -2165,30 +2246,7 @@ async def _sync_tab2_visibility(visible: bool) -> None:
         tp = eng.task_page_snapshot()
         if visible:
             if tp is None:
-                # 无任务 tab：立即创建 Tab2 骨架（无需等 keeper 轮询），复用任务 tab 位；
-                # 与 keeper 兜底轮询共享 TAB2_GUARD_LOCK，避免并发双建。
-                async with engine_pool.TAB2_GUARD_LOCK:
-                    if eng.task_page_snapshot() is not None:
-                        await eng.task_page_snapshot().bring_to_front()
-                    else:
-                        page = await eng.new_page()
-                        try:
-                            await page.goto(
-                                "https://www.xiaohongshu.com/explore",
-                                wait_until="domcontentloaded", timeout=10000,
-                            )
-                            from src import shell_window  # noqa: PLC0415
-
-                            await shell_window._ensure_debug_title(page)  # 采集调试窗口标题守护
-                            # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
-                            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-                            await shell_window._calibrate_window(
-                                page, _w_l, 0, _w_w, _w_h,
-                            )
-                            await page.bring_to_front()
-                            log.info("app_config：已创建 Tab2 采集骨架（开关开）")
-                        except Exception:  # noqa: BLE001
-                            log.warning("app_config：Tab2 骨架创建失败（keeper 兜底轮询接管）")
+                await _ensure_tab2_skeleton(eng)
             else:
                 try:
                     await tp.bring_to_front()
@@ -2202,21 +2260,7 @@ async def _sync_tab2_visibility(visible: bool) -> None:
             if running:
                 log.info("app_config：采集中，Tab2 保持后台（开关关，任务结束后自然闲置）")
                 return
-            # 空闲：收起所有 Tab2 家族页（explore 骨架/残留采集页；无论谁创建——
-            # keeper 事件/兜底重建的 explore 不在 _task_page 缓存，须直接扫描关闭）
-            ctx = await eng.context()
-            closed = 0
-            for p in list(ctx.pages):
-                if p.is_closed():
-                    continue
-                u = p.url or ""
-                if "xiaohongshu.com" in u and "/login" not in u:
-                    try:
-                        await p.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    closed += 1
-            log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
+            await _close_idle_tab2_family(eng)
     except Exception as e:  # noqa: BLE001
         log.warning("app_config Tab2 联动失败: %s", e)
 
