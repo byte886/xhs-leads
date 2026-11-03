@@ -104,6 +104,9 @@
 ### 5.1 整体形态
 **本地部署 Web 应用**（对标视频工具 127.0.0.1:8791）+ 浏览器自动化/逆向 API 采集 + 大模型 API 生成。
 
+> ⚠️ **现行实现口径（v1.5，R-6.38c）**：采集不依赖 MCP server。现行 = `engine_pool`（Playwright 直驱 CFT）+ `collect_pipeline` 采集流水线；MCP server 仅为立项时的历史选型思路（§5.2 已划线），勿按 MCP 采集实现。
+> 工程约束：提交前跑 `bash /private/tmp/gauntlet/tooling/bin/quality-check.sh --stage commit`（见 README「提交前检查」）；质量门数值与覆盖率口径见 `docs/QUALITY-REPORT-2026-11-03.md`（pytest 基线 321、commit/merge 门全绿）。
+
 ### 5.2 组件选型（Step3 开源清单，均已验证存在）
 | 层 | 候选 | 说明 |
 |---|---|---|
