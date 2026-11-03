@@ -31,7 +31,6 @@ dist/
 # --- 原型自检产物（非交付物） ---
 docs/prototype/_shots/
 *.tsbuildinfo
-.metrics/
 target/
 extension/background.js
 extension/content.js
@@ -53,11 +52,7 @@ data/accounts.json
 data/license*.pem
 data/risk_state.json
 
-# gauntlet 工具产物
-.metrics/
-target/
-
-# --- 质检工具产物（不入库） ---
+# --- 质检工具产物（不入库；gauntlet 质量门 crap/dry/mutate 输出） ---
 .metrics/
 coverage.lcov
 target/
