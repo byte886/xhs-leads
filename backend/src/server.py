@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
@@ -2223,6 +2223,10 @@ _APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 T
 
 
 class AppConfigReq(BaseModel):
+    # R-6.41g：extra='forbid'——未知键在校验层直接 422（pydantic v2 默认静默丢弃）。
+    # app_config_set 内 unknown 白名单分支为防御纵深，extra=forbid 后一般不可达，保留不删。
+    model_config = ConfigDict(extra="forbid")
+
     collect_tab_visible: bool | None = None
 
 
