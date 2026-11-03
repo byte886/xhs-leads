@@ -4,7 +4,7 @@
   uvicorn server:app --host 127.0.0.1 --port 8791
 
 API:
-  GET  /                    → 前端界面（app/web/index.html）
+  GET  /                    → 前端界面（frontend/dist/index.html）
   GET  /api/login_status    → 登录状态
   POST /api/search          → 搜索+详情补全+评分+落库（同步返回新增数）
   GET  /api/notes           → 笔记列表（评分排序，支持关键词过滤）
