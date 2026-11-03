@@ -30,8 +30,6 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 ├── scripts/                   # 脚本与壳（非业务代码）
 │   ├── packaging/             # macOS 壳三件套（launcher.py / xhs_leads.spec / build_mac.sh）
 │   ├── ui_tests/              # UI 自动化（t 系列 headless + e1 系列真实态，见其 README）
-│   ├── browser/               # 浏览器辅助资源（extension/lib 等，随 .app 打包）
-│   ├── legacy/                # 旧引导脚本归档（setup_chrome.py / pick_chrome.py）
 │   └── gen_license.py         # 激活码签发工具
 ├── docs/                      # PRD / 需求 / 质检 / 阶段门文档（立项调研已收敛进 PRD §10.1）
 ├── data/                      # 开发态本地数据目录（账号/采集/cookie/激活码，全部不入库）

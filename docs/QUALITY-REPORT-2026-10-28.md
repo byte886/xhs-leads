@@ -1,5 +1,6 @@
 # xhs-leads 全项目 Clean Code 质检报告（2026-10-28 凌晨）
 
+> ⚠️ 时点快照（2026-11-03 R-6.34k 注）：本报告为 10-28 质检记录，其中 `cdp_setup`/`_pick_chrome_script`/`cdp_status` 等外部 Chrome 手动链函数与端点、`scripts/legacy`、`scripts/browser` 已在 R-6.34h 删除；下文相关数字为当时值，勿据此找代码。
 > 范围：后端（app/src/src/*）+ 前端（app/frontend/src/*）+ 生产脚本（app/scripts/*）+ 浏览器提取（extension/lib/extract.js）+ 测试（tests/*）。
 > 方式：本轮为**可执行检查项**（pytest / import-linter / radon / 构建 / 语法 / crapper），结合 Clean Code Gauntlet 六维度门（CRAP / 变异 / 覆盖率 / 架构 / DRY）。**gauntlet 工具链已修通**（crapper 可产出 CRAP 报告；此前"卡死"根因 = crapper 内部跑 pytest 撞上收尾挂起，随挂起根治一并解决；tree-sitter 语法包确认已装齐）。
 
