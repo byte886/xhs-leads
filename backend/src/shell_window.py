@@ -730,6 +730,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
     base = base_url.rstrip("/")
     shell_ref: list = [None]  # 当前壳 page 对象（引用判活；登录导航 URL 变化不影响）
     _watched_pages: set = set()  # R-6.22p：已挂 close 监听的 page 集合（幂等防重挂）
+    _last_urls: frozenset = frozenset()  # R-6.28：页面集变化才打印快照（防日志刷屏）
 
     async def _find_shell(ctx):
         # R-6.22j：shell_ref 引用判活优先——壳窗可能正被守卫导航到登录页/搜索页
@@ -743,14 +744,20 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         return None
 
     async def _find_tab2(ctx, shell):
+        # R-6.28：采集窗（Tab2）可能在 explore（采集页）或 /login-hint（未登录提示页），
+        # 两者都算任务 tab——提示页期间不被当作无关残留关闭、兜底轮询可补挂监听。
         for p in ctx.pages:
             if p is shell or p.is_closed():
                 continue
             u = p.url or ""
-            if "xiaohongshu.com" in u and "/login" not in u:
+            if ("xiaohongshu.com" in u and "/login" not in u) or "login-hint" in u:
+                print(
+                    f"[xhs-leads] _find_tab2 命中: url={u[:60]!r} "
+                    f"shell_ref_is_self={(shell is not None and p is shell)}",
+                    flush=True,
+                )
                 return p
         return None
-
     def _watch(page, is_shell: bool = False) -> None:
         # R-6.22p：幂等挂载——初始块/兜底轮询可能对同一 page 重复调用，避免
         # close 时触发多次回调与重复日志（用对象引用本身去重，防 id 复用误判）。
@@ -814,6 +821,24 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         _watch(page, is_shell=True)
         print("[xhs-leads] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
 
+    async def _tab2_target_url():
+        """Tab2 采集窗的目标 URL：未登录 → /login-hint 提示页；已登录 → None（explore）。
+
+        轻量判定（无副作用）：只读引擎内存 cookie，**id_token 存在 = 登录成功**（R-6.6
+        权威：未登录会话不种 id_token）→ 返回 None（explore）；否则一律提示页。
+        不调用 server._engine_login_state（其 has_ws 分支会 new_page 开 explore 判定页，
+        与壳窗/Tab2 复用竞态、产生多余窗口）。被踢/风控因 cookie 残留可能误判已登录，
+        由前端 login_status 权威链路与 ForceLogin 弹框兜底。
+        """
+        try:
+            eng = await engine_pool.pool.get("default")
+            mem = await eng.read_cookies()
+            if any(c.get("name") == "id_token" for c in mem):
+                return None
+        except Exception:  # noqa: BLE001（引擎未就绪：按未登录处理，先给提示页）
+            pass
+        return f"http://127.0.0.1:{config.front_port()}/login-hint"
+
     async def _sweep_blank(ctx, shell) -> None:
         """清理空白残留与独立的登录残留 tab（R-6.28 启动时序优化）。
 
@@ -842,6 +867,15 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         try:
             eng = await engine_pool.pool.get("default")
             ctx = await eng.context()
+            _urls = frozenset((p.url or "") for p in ctx.pages if not p.is_closed())
+            if _urls != _last_urls:
+                _last_urls = _urls
+                print(
+                    "[xhs-leads] keeper 页面集="
+                    + " | ".join((p.url or "")[:45] for p in ctx.pages if not p.is_closed())
+                    + "  shell_ref=" + ((shell_ref[0].url or "")[:30] if shell_ref[0] else "None"),
+                    flush=True,
+                )
             shell = await _find_shell(ctx)
             if shell is None:
                 await _rebuild_shell(ctx)
@@ -855,20 +889,30 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             # 无残留才新建，新建失败（server 侧 cleanup 竞态）延迟重试 1 次。
             if config.get_config().get("collect_tab_visible"):
                 async with engine_pool.TAB2_GUARD_LOCK:
+                    _t2_url = await _tab2_target_url()  # R-6.28：未登录→提示页；已登录→explore
                     t2 = await _find_tab2(ctx, shell_ref[0])
                     if t2 is not None:
                         try:
+                            print(
+                                f"[xhs-leads] Tab2 复用前 url={t2.url[:60]!r} t2_url={_t2_url!r}",
+                                flush=True,
+                            )
+                            if _t2_url and "login-hint" not in (t2.url or ""):
+                                await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
                             win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
                             await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
                             _watch(t2, is_shell=False)
                         except Exception as e:  # noqa: BLE001
                             print(f"[xhs-leads] Tab2 采集窗口复用校准失败: {e!r}", flush=True)
                     else:
+                        print(
+                            f"[xhs-leads] Tab2 无残留，新建（t2_url={_t2_url!r}）", flush=True,
+                        )
                         for _attempt in range(2):
                             try:
                                 page = await eng.new_page()  # 任务页=独立采集窗口（R-6.21b 应用模式）
                                 await page.goto(
-                                    "https://www.xiaohongshu.com/explore",
+                                    _t2_url or "https://www.xiaohongshu.com/explore",
                                     wait_until="domcontentloaded", timeout=10000,
                                 )
                                 await _ensure_debug_title(page)  # 调试窗口标题守护
@@ -895,6 +939,15 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
         try:
             eng = await engine_pool.pool.get("default")
             ctx = await eng.context()
+            _urls = frozenset((p.url or "") for p in ctx.pages if not p.is_closed())
+            if _urls != _last_urls:
+                _last_urls = _urls
+                print(
+                    "[xhs-leads] keeper 页面集="
+                    + " | ".join((p.url or "")[:45] for p in ctx.pages if not p.is_closed())
+                    + "  shell_ref=" + ((shell_ref[0].url or "")[:30] if shell_ref[0] else "None"),
+                    flush=True,
+                )
             shell = await _find_shell(ctx)
             if shell is not None:
                 shell_ref[0] = shell
@@ -908,6 +961,33 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             t2 = await _find_tab2(ctx, shell_ref[0])
             if t2 is not None:
                 _watch(t2, is_shell=False)  # 仅补挂关闭监听（关闭=仅关采集窗）
+                try:
+                    # R-6.28：登录态联动——未登录 → Tab2 导航提示页；登录成功 → 回 explore。
+                    # 仅当当前页与目标不一致时导航，用户手动导航别处不打断。
+                    _url = await _tab2_target_url()
+                    u = t2.url or ""
+                    if _url and "login-hint" not in u:
+                        await t2.goto(_url, wait_until="domcontentloaded", timeout=8000)
+                    elif _url is None and "login-hint" in u:
+                        await t2.goto(
+                            "https://www.xiaohongshu.com/explore",
+                            wait_until="domcontentloaded", timeout=8000,
+                        )
+                except Exception:  # noqa: BLE001（导航失败不阻断监护，下轮再试）
+                    pass
+                if _url:
+                    # R-6.28：未登录时关闭孤儿 explore 页（login_status 前端轮询经
+                    # _engine_login_state 可能新开判定页；未登录态无有效任务页，
+                    # 多余 explore 一律判定页残留 → 关闭避免窗口堆叠）。
+                    for p in list(ctx.pages):
+                        if p is shell_ref[0] or p is t2 or p.is_closed():
+                            continue
+                        u = p.url or ""
+                        if "xiaohongshu.com" in u and "/login" not in u:
+                            try:
+                                await p.close()
+                            except Exception:  # noqa: BLE001
+                                pass
             await _sweep_blank(ctx, shell_ref[0])
         except Exception as e:  # noqa: BLE001（引擎未就绪：下轮再试）
             pass

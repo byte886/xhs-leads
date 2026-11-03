@@ -360,19 +360,16 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
         # 被踢信号覆盖（平台已踢但 cookie 残留 → 判失效）
         page_logged_in = not kicked
     elif has_ws:
-        if page is None:
-            page = await eng.new_page()
-            await page.goto(
-                "https://www.xiaohongshu.com/explore",
-                wait_until="domcontentloaded",
-                timeout=30000,
-            )
-            # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
-            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-            await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
-            await asyncio.sleep(3)
-        await page.evaluate(browser_client._EXTRACT_SRC)
-        page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
+        # R-6.28：不再 new_page 开 explore 判定页——Tab2 为本地提示页（login-hint）时
+        # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
+        # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
+        # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
+        if page is not None:
+            try:
+                await page.evaluate(browser_client._EXTRACT_SRC)
+                page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
+            except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
+                page_logged_in = False
     return has_ws, page_logged_in, kicked, risk_verify
 
 
@@ -443,6 +440,55 @@ async def login_status():
     except Exception as e:  # noqa: BLE001
         result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
         return result
+
+
+# ============ 采集调试窗未登录提示页（R-6.28）============
+# 未登录时 Tab2（采集/调试窗口）不再显示小红书登录墙，改为本提示页：
+# 与 ForceLogin 弹框同一视觉语言（品牌红 #ff2442、Phosphor sign-in 图标、
+# 圆角 16、卡片式、禁 emoji）。登录成功后由 keep_shell_tab / import_cookies 导航回 explore。
+_LOGIN_HINT_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>尚未登录小红书</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    display:flex; align-items:center; justify-content:center;
+    background:#f5f6f8; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .card {
+    width:400px; max-width:calc(100% - 48px); background:#fff; border-radius:16px;
+    padding:44px 36px 36px; text-align:center; box-shadow:0 8px 28px rgba(30,30,34,.08);
+  }
+  .icon { color:#ff2442; display:inline-flex; margin-bottom:20px; }
+  h1 { font-size:17px; font-weight:600; color:#1d1d1f; margin-bottom:12px; }
+  .desc { font-size:13.5px; line-height:1.75; color:#666; margin-bottom:8px; }
+  .foot { font-size:12px; color:#9b9b9f; margin-top:20px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <span class="icon">
+      <svg width="44" height="44" viewBox="0 0 256 256" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+        <path d="M141.66,133.66l-40,40a8,8,0,0,1-11.32-11.32L116.69,136H24a8,8,0,0,1,0-16h92.69L90.34,93.66a8,8,0,0,1,11.32-11.32l40,40A8,8,0,0,1,141.66,133.66ZM200,32H136a8,8,0,0,0,0,16h56V208H136a8,8,0,0,0,0,16h64a8,8,0,0,0,8-8V40A8,8,0,0,0,200,32Z"/>
+      </svg>
+    </span>
+    <h1>尚未登录小红书</h1>
+    <p class="desc">登录后才能开始采集。请在左侧 APP 窗口点击「去登录」，<br>扫码或手机号登录均可。</p>
+    <p class="foot">登录成功后，本窗口将自动进入采集页</p>
+  </div>
+</body>
+</html>"""
+
+
+@app.get("/login-hint")
+async def login_hint():
+    """采集调试窗未登录提示页（Tab2 占位，登录后由守卫/import_cookies 导航回 explore）。"""
+    return Response(content=_LOGIN_HINT_HTML, media_type="text/html; charset=utf-8")
 
 
 # ================= 真实登录页方案（R-6.5）=================
