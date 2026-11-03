@@ -58,7 +58,7 @@ async function openPublish(note: Note) {
 async function cloneOne(note: Note) {
   // 产品以图文为主：视频仅设计留位，暂不支持一键克隆（后端视频分支保留，未来解锁）
   if (note.note_type === 'video') {
-    toast('视频笔记暂不支持一键克隆（当前产品以图文为主）')
+    toast('视频笔记暂不支持一键克隆（当前产品以图文为主）', 'error')
     return
   }
   await openPublish(note)
@@ -80,7 +80,7 @@ async function collectClients(note: Note) {
         const body = await resp.json()
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
-      toast('采集失败：' + msg.slice(0, 120))
+      toast('采集失败：' + msg.slice(0, 120), 'error')
       // R-6.21e：交互异常驱动登录引导——detail 命中登录失效信号（登录/被踢/验证码）→ 弹强制登录框
       if (isLoginAbnormal(msg)) forceOpen.value = true
       return
@@ -97,7 +97,7 @@ async function collectClients(note: Note) {
       await clientsRef.value?.refresh()
     }
   } catch {
-    toast('采集失败：网络错误')
+    toast('采集失败：网络错误', 'error')
   }
 }
 
@@ -150,9 +150,10 @@ onMounted(async () => {
     } catch { /* 后端未就绪/瞬时失败：静默，下轮再查 */ }
   }, 30000)
   onUnmounted(() => window.clearInterval(loginGuardTimer))
-  // 显式 ?stage=pick 调试入口：不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）
+  // 显式 ?stage=pick 调试入口：仅 dev 构建可用（生产 build 不加载历史笔记）；
+  // 不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）
   const urlStage = new URLSearchParams(location.search).get('stage')
-  if (urlStage === 'pick') {
+  if (import.meta.env.DEV && urlStage === 'pick') {
     try {
       const r = await apiNotes()
       if (r.total > 0) {
@@ -210,7 +211,7 @@ onMounted(async () => {
 
     <!-- Toast -->
     <transition name="toast-fade">
-      <div v-if="appState.toastMsg" class="toast">{{ appState.toastMsg }}</div>
+      <div v-if="appState.toastMsg" class="toast" :class="appState.toastType">{{ appState.toastMsg }}</div>
     </transition>
   </div>
 </template>

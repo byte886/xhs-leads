@@ -135,7 +135,13 @@ function pickAuthor(a: Author) {
       </div>
 
       <!-- 笔记视图 -->
-      <CardGrid v-else :notes="appState.notes" selectable :filter-text="filterText" @menu="emit('menu', $event)" @clone="emit('clone', $event)" @clients="emit('clients', $event)" />
+      <div v-if="view === 'notes'">
+        <div v-if="!appState.notes.length && !appState.collecting" class="empty" style="padding:48px 0">
+          <div class="big">未获取到笔记</div>
+          <p>调整关键词或筛选条件后重新采集；结果会在此展示评分卡片。</p>
+        </div>
+        <CardGrid v-else :notes="appState.notes" selectable :filter-text="filterText" @menu="emit('menu', $event)" @clone="emit('clone', $event)" @clients="emit('clients', $event)" />
+      </div>
     </div>
   </div>
 </template>

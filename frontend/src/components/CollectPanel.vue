@@ -61,7 +61,7 @@ async function doCollect() {
     }
     return
   }
-  if (!appState.params.keyword.trim()) { toast('请先输入关键词'); return }
+  if (!appState.params.keyword.trim()) { toast('请先输入关键词', 'error'); return }
   appState.collecting = true
   appState.status = '正在采集'
   appState.selected = {}
@@ -91,7 +91,7 @@ async function doCollect() {
         if (pr.status === 'error') {
           appState.searchNote = pr.note || '采集失败'
           appState.status = '失败'
-          toast(pr.note || '采集失败')
+          toast(pr.note || '采集失败', 'error')
           if (isLoginAbnormal(pr.note || '')) emit('open-login')
           return
         }
@@ -111,13 +111,13 @@ async function doCollect() {
         if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
         if (timer) { clearInterval(timer); timer = null }
         appState.collecting = false
-        toast(`查询进度失败：${(e2 as Error).message}`)
+        toast(`查询进度失败：${(e2 as Error).message}`, 'error')
       }
     }, 1000)
   } catch (e) {
     if (timer) { clearInterval(timer); timer = null }
     const msg = (e as Error).message
-    toast(`启动采集失败：${msg}`)
+    toast(`启动采集失败：${msg}`, 'error')
     appState.status = '失败'
     if (isLoginAbnormal(msg)) emit('open-login')
     appState.collecting = false

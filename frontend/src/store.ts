@@ -55,13 +55,18 @@ export const appState = reactive({
   cookieRefreshTick: 0,
   // toast
   toastMsg: '',
+  toastType: 'ok' as 'ok' | 'error',
 })
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
-export function toast(msg: string) {
+// R-6.43a：error 类红色且不自动消失（需用户感知失败）；ok 类保持 2.4s 自动消失
+export function toast(msg: string, type: 'ok' | 'error' = 'ok') {
   appState.toastMsg = msg
+  appState.toastType = type
   if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { appState.toastMsg = '' }, 2400)
+  if (type === 'ok') {
+    toastTimer = setTimeout(() => { appState.toastMsg = '' }, 2400)
+  }
 }
 
 export function setStage(s: Stage) {

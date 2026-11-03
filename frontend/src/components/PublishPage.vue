@@ -75,7 +75,7 @@ function restoreDraft(d: DraftItem) {
 
 async function removeDraft(id: number) {
   const r = await apiDraftDelete(id).catch(() => ({ ok: false }))
-  toast(r.ok ? '草稿已删除' : '删除失败')
+toast(r.ok ? '草稿已删除' : '删除失败', r.ok ? 'ok' : 'error')
   loadDrafts()
 }
 
@@ -122,7 +122,7 @@ async function openFor(note: CloneTarget) {
     visible.value = '公开可见'
     account.value = ''
   } catch (e) {
-    toast(`克隆失败：${(e as Error).message}`)
+    toast(`克隆失败：${(e as Error).message}`, 'error')
   } finally {
     loading.value = false
   }
@@ -185,7 +185,7 @@ async function onAddImages(ev: Event) {
         added++
       }
     } else {
-      toast(`追加失败：${r.note || '未知原因'}`)
+      toast(`追加失败：${r.note || '未知原因'}`, 'error')
     }
   }
   appending.value = false
@@ -257,10 +257,10 @@ async function publish() {
       images: dedupe(images.value),
       visible: visible.value
     })
-    toast(rr.ok ? '发布成功' : `发布失败：${rr.note || '未知原因'}`)
+toast(rr.ok ? '发布成功' : `发布失败：${rr.note || '未知原因'}`, rr.ok ? 'ok' : 'error')
     if (!rr.ok && isLoginAbnormal(String(rr.note || rr.error || ''))) emit('open-login')
   } catch (e) {
-    toast(`发布失败：${(e as Error).message}`)
+    toast(`发布失败：${(e as Error).message}`, 'error')
     if (isLoginAbnormal((e as Error).message)) emit('open-login')
   } finally {
     publishing.value = false
@@ -277,9 +277,9 @@ async function saveDraft() {
       visible: visible.value,
       feed_id: feedId.value
     })
-    toast(r.ok ? r.note || '草稿已保存（长期保留）' : `保存失败：${r.note || '未知原因'}`)
+toast(r.ok ? r.note || '草稿已保存（长期保留）' : `保存失败：${r.note || '未知原因'}`, r.ok ? 'ok' : 'error')
   } catch (e) {
-    toast(`保存失败：${(e as Error).message}`)
+    toast(`保存失败：${(e as Error).message}`, 'error')
   }
 }
 
@@ -313,10 +313,10 @@ async function writeback(lg: LogItem) {
       toast('已回写互动数据（可在发布记录中查看）')
       await loadLogs()
     } else {
-      toast(`回写失败：${(r as { detail?: string }).detail || (r as { note?: string }).note || '未知原因'}`)
+      toast(`回写失败：${(r as { detail?: string }).detail || (r as { note?: string }).note || '未知原因'}`, 'error')
     }
   } catch (e) {
-    toast(`回写失败：${(e as Error).message}`)
+    toast(`回写失败：${(e as Error).message}`, 'error')
   } finally {
     logBusy.value = 0
   }
@@ -342,7 +342,7 @@ function gotoAiSettings() {
 
 async function aiRun(action: string) {
   if (!aiCfg.value?.configured) {
-    toast('未配置 AI 模型：请先到「设置」Tab 配置 API Key / Base URL / 模型')
+    toast('未配置 AI 模型：请先到「设置」Tab 配置 API Key / Base URL / 模型', 'error')
     return
   }
   aiBusy.value = action
@@ -353,7 +353,7 @@ async function aiRun(action: string) {
     else body.value = (r.result || '').slice(0, 1000)
     toast('已生成，可继续编辑')
   } catch (e) {
-    toast(`AI 生成失败：${(e as Error).message}`)
+    toast(`AI 生成失败：${(e as Error).message}`, 'error')
   } finally {
     aiBusy.value = ''
   }

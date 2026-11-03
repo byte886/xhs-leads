@@ -50,7 +50,7 @@ async function relogin() {
       await loadAcct()
     }
   } catch (e) {
-    toast('重新登录失败：' + (e as Error).message)
+    toast('重新登录失败：' + (e as Error).message, 'error')
   }
 }
 
@@ -136,10 +136,10 @@ async function toggleCollectTab() {
       collectTabVisible.value = target
       toast(target ? '已开启：采集画面前置显示于 Tab2（空闲/新任务即时生效）' : '已关闭：采集后台完成，空闲采集页已收起（即时生效）')
     } else {
-      toast('保存失败：' + (r.error || '未知错误'))
+      toast('保存失败：' + (r.error || '未知错误'), 'error')
     }
   } catch (e) {
-    toast('保存失败：' + (e as Error).message)
+    toast('保存失败：' + (e as Error).message, 'error')
   } finally {
     collectTabBusy.value = false
   }
@@ -158,7 +158,7 @@ async function loadLicense() {
   }
 }
 async function activateLicense() {
-  if (!actKey.value.trim()) { toast('请输入激活码'); return }
+  if (!actKey.value.trim()) { toast('请输入激活码', 'error'); return }
   actBusy.value = true
   try {
     const r = await apiLicenseActivate(actKey.value.trim())
@@ -167,10 +167,10 @@ async function activateLicense() {
       actKey.value = ''
       await loadLicense()
     } else {
-      toast(r.note || '激活失败')
+      toast(r.note || '激活失败', 'error')
     }
   } catch (e) {
-    toast(`激活失败：${(e as Error).message}`)
+    toast(`激活失败：${(e as Error).message}`, 'error')
   } finally {
     actBusy.value = false
   }
@@ -196,7 +196,7 @@ function fillAiForm() {
 }
 async function saveAi() {
   if (!aiForm.openai_base_url || !aiForm.default_model) {
-    toast('请填写 Base URL 与模型名称')
+    toast('请填写 Base URL 与模型名称', 'error')
     return
   }
   aiSaving.value = true
@@ -206,7 +206,7 @@ async function saveAi() {
     fillAiForm()
     toast('AI 配置已保存')
   } catch (e) {
-    toast(`保存失败：${(e as Error).message}`)
+    toast(`保存失败：${(e as Error).message}`, 'error')
   } finally {
     aiSaving.value = false
   }
@@ -221,7 +221,7 @@ async function clearAi() {
     fillAiForm()
     toast('AI 配置已清除（可随时重新配置）')
   } catch (e) {
-    toast(`清除失败：${(e as Error).message}`)
+    toast(`清除失败：${(e as Error).message}`, 'error')
   } finally {
     aiSaving.value = false
   }
@@ -233,10 +233,10 @@ async function testAi() {
       const extra = r.model_available === false ? '（模型不在清单，可忽略）' : ''
       toast(`连接成功：可用模型 ${r.count ?? 0} 个${extra}`)
     } else {
-      toast(`测试失败：${r.error || '未知原因'}`)
+      toast(`测试失败：${r.error || '未知原因'}`, 'error')
     }
   } catch (e) {
-    toast(`测试失败：${(e as Error).message}`)
+    toast(`测试失败：${(e as Error).message}`, 'error')
   }
 }
 
@@ -267,9 +267,9 @@ async function savePersona() {
     })
     const d = await r.json()
     if (d.ok) toast('人设已保存（AI 生成保持该口吻）')
-    else toast('保存失败')
+    else toast('保存失败', 'error')
   } catch {
-    toast('保存失败：网络错误')
+    toast('保存失败：网络错误', 'error')
   } finally {
     personaSaving.value = false
   }

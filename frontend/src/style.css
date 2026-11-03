@@ -267,6 +267,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
   background: #111; color: #fff; padding: 10px 20px; border-radius: 99px;
   font-size: 13px; z-index: 99;
 }
+.toast.error { background: #c0392b; }
 
 @media (max-width: 960px) {
   .workbench { flex-direction: column; }

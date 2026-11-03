@@ -98,7 +98,7 @@ const lastZip = ref<{ path: string; name: string } | null>(null)
 
 async function downloadImages() {
   const ids = Object.keys(appState.selected)
-  if (!ids.length) { toast('请先勾选笔记'); return }
+  if (!ids.length) { toast('请先勾选笔记', 'error'); return }
   let resp
   try {
     resp = await fetch('/api/download_images', {
@@ -107,15 +107,15 @@ async function downloadImages() {
       body: JSON.stringify({ feed_ids: ids }),
     })
   } catch {
-    toast('打包失败：网络错误')
+    toast('打包失败：网络错误', 'error')
     return
   }
   if (!resp.ok) {
-    toast('打包失败：' + ((await resp.text()) || resp.status).toString().slice(0, 80))
+    toast('打包失败：' + ((await resp.text()) || resp.status).toString().slice(0, 80), 'error')
     return
   }
   const data = await resp.json().catch(() => null)
-  if (!data || !data.ok) { toast('打包失败：响应异常'); return }
+  if (!data || !data.ok) { toast('打包失败：响应异常', 'error'); return }
   lastZip.value = { path: data.path, name: data.name }
   const missing = (data.missing || []).length
   toast(
@@ -126,7 +126,7 @@ async function downloadImages() {
 }
 
 async function openFolder() {
-  if (!lastZip.value) { toast('请先下载图片包'); return }
+  if (!lastZip.value) { toast('请先下载图片包', 'error'); return }
   try {
     const resp = await fetch('/api/open_folder', {
       method: 'POST',
@@ -134,10 +134,10 @@ async function openFolder() {
       body: JSON.stringify({ path: lastZip.value.path }),
     })
     const data = await resp.json().catch(() => null)
-    if (!resp.ok || !data?.ok) { toast('打开文件夹失败：' + ((data?.detail) || resp.status)); return }
+    if (!resp.ok || !data?.ok) { toast('打开文件夹失败：' + ((data?.detail) || resp.status), 'error'); return }
     toast('已在 Finder 中打开，双击 zip 即可查看图片')
   } catch {
-    toast('打开文件夹失败：网络错误')
+    toast('打开文件夹失败：网络错误', 'error')
   }
 }
 
@@ -278,7 +278,7 @@ function fmtPub(ts: string | number | null): string {
             class="ha-btn clone"
             :class="{ off: note.note_type === 'video' }"
             :title="note.note_type === 'video' ? '视频暂不支持克隆（图文为主，视频仅设计留位）' : '一键克隆（抄内容）'"
-            @click.stop="note.note_type === 'video' ? toast('视频笔记暂不支持一键克隆（当前产品以图文为主）') : emit('clone', note)"
+            @click.stop="note.note_type === 'video' ? toast('视频笔记暂不支持一键克隆（当前产品以图文为主）', 'error') : emit('clone', note)"
           >一键克隆</button>
           <button class="ha-btn client" title="采集客户（采人）" @click.stop="emit('clients', note)">采集客户</button>
         </div>
