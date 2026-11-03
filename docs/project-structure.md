@@ -11,7 +11,7 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   ├── src/                   # Python 包，包名即 src（含 __init__.py）
 │   │   ├── server.py          #   FastAPI 应用 :8791（采集/评分/克隆/客户库/草稿/发布护栏）
 │   │   ├── config.py          #   统一配置中心（ROOT/DATA_DIR/profile 归一）
-│   │   ├── browser_client.py  #   Chrome CDP 客户端（读取 Cookie 库）
+│   │   ├── browser_client.py  #   Chrome/CFT 驱动封装（CDP + 引擎层）
 │   │   ├── engine_pool.py     #   多账户引擎池 + 生命周期管理
 │   │   ├── collect_pipeline.py#   采集流水线
 │   │   ├── score.py           #   低粉爆款 4 维评分
@@ -90,7 +90,7 @@ bash scripts/packaging/build_mac.sh                # → dist/XHSLeads.app
 # UI 回归（t 系列 headless，不依赖登录）
 bash scripts/ui_tests/run_all.sh                   # 当前基线 PASS=9 FAIL=0 SKIP=2
 
-# e1 真实链路（需 9223 可见 Chrome + 小红书已登录；低频单次）
+# e1 真实链路（连本机引擎实例 9223，同一登录态 profile；无需另开外部可见 Chrome）
 backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py   # s1–s6 逐个
 
 # .app 冒烟（免浏览器）

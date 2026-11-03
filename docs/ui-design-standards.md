@@ -54,4 +54,4 @@
 ## 6. 本次落地记录
 
 - R-6.26 登录弹框重设计（ForceLogin.vue）：三段式结构、文案去术语、Phosphor sign-in 图标、遮罩 + 卡片视觉基线。
-- 调试窗标题固定：引擎注入 extract.js，统一标题为「小红书」（避免搜索词标题误读）。
+- 调试窗标题固定：`shell_window.py` 页级 `add_init_script`（`_COLLECT_DEBUG_TITLE_JS`）把采集调试窗标题统一为「XHS Leads · 采集调试窗口」（避免搜索词标题误读），非 extract.js。

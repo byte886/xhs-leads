@@ -2,6 +2,12 @@
 
 > 版本：v1.4（需求变更）｜日期：2026-10-31｜状态：用户逐条对齐 ✅，已编排进 R 批
 > 关联：PRD `docs/Codex自动获客-复刻方案PRD.md`（v1.3 前置）、待办 `docs/project/待办事项.md`、测试批次 `docs/dev-test-batches.md`（新增 R 批）、界面设计 `docs/界面重构设计-对齐版.md`
+>
+> ⚠️ **现行形态勘误（2026-11-03 补，R-6.16 路线A 之后）**：本文件 v1.4 定稿后，形态又经 R-6.5~R-6.30 多轮拍板变更，下列结论**已被推翻/改写**，以本节为准：
+> - **R1 无头化、R3 登录镜像、§三.7 pywebview 壳**：均已推翻。现行壳 = **有头 CFT 应用模式窗口**（R-6.16 路线A，`config.headless=False`），打开 .app 即出可见 Chrome 窗口承载前端，CDP 9223 直接驱动；登录 = **壳窗内导航真实小红书登录页**（截图镜像已被 R-6.5 用户否决），不再用 pywebview/WKWebView、不再有「launcher `_login_guard` 线程」（守卫现为 `shell_window.login_guard` asyncio 任务）。
+> - **R-6.6「启动即强制导航登录页」**：已改写为 R-6.21e/R-6.29 启动时序——**启动停 APP 前端**，未登录时 APP 内弹 ForceLogin、Tab2 停在 `/login-hint`；用户点「去登录」壳窗才导航真实登录页。
+> - 保留有效的只有：R2 独立 profile（登录态落 `<数据目录>/profile`，不读系统 Chrome）、R4 设置→调试视图（`/api/mirror/*`）、R5 全局状态提示条（StatusBar）。
+> 逐条注记见下文对应行。
 
 ---
 
@@ -13,9 +19,9 @@
 
 | # | 变更点 | 内容 | 拍板 |
 |---|---|---|---|
-| R1 | **引擎无头化** | 采集/登录引擎改为系统 Chrome **无头模式**（`channel="chrome"` + headless，不下载任何额外引擎）；外部零 Chrome 窗口 | ✅ 用户拍板（10-31） |
-| R2 | **登录态独立 profile** | 登录在引擎**独立 profile**（app 数据目录内）完成，**不再读系统 Chrome Cookie 库**；`cookie_reader` 读系统 Chrome 链路下线（代码保留注释） | ✅ 用户拍板 |
-| R3 | **登录小窗（镜像）** | app 界面内弹「登录小窗」= **完整小红书网页登录页镜像**（CDP 截图流 + 事件转发）：扫码 / 手机号+验证码 / 微信（如网页版有）**全部可用，不限制任何登录途径**；交互为真实转发（点击/输入/拖拽均支持） | ✅ 用户拍板 |
+| R1 | **引擎无头化** | 采集/登录引擎改为系统 Chrome **无头模式**（`channel="chrome"` + headless，不下载任何额外引擎）；外部零 Chrome 窗口 | ✅ 用户拍板（10-31）【**已被 R-6.16 路线A 推翻**：现行有头 CFT 窗口做壳，`config.headless=False`】 |
+| R2 | **登录态独立 profile** | 登录在引擎**独立 profile**（app 数据目录内）完成，**不再读系统 Chrome Cookie 库**；`cookie_reader` 读系统 Chrome 链路下线（代码保留注释） | ✅ 用户拍板【现行仍有效：profile=`<数据目录>/profile`】 |
+| R3 | **登录小窗（镜像）** | app 界面内弹「登录小窗」= **完整小红书网页登录页镜像**（CDP 截图流 + 事件转发）：扫码 / 手机号+验证码 / 微信（如网页版有）**全部可用，不限制任何登录途径**；交互为真实转发（点击/输入/拖拽均支持） | ✅ 用户拍板【**已被 R-6.5 否决**：现行=壳窗内导航真实登录页；镜像层仅留作 R4 调试视图】 |
 | R4 | **调试视图** | 设置页新增「调试」入口：**按需开启**引擎实时画面（观察采集过程），可交互（与登录小窗同款镜像层；只读模式待实现时给默认值） | ✅ 用户拍板 |
 | R5 | **全局状态提示条** | 界面**实时播报**「正在打开笔记 #3… / 正在提取封面图… / 正在评分…」；不落盘（区别于审计日志），后端动作 → 前端轮询/推送 | ✅ 用户拍板 |
 | R6 | **镜像按需** | 截图流三档：登录自动开 / 调试手动开 / 平时关（不占资源） | ✅ 用户拍板 |
@@ -41,7 +47,7 @@
 4. **状态提示条**：后端任务状态接口扩展动作文案（当前动作 + 进度），前端全局状态条轮询显示；审计日志（logger.py）保持不变，两者并存不混淆。
 5. **e1 基建**：引擎带 `--remote-debugging-port=<固定端口>` 启动供 e1 连接；9223 外部 Chrome 测试路径退役。
 6. **运行模式（dev/prod）**：打包进壳后改码必须重打包、日志落盘、前端静态——不便调试；故显式区分（`XHS_LEADS_MODE=dev|prod`，缺省 auto：PyInstaller 打包态→prod、源码→dev）。dev=源码直跑（vite HMR 5173 + 控制台日志，t/e1 回归所在）；prod=壳内交付形态（静态托管 + app.log，只做壳冒烟验收）。详见 `scripts/packaging/README.md` 运行模式节。
-7. **壳内 UI 载体 = pywebview 内嵌窗口（R 批最终定稿，替代 webbrowser.open）**：launcher 起 uvicorn 就绪后 `webview.create_window("XHS Leads", url, 1280x800)` 内嵌 WKWebView 呈现前端——打开 `.app` 后工具 UI 与小红书登录镜像小窗**都在壳窗口内**、外部零 Chrome 窗口（根因：旧 launcher 用 `webbrowser.open` 弹系统浏览器，已全文件重写移除）。`window.events.closed` 关窗优雅停服；`CZ_NO_BROWSER=1` 保留无窗口事件循环（自动化冒烟）；spec `hiddenimports += collect_submodules("webview")`；退出通道 = 关窗 / cmd+Q / `CZ_SELF_EXIT_AFTER` / `CZ_EXIT_ON_FILE`（GUI 主循环下 Python 信号 handler 延迟为已知边界，见 packaging README「退出方式」）。
+7. **壳内 UI 载体**【已被 R-6.16 路线A 改写】：本节原写「pywebview 内嵌 WKWebView」。现行壳 = **有头 CFT 应用模式窗口**（`shell_window.ensure_shell` 走 `--app` 命令行路由弹出），前端在该 CFT 窗口内呈现；`launcher` 与壳协程跑在**同一事件循环**（R-6.16），登录守卫现为 `shell_window.login_guard` asyncio 任务（非 pywebview 线程）。`window.events.closed` 关窗语义改为 R-6.22p：关主窗=整体退出。`CZ_NO_BROWSER=1` 仍保留无窗口事件循环（自动化冒烟）。
 
 ## 四、批次编排（R 批 — App 内呈现形态）
 
@@ -70,7 +76,7 @@
 - **打包态验收**：壳窗口内真实登录页（r65b_login.png）、登录页稳定停留 18s 不拉回、引擎独立 profile 正常启动无锁冲突、`login_status` 未登录态判定正确（raw: `web_session=有 页面登录=否`）；后端回归 250 passed EXIT=0。
 
 **R-6.6 附注（强制登录升级：整页登录页 + URL 锁死）**：用户两轮否决后的最终形态——①弹层版（explore + 登录弹层 + JS 隐藏 close）被否决：**叉可点掉、域内可自由浏览永远回不去**；②拍板**独立整页登录页**：`https://www.xiaohongshu.com/login?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F`（headless Playwright 实测：title「小红书 - 你的生活兴趣社区」，全屏登录界面含 +86/输入手机号/输入验证码/获取验证码/登录/协议勾选/新用户可直接登录/小红书或微信扫码，**无推荐流内容**；登录成功自动跳 redirectPath→首页并种 web_session+id_token）。工程落地：
-- **launcher.py `_login_guard`（R-6.6 现行）**：启动即 `login_begin` 主动置 pending（不依赖前端按钮——实测打包态按钮点击偶发不触发后端请求）；主轮询进登录页后：**只认 `id_token`**（登录成功专属令牌，未登录不种；web_session 未登录也种占位值，以它触发会注入无效会话并与 URL 锁死互相打架——拉回 login 页会把壳窗口真实会话 cookie 覆盖成占位，形成「注入恒未通过」死循环，10-31 实测定位）；id_token 出现 → 8s 节流 `import_cookies` 注入引擎 → 判定 true 才 `load_url` 回 APP；**URL 锁死**：无 id_token 且 URL 不含 `/login` → 立即拉回（域内 explore 浏览也会被拉回）；无超时、注入未通过留在登录页/登录态已现则不拉回；force_login_js 保留防御性兜底（整页登录页本身无 close 可点）。
+- **launcher.py `_login_guard`（R-6.6 当时；现行已迁移改写）**【注：R-6.16 后守卫迁至 `shell_window.login_guard` asyncio 任务；「启动即 login_begin 主动置 pending」已被 R-6.21e/R-6.29 推翻——现行启动停 APP 前端、不主动导航登录页，由 ForceLogin 点「去登录」才置 pending 导航】：主轮询进登录页后：**只认 `id_token`**（登录成功专属令牌，未登录不种；web_session 未登录也种占位值，以它触发会注入无效会话并与 URL 锁死互相打架——拉回 login 页会把壳窗口真实会话 cookie 覆盖成占位，形成「注入恒未通过」死循环，10-31 实测定位）；id_token 出现 → 8s 节流 `import_cookies` 注入引擎 → 判定 true 才 `load_url` 回 APP；**URL 锁死**：无 id_token 且 URL 不含 `/login` → 立即拉回（域内 explore 浏览也会被拉回）；无超时、注入未通过留在登录页/登录态已现则不拉回；force_login_js 保留防御性兜底（整页登录页本身无 close 可点）。
 - **server.py `_engine_login_state` 判定升级**：id_token 存在 → 直接判已登录（**修复假阴性**：引擎 headless 页面渲染偶发空白/滞后，`xhsIsLoggedIn()` 恒 false——实测注入后引擎 cookie 含 id_token(len=136)+unread，页面却空白）；否则回退 web_session + 页面 xhsIsLoggedIn 双判定（保留防占位假阳性）。
 - **LoginModal.vue（强制版）**：打开即自动 `goLogin()`（无按钮依赖）、无「稍后再说/关闭」按钮、纯引导文案 + 登录态轮询自动关。
 - **闭环验收（10-31 用户真实手机号+验证码）**：登录 → id_token 捕获 → 引擎注入 → `login_status`=logged_in（raw: `web_session=有 页面登录=是`）→ 窗口自动回 APP 首页（r70_now.png 铁证）；风险自动解除（risk_resolve）。后端回归 250 passed EXIT=0。
@@ -78,7 +84,7 @@
 
 ## 五、验收口径
 
-- R 批完成后：**外部不出现 Chrome 窗口**；登录（扫码/手机号/微信任选）全程在 app 内完成；登录态重启后保留且不依赖系统 Chrome；设置→调试可看采集实时画面；状态提示条实时显示当前动作。
+- R 批完成后【R-6.16 后已改写】：现行 = 打开 .app 即出**一个有头 CFT 壳窗口**（左半承载前端）+ 一个采集调试窗（右半，开关可控）；登录全程在壳窗内完成；登录态重启后保留且不依赖系统 Chrome；设置→调试可看采集实时画面；状态提示条实时显示当前动作。（原「外部不出现 Chrome 窗口」已作废——外部出现的就是我们自己的 CFT 壳窗。）
 - 测试基线：A 批 pytest 全绿（非登录态 100/8）+ t 系列全绿 + e1 六场景改造后全过 + 新增 R 测试点（登录小窗三种途径交互、镜像开关、状态条文案、独立 profile 登录态持久）。
 - 全部达成后执行 push（重构批 + R 批）。
 
