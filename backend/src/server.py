@@ -84,9 +84,33 @@ def _mark_collect_done(account_id: str = "default") -> None:
     risk.mark_collect_done(account_id or "default")
 
 
+def _reset_collection_data() -> int:
+    """R-6.25：清空采集存储数据（笔记 + 客户 + 采集下载的本地图片）。
+
+    语义（用户对齐）：应用重启时清空一次；每次新采集开始时再清空一次，
+    保证任何时刻库里只有"本次运行/本次采集"的数据。
+    user_ 前缀（发布页「追加图片」上传资产）属用户主动操作产物，保留。
+    返回删除的图片文件数。
+    """
+    con = _db()
+    con.execute("DELETE FROM notes")
+    con.execute("DELETE FROM clients")
+    con.commit()
+    removed = 0
+    if IMAGES_DIR.exists():
+        for f in IMAGES_DIR.iterdir():
+            if f.is_file() and not f.name.startswith("user_"):
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:  # noqa: BLE001
+                    pass
+    return removed
+
+
 @app.on_event("startup")
 async def _startup_cleanup():
-    """启动时清理：残留任务 tab + 无引用本地图片。best-effort 不阻塞启动。
+    """启动时清理：残留任务 tab + 采集存储数据。best-effort 不阻塞启动。
 
     仅清理「已运行」引擎的残留 tab；引擎未启动时跳过——启动清理不应有
     拉起引擎的副作用（打包态冷启动慢，dev 态回归也依赖本钩子不拉引擎）。
@@ -98,7 +122,8 @@ async def _startup_cleanup():
     except Exception:  # noqa: BLE001
         pass
     try:
-        _cleanup_orphan_images()
+        # R-6.25：启动即清空采集存储（重启后库里只有本次运行数据）
+        _reset_collection_data()
     except Exception:  # noqa: BLE001
         pass
 
@@ -1298,6 +1323,9 @@ async def collect_start(req: SearchReq):
     _check_license_or_raise("collect")  # 授权薄层：collect 功能闸门（free 恒放行）
     await _require_login(account_id)
     _check_collect_throttle(account_id)  # 每账号拟人频率保护（R-6.15 起恒放行，不抛错）
+    # R-6.25 用户对齐：新采集开始时清空旧采集存储（笔记+客户+采集图片），
+    # 保证库中只有本次采集数据；登录校验通过后才清，登录失败不破坏数据。
+    _reset_collection_data()
     # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
     # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
