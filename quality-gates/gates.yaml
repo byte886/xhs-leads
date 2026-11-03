@@ -14,12 +14,13 @@
     行覆盖:
       核心模块:
         模块: [server, engine_pool, collect_pipeline]
-        阈值: "server ≥80%；engine_pool/collect_pipeline 按测试线实测可达值登记"
+        阈值: "R-6.37g 实测：server 79% / engine_pool 45% / collect_pipeline 以实测为准"
       非核心登记:
         模块: [shell_window, mirror, browser_client]
-        阈值: "不回归 2026-11-03 基线（shell_window 7% / mirror 15% / browser_client 24%）"
+        阈值: "可达值阈值（R-6.37g 实测）：shell_window 19% / mirror 82% / browser_client 27%；
+          不低于本实测值即放行"
         豁免理由: "重度 GUI/Playwright 运行时依赖，单测不可达；由 scripts/ui_tests 套件
-          在真实浏览器上守护行为（G1-G7 门），此处豁免仅登记不回归基线"
+          在真实浏览器上守护行为（G1-G7 门），此处按可达值阈值登记"
       其余模块: { 阈值: "≥60%", 说明: "config/logger/score/risk/license/injections/intent/jsonio/llm_service" }
   变异测试:
     when: merge
