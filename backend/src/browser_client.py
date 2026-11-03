@@ -576,43 +576,10 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
         await _close_page_safe(page, account_id)
 
 
-async def open_front(account_id: str = "default") -> dict:
-    """打开小红书首页前台标签（引导扫码）；复用已有 explore 标签避免堆积。"""
-    page = await _page(account_id)
-    try:
-        await page.goto(_XHS + "/explore", wait_until="domcontentloaded", timeout=40000)
-        await page.bring_to_front()
-        return {"opened": True, "url": page.url[:60]}
-    finally:
-        pass  # 前台标签保留给用户扫码
-
-
-async def launch_profile_chrome() -> dict:
-    """（B 方案兼容）打开账号引擎的小红书登录页供扫码。
-
-    引擎由 engine_pool 自动管理（launch_persistent_context），不再需要
-    「带 --remote-debugging-port 启动」；本函数保留原名供旧 UI 调用。
-    """
-    return await open_front()
-
-
-async def inject_saved_cookies_now(account_id: str = "default") -> dict:
-    """把本地已保存 Cookie 注入账号引擎（幂等；恢复链② 调用）。返回注入条数。"""
-    saved = _saved_cookies(account_id)
-    if not saved:
-        return {"ok": False, "count": 0, "note": "本地无已保存 Cookie"}
-    eng = await _engine(account_id)
-    ok = await eng.inject_cookies(saved)
-    return {"ok": ok, "count": len(saved)}
-
 
 # ===========================================================================
 # 引擎生命周期（server shutdown / 一次性动作）
 # ===========================================================================
-async def stop_profile():
-    """（兼容旧接口）关闭 default 账号引擎：优雅 ctx.close() 落盘登录态。"""
-    return await pool.close("default")
-
 
 async def stop():
     """关闭全部引擎 + Playwright 实例（后端退出钩子）。"""
