@@ -5,8 +5,8 @@
 - 确定数据目录：打包态默认 ~/Library/Application Support/xhs-leads/data
   （可被 XHS_LEADS_DATA 覆盖）；开发态沿用项目根 data。
 - 同进程起 uvicorn（后台线程，优雅退出），端口冲突自动探测替换。
-- 服务就绪后**内嵌 WKWebView（pywebview）呈现 UI**——打开 .app 后工具 UI
-  在壳窗口内呈现、外部零 Chrome 窗口（需求变更 R 批定稿；替代旧 webbrowser.open）。
+- 服务就绪后由**内置 CFT Chrome（--app 壳窗）承载前端 UI**——打开 .app 后工具 UI
+  在 CFT 壳窗口内呈现（CDP 9223 可控），无 pywebview/WKWebView 依赖（R-6.16 路线 A）。
 - 收到 SIGINT/SIGTERM（cmd+Q / kill）或关闭窗口时优雅停服。
 
 运行模式（R 批）：dev=源码直跑（默认控制台日志 + vite 前端 5173）；

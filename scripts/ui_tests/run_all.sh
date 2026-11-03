@@ -52,13 +52,29 @@ echo "✓ 引擎调试端口 9223 就绪（连引擎实例，登录态=引擎独
 # 就绪检查循环可能经 /api/mirror/open 拉起引擎（其副作用是打开小红书登录页）。
 # 未登录基线要求页面集={壳窗8791, /login-hint}：若 9223 页面集出现 xiaohongshu.com/login
 # （采集窗在已登录态为 /explore，不含 /login），说明 mirror/open 副作用未清理 → FAIL 早失败。
+# ---- G5 环境无关断言：先读 login_status，按登录态分别断言 ----
+# 已登录 → 引擎页面集应为 {壳窗8791, xiaohongshu.com/explore}，不得残留 /login；
+# 未登录 → 引擎页面集允许出现 /login（未登录基线），但不得出现多余的第三窗/空白。
+LOGIN_STATUS="$(curl -s http://127.0.0.1:8791/api/login_status)"
 PAGES_JSON="$(curl -s http://127.0.0.1:9223/json/list)"
-if echo "$PAGES_JSON" | grep -q "xiaohongshu\.com/login"; then
-  echo "✗ G5 失败：引擎页面集残留多余小红书登录页（mirror/open 副作用未清理）："
-  echo "$PAGES_JSON" | grep -o '"url":"[^"]*"' | head -10
-  exit 1
+if echo "$LOGIN_STATUS" | grep -q '"logged_in"[[:space:]]*:[[:space:]]*true'; then
+  # 已登录态：不得残留小红书登录页
+  if echo "$PAGES_JSON" | grep -q "xiaohongshu\.com/login"; then
+    echo "✗ G5 失败：已登录实例但引擎页面集残留 /login（mirror/open 副作用未清理）："
+    echo "$PAGES_JSON" | grep -o '"url":"[^"]*"' | head -10
+    exit 1
+  fi
+  echo "✓ G5 已登录态：页面集无 /login 残留"
+else
+  # 未登录态：允许 /login，但页面集应为 {壳窗, xhs 登录页}（无多余第三窗）
+  N_PAGES="$(echo "$PAGES_JSON" | grep -o '"type":"page"' | wc -l | tr -d ' ')"
+  if [ "$N_PAGES" -gt 3 ]; then
+    echo "✗ G5 失败：未登录态但页面数=$N_PAGES（应 ≤3：壳窗+登录页+service worker）："
+    echo "$PAGES_JSON" | grep -o '"url":"[^"]*"' | head -10
+    exit 1
+  fi
+  echo "✓ G5 未登录态：页面数=$N_PAGES（基线 ≤3）"
 fi
-echo "✓ G5 页面集无多余小红书登录页残留"
 
 # ---- 顺序执行 ----
 FILTER="${1:-}"

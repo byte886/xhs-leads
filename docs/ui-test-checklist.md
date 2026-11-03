@@ -108,7 +108,7 @@
 ## 八、覆盖统计（当前）
 
 - 总用例：**51**（A8 + B9 + C10 + D17 + E7 + F7 + G3）
-- ✅ 已有脚本：**48**（t01-t11、e1_s1-s5、b01-b08、e2_wall_popup、smoke_login_ui、layout_verify、startup_unlogged_verify）；登录闭环覆盖 = smoke_login_ui/b08/e2_wall_popup/startup_unlogged_verify
+- ✅ 已有脚本：**49**（t01-t11、e1_s1-s5、b01-b08、e2_wall_popup、smoke_login_ui、layout_verify、startup_unlogged_verify、g4_login_e2e_skeleton）；登录闭环覆盖 = **G4（g4_login_e2e_skeleton，R-6.35g 实跑 PASS ✅，替代已删除的 e1_s6 链路）** / smoke_login_ui / b08 / e2_wall_popup / startup_unlogged_verify
 - 🔶 待补测：**1**（B9 同词重采 = 200 脚本化）
 - ⛔ 留白：**2**（D9 AI 真实生成 / D15 真实发布）
 
