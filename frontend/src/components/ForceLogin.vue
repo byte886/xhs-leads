@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // ForceLogin：APP 内部强制登录对话框（登录 UI 改版·用户拍板）
-// 语义：未登录 / 启动被踢 / 采集中被踢与异常 三类场景统一弹此对话框（不可关闭）——
+// 语义：未登录 / 启动被踢 / 采集中被踢与异常 三类场景统一弹此对话框——
 // 告知当前状态 → 用户点「去登录」→ apiLoginBegin(force=true) → launcher 守卫导航小红书
 // 真实登录页（无叉）→ 登录成功回 APP 复查：已登录 → emit('done') 关闭本窗进工作台；
 // 仍未登录 → 保持强制（同一逻辑）。主动重登（设置页「重新登录」）不经过本窗。
+// R-6.26 弹框重设计：结构按 Material/Carbon 对话框规范（标题→正文→主操作→辅助行），
+// 文案按 UX Writing 规范（平静、面向解决、去技术术语——不出现 Cookie/风控/强制等词）。
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { apiCollapseDebugWindows, apiLoginBegin, apiLoginStatus } from '../api'
 import { appState, toast } from '../store'
@@ -28,9 +30,8 @@ function stopTimer() {
 //     语义 = 用户**主动**完成登录（点「去登录」→ 官方登录页 → 扫码 → 回 APP 复查真实
 //     有效）才关闭；未操作时保持打开并持续提示状态。
 //   - 复查状态分派：
-//       wentLogin=false（用户尚未操作）→ 仅更新文案：
-//         已登录（logged_in 且非风控）→「当前已登录小红书，点「去登录」确认后继续」（误报
-//         场景用户点一下，apiLoginBegin 的 already_logged_in 立即关窗，不打扰）；
+//       wentLogin=false（用户尚未操作）→ 仅更新文案（面向用户、去术语）：
+//         已登录（logged_in 且非风控）→「登录状态正常，点「去登录」确认后继续」；
 //         风控需验证（risk_verify）→ 引导点「去登录」扫码验证；
 //         被踢/未登录 → 对应文案。
 //       wentLogin=true（已点「去登录」，从登录页回 APP 复查）→ 仅真实有效登录
@@ -48,12 +49,12 @@ function startCheck() {
         emit('done')
         return
       }
-      if (lg.kicked) stateText.value = '登录已被平台踢出（登录超限 / 风控），需要重新登录'
-      else if (lg.risk_verify) stateText.value = '账号被小红书风控拦截（Cookie 有效但需人工扫码/验证），请点「去登录」完成扫码验证'
-      else if (realOk) stateText.value = '当前已登录小红书；点「去登录」确认登录态后继续'
-      else stateText.value = '当前未登录小红书，无法采集与发布内容'
+      if (lg.kicked) stateText.value = '登录状态已失效，请重新登录后继续'
+      else if (lg.risk_verify) stateText.value = '登录已失效，重新登录后才能继续采集'
+      else if (realOk) stateText.value = '登录状态正常，点「去登录」确认后继续'
+      else stateText.value = '尚未登录小红书，登录后才能开始采集'
     } catch {
-      stateText.value = '后端未就绪，正在重试…'
+      stateText.value = '服务未就绪，正在重试…'
     }
   }, 1000)
 }
@@ -62,7 +63,7 @@ async function goLogin() {
   if (busy.value) return
   busy.value = true
   wentLogin.value = true // R-6.22f：用户主动去登录 → 复查真实有效才允许关窗
-  stateText.value = '正在打开小红书登录页…'
+  stateText.value = '正在打开登录页…'
   try {
     const r = await apiLoginBegin(true) // 强制：登录页无叉，登录成功才回
     if (r.already_logged_in) {
@@ -96,19 +97,19 @@ onBeforeUnmount(stopTimer)
 </script>
 
 <template>
-  <div v-if="props.open" class="force-mask">
+  <div v-if="props.open" class="force-mask" role="dialog" aria-modal="true" aria-labelledby="fl-title">
     <div class="force-box">
-      <div class="force-logo">X</div>
-      <h3>需要登录小红书</h3>
+      <div class="force-icon" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 256 256" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M141.66,133.66l-40,40a8,8,0,0,1-11.32-11.32L116.69,136H24a8,8,0,0,1,0-16h92.69L90.34,93.66a8,8,0,0,1,11.32-11.32l40,40A8,8,0,0,1,141.66,133.66ZM200,32H136a8,8,0,0,0,0,16h56V208H136a8,8,0,0,0,0,16h64a8,8,0,0,0,8-8V40A8,8,0,0,0,200,32Z"/>
+        </svg>
+      </div>
+      <h3 id="fl-title">需要登录小红书</h3>
       <p class="force-state">{{ stateText }}</p>
-      <p class="force-tip">
-        点击「去登录」将切换到小红书<strong>官方登录页</strong>（扫码 / 手机号+验证码均可）。
-        登录完成后自动返回本工具；未完成登录将一直停留在此对话框。
-      </p>
       <button class="btn-primary" :disabled="busy" @click="goLogin">
         {{ busy ? '正在打开…' : '去登录' }}
       </button>
-      <p class="force-lock">当前状态强制要求登录，此对话框不可关闭</p>
+      <p class="force-tip">将跳转小红书官方登录页 · 扫码或手机号均可</p>
     </div>
   </div>
 </template>
@@ -118,40 +119,46 @@ onBeforeUnmount(stopTimer)
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(245, 245, 248, 0.96);
+  background: rgba(30, 30, 34, 0.35);
+  backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .force-box {
-  width: 400px;
+  width: 380px;
   background: #fff;
-  border: 1px solid #ececec;
   border-radius: 16px;
-  padding: 34px 30px;
+  padding: 32px 28px 24px;
   text-align: center;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.14);
 }
-.force-logo {
-  width: 46px;
-  height: 46px;
+.force-icon {
+  width: 52px;
+  height: 52px;
   margin: 0 auto 14px;
-  border-radius: 12px;
+  border-radius: 14px;
   background: #ff2442;
   color: #fff;
-  font-size: 22px;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.force-box h3 { font-size: 17px; color: #222; margin: 0 0 10px; }
-.force-state { font-size: 13px; color: #c0392b; line-height: 1.6; margin: 0 0 10px; }
-.force-tip { font-size: 12.5px; color: #666; line-height: 1.7; margin: 0 0 20px; text-align: left; }
-.force-tip strong { color: #ff2442; }
+.force-box h3 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #222;
+  margin: 0 0 10px;
+}
+.force-state {
+  font-size: 14px;
+  color: #444;
+  line-height: 1.6;
+  margin: 0 0 24px;
+}
 .btn-primary {
   width: 100%;
-  padding: 11px 0;
+  padding: 12px 0;
   border: none;
   border-radius: 10px;
   background: #ff2442;
@@ -159,7 +166,13 @@ onBeforeUnmount(stopTimer)
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
+.btn-primary:hover:not(:disabled) { background: #e6203a; }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
-.force-lock { font-size: 11.5px; color: #aaa; margin: 14px 0 0; }
+.force-tip {
+  font-size: 12px;
+  color: #999;
+  margin: 14px 0 0;
+}
 </style>

@@ -297,3 +297,22 @@ if (typeof window !== 'undefined') {
     isLoggedIn: xhsIsLoggedIn,
   };
 }
+
+// ===== R-6.26 调试窗标题固定：不随搜索词变化（避免「翡翠_小红书」类误读） =====
+(function () {
+  if (window.__xhs_leads_title_locked) return;
+  window.__xhs_leads_title_locked = true;
+  var FIXED_TITLE = '小红书';
+  function fixTitle() {
+    try {
+      if (document.title !== FIXED_TITLE) document.title = FIXED_TITLE;
+    } catch (e) { /* ignore */ }
+  }
+  fixTitle();
+  try {
+    var titleEl = document.querySelector('title');
+    new MutationObserver(function () { fixTitle(); })
+      .observe(titleEl || document.head, { childList: true, subtree: true, characterData: true });
+  } catch (e) { /* ignore */ }
+  setInterval(fixTitle, 2000);
+})();
