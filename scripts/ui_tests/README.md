@@ -58,6 +58,7 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | b05 | b05_misc_cards.py | 结论标签/打开原作品/复制链接 | ❌ | 已评分卡片 |
 | b06 | b06_clients_export.py | 导出线索 CSV | ❌ | clients 表有数据 |
 | b07 | b07_license_ui.py | free 状态条+activation 激活 | ❌ | 8791 free + 8792 activation 双实例 + /tmp/b07_code.txt 激活码 |
+| 待办 | G4 登录闭环 E2E 重写 | e1_s6 的真正替代：未登录弹窗→去登录→壳窗导航官方登录页→扫码闸口→Tab2 联动 explore→ForceLogin 自动关→重采。**需用户扫码闸口**，下一迭代（2026-11-03 关闭本轮，不产无法验证的脚本） | — | — |
 
 ## E1 真实链路系列（连引擎调试端口 9223）
 
