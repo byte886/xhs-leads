@@ -1,5 +1,7 @@
 # xhs-leads
 
+> 版本：v1.0（2026-11-03，R-6.38a 文档线对齐）
+
 小红书「低粉爆文」采集 / 克隆 / 发布本地工具（FastAPI 后端 + Vue3 前端 + 有头 CFT 引擎池，macOS 壳）。
 
 **核心产品目标**：帮助个人创业者 / 小商家寻找高价值可参考的低粉爆文笔记进行模仿。
@@ -33,11 +35,17 @@ bash scripts/packaging/build_mac.sh
 | 主题 | 位置 |
 |---|---|
 | 目录地图 / 命名规范 / 路径总览 | [`docs/project-structure.md`](docs/project-structure.md) |
+| PRD（现行需求） | [`docs/Codex自动获客-复刻方案PRD.md`](docs/Codex自动获客-复刻方案PRD.md) |
+| 界面设计（现行 4-Tab 现状） | [`docs/界面重构设计-对齐版.md`](docs/界面重构设计-对齐版.md) |
+| 待办事项（现行） | [`docs/project/待办事项.md`](docs/project/待办事项.md) |
+| 需求实现闭环清单（历史快照） | [`docs/project/需求实现闭环清单.md`](docs/project/需求实现闭环清单.md) |
+| 多专家角色迭代开发工作流（现行 SOP） | [`docs/project/多专家角色迭代开发工作流.md`](docs/project/多专家角色迭代开发工作流.md) |
+| 治理梳理报告（2026-11-03） | [`docs/project/多专家治理梳理报告-2026-11-03.md`](docs/project/多专家治理梳理报告-2026-11-03.md) |
+| 质量报告（Gauntlet 最终态） | [`docs/QUALITY-REPORT-2026-11-03.md`](docs/QUALITY-REPORT-2026-11-03.md) |
 | 后端模块与测试 | [`backend/README.md`](backend/README.md) |
 | 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
 | macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |
 | UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
-| PRD / 需求 / 质检历史 | `docs/`（`project/`、`gates/`、`requirements/`） |
 
 ## 提交前检查
 
