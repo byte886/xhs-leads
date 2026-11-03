@@ -497,12 +497,17 @@ async def ensure_shell(base_url: str):
 
 # ---------- login_guard 拆分助手（R-6.36e：行为与原内联闭包逐字等价） ----------
 
-async def _guard_safe_force_login(win: "ShellWindow") -> None:
+async def _guard_inject(win: "ShellWindow", key: str, label: str) -> None:
+    """R-6.36k DRY 收敛：force_login/login_fit 共享注入助手（成功/失败文案按 label）。"""
     try:
-        if not await injections.inject_once(win.page, "force_login"):
-            print("[xhs-leads][guard] 强制登录 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
+        if not await injections.inject_once(win.page, key):
+            print(f"[xhs-leads][guard] {label} JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
     except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][guard] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
+        print(f"[xhs-leads][guard] {label} JS 注入暂未成功: {e!r}", flush=True)
+
+
+async def _guard_safe_force_login(win: "ShellWindow") -> None:
+    await _guard_inject(win, "force_login", "强制登录")
 
 
 def _guard_schedule_force_login(win: "ShellWindow") -> None:
@@ -513,11 +518,7 @@ def _guard_schedule_force_login(win: "ShellWindow") -> None:
 
 
 async def _guard_safe_login_fit(win: "ShellWindow") -> None:
-    try:
-        if not await injections.inject_once(win.page, "login_fit"):
-            print("[xhs-leads][guard] 登录页适配 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][guard] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
+    await _guard_inject(win, "login_fit", "登录页适配")
 
 
 def _guard_schedule_login_fit(win: "ShellWindow") -> None:

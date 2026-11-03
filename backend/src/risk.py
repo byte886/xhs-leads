@@ -175,16 +175,6 @@ def mark_risk(account_id: str = "default", reason: str = "", cooldown_seconds: f
     mark_hard(account_id, reason, cooldown_seconds)
 
 
-def mark_manual(account_id: str = "default", reason: str = "Cookie 失效，需重新扫码或导入 Cookie") -> None:
-    """标记需人工介入（登录失效/验证码）：界面引导扫码/导入，业务动作拒绝。"""
-    s = _state(account_id)
-    s["status"] = "manual"
-    s["until"] = 0.0
-    s["reason"] = reason
-    _save()
-    xlog.audit(account_id, action="risk_manual", ok=False, detail=reason)
-
-
 def mark_throttle(account_id: str = "default", reason: str = "操作过于频繁") -> None:
     """临时节流（秒级）：仅拒绝新采集任务，不熔断。"""
     s = _state(account_id)
