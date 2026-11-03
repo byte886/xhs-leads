@@ -26,7 +26,8 @@ class TestApiSmoke:
     def test_login_status(self, client, monkeypatch):
         # R 批 v1.5：登录态 = 引擎 CDP web_session 存在 且 页面登录（xhsIsLoggedIn），
         # 两条件任一不满足即未登录（web_session 存在但会话失效=假阳性场景，实测见 R-6）
-        # R-6.8：_engine_login_state 返回三元组 (web_session?, 页面登录?, 被踢?)；被踢 → 判失效
+        # R-6.8：_engine_login_state 返回四元组 (web_session?, 页面登录?, 被踢?, 风控需验证?)；
+        # 被踢 → 判失效（R-6.22e 补 risk_verify，现行契约 server.py:254）
         async def fake_get(*a, **k):
             return object()  # 假引擎实例：仅用于传入 _engine_login_state
 
@@ -34,13 +35,13 @@ class TestApiSmoke:
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
 
         async def state_ok(eng):
-            return True, True, False
+            return True, True, False, False
 
         async def state_stale(eng):
-            return True, False, False  # stale cookie：web_session 有但页面未登录
+            return True, False, False, False  # stale cookie：web_session 有但页面未登录
 
         async def state_kicked(eng):
-            return True, True, True  # R-6.8：cookie 残留但平台已踢（登录超限/请重新登录）
+            return True, True, True, False  # R-6.8：cookie 残留但平台已踢（登录超限/请重新登录）
 
         monkeypatch.setattr(server, "_engine_login_state", state_ok)
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 防跨用例缓存污染
@@ -75,11 +76,12 @@ class TestLoginGate:
     """登录 UI 改版：login_begin(force)/login_begin_state/login_cancel（纯 mock，不碰浏览器）。"""
 
     def test_begin_active_relogin_when_logged_in(self, client, monkeypatch):
-        # 主动重登（force=False）且已登录 → 短路，不置 pending
+        # R-6.13：「已登录短路」已移除——force=False 主动重登也总是置 pending
+        # （用户约定设置页「重新登录」总能触发，换账号/刷新会话不得被当前登录态拦截）
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": {"logged_in": True, "kicked": False}, "t": 1e18})
         r = client.post("/api/auth/login_begin", json={}).json()
-        assert r["ok"] is True and r["already_logged_in"] is True
-        assert server._LOGIN_GATE["pending"] is False
+        assert r["ok"] is True and r["already_logged_in"] is False and r["force"] is False
+        assert server._LOGIN_GATE["pending"] is True
 
     def test_begin_force_overrides_logged_in(self, client, monkeypatch):
         # 强制登录（force=True）即使已登录也置 pending（用户拍板：首次登录也强制检查）

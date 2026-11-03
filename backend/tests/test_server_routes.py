@@ -312,14 +312,22 @@ class TestDownloadImages:
         assert r.status_code == 400
 
     def test_download_mixed(self, client, tmp_path):
+        # R-6.23 契约：zip 落盘 ~/Downloads，missing 列表在 JSON body（不再发 X-Missing 头）
         (tmp_path / "images" / "zz_cover.jpg").write_bytes(b"img")
         r = client.post("/api/download_images", json={"feed_ids": ["zz", "yy"]})
-        assert "yy" in json.loads(r.headers["X-Missing"])
+        j = r.json()
+        assert j["ok"] is True and "yy" in j["missing"] and "zz" not in j["missing"]
 
-    def test_download_zip(self, client, tmp_path):
+    def test_download_zip(self, client, tmp_path, monkeypatch):
+        # R-6.23 契约：响应为 JSON（path/size/missing），zip 产物落盘后读文件验 PK 魔数；
+        # Path.home 指向 tmp 防测试污染真实 ~/Downloads
         (tmp_path / "images" / "zz_cover.jpg").write_bytes(b"img")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         r = client.post("/api/download_images", json={"feed_ids": ["zz"]})
-        assert r.status_code == 200 and r.content.startswith(b"PK")
+        j = r.json()
+        assert r.status_code == 200 and j["ok"] is True and j["size"] > 0 and j["missing"] == []
+        data = Path(j["path"]).read_bytes()
+        assert data.startswith(b"PK")
 
 
 class TestNoteDetail:
