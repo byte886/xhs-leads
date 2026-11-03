@@ -40,7 +40,6 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | e1-s3 | e1_s3_qc_images.py | **真实态质检+图片+草稿**：质检四项、违规词命中、lightbox 看全图、删/追加图、草稿保存/恢复 | 引擎 9223 + 已登录 + 图文卡（草稿数会变） |
 | e1-s4 | e1_s4_clients.py | **真实采集客户**：hover 图文卡→采集客户→互动用户落库→自动切客户 tab | 引擎 9223 + 已登录 + 图文卡（低频，风控窗口内） |
 | e1-s5 | e1_s5_settings.py | **真实态设置三卡**：AI Key 保存/掩码/灰态解除、CDP 区、人设 toast、清除配置复原 | 引擎 9223（会临时写入/清除测试 Key） |
-| e1-s6 | ~~e1_s6_login.py~~ | ~~登录态闭环~~ ⛔ **已退役**（2026-11-03）：断言的「立即读取 Chrome 登录态」按钮/旧重启路径已被 R-6.22~6.29 登录闭环取代；现行覆盖见 smoke_login_ui / b08 / e2_wall_popup / startup_unlogged_verify | 留档勿跑 |
 
 ## 登录与窗口治理专项（2026-11-03 对齐现行基线）
 
@@ -58,13 +57,13 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | b05 | b05_misc_cards.py | 结论标签/打开原作品/复制链接 | ❌ | 已评分卡片 |
 | b06 | b06_clients_export.py | 导出线索 CSV | ❌ | clients 表有数据 |
 | b07 | b07_license_ui.py | free 状态条+activation 激活 | ❌ | 8791 free + 8792 activation 双实例 + /tmp/b07_code.txt 激活码 |
-| 待办 | G4 登录闭环 E2E 重写 | e1_s6 的真正替代：未登录弹窗→去登录→壳窗导航官方登录页→扫码闸口→Tab2 联动 explore→ForceLogin 自动关→重采。**需用户扫码闸口**，下一迭代（2026-11-03 关闭本轮，不产无法验证的脚本） | — | — |
+| 待办 | G4 登录闭环 E2E 重写 | 旧登录闭环脚本的替代：未登录弹窗→去登录→壳窗导航官方登录页→扫码闸口→Tab2 联动 explore→ForceLogin 自动关→重采。**需用户扫码闸口**，下一迭代（2026-11-03 关闭本轮，不产无法验证的脚本） | — | — |
 
 ## E1 真实链路系列（连引擎调试端口 9223）
 
 - **与 t 系列（引擎 9223 回归）同实例**：E1 连 `9223` 引擎（引擎独立 profile + 真实登录态），验证真实交互链路，**不加入 run_all.sh 一键跑**（依赖登录态与真实数据，且采集/客户为低频风控敏感操作）。
 - 单独运行：`backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：引擎已启动且小红书已登录（引擎独立 profile）、后端 8791）。
-- 铁律：**低频单次**——关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），采集/客户不连环重试；e1-s3 的本地追加图路径可移植（仓库 data/images 兜底 /tmp）；e1-s6 自带 cookies 备份/恢复 + 后端重启（清 30s 登录缓存），异常也会恢复。
+- 铁律：**低频单次**——关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），采集/客户不连环重试；e1-s3 的本地追加图路径可移植（仓库 data/images 兜底 /tmp）。
 - 踩坑记录（已写入各脚本头注释）：真实态比 t 系列多一个「采集方式」select（排序 select[1]/时间 select[3]）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
 
 ## 说明

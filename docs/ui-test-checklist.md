@@ -108,7 +108,7 @@
 ## 八、覆盖统计（当前）
 
 - 总用例：**51**（A8 + B9 + C10 + D17 + E7 + F7 + G3）
-- ✅ 已有脚本：**48**（t01-t11、e1_s1-s5、b01-b08、e2_wall_popup、smoke_login_ui、layout_verify、startup_unlogged_verify）；e1_s6 已退役（见 §十）
+- ✅ 已有脚本：**48**（t01-t11、e1_s1-s5、b01-b08、e2_wall_popup、smoke_login_ui、layout_verify、startup_unlogged_verify）；登录闭环覆盖 = smoke_login_ui/b08/e2_wall_popup/startup_unlogged_verify
 - 🔶 待补测：**1**（B9 同词重采 = 200 脚本化）
 - ⛔ 留白：**2**（D9 AI 真实生成 / D15 真实发布）
 
@@ -125,9 +125,3 @@
 | b07_license_ui.py | F5-F7/G1-G2 | 授权状态条 + 激活流程（free/activation 两实例） | ✅ PASS |
 
 b 系列已全部 PASS（b01-b07）。后续可并入 run_all 回归基线。
-
-## 十、登录链路脚本退役与现行口径（2026-11-03 对齐）
-
-| 脚本 | 状态 | 说明 |
-|---|---|---|
-| e1_s6_login.py | ⛔ **已退役** | 断言的「立即读取 Chrome 登录态」按钮属 cookie_reader 读系统 Chrome 旧链路，R 批登录态归一引擎独立 profile 后该按钮已不存在；restart 路径（app/.venv/app/src）与 profile 路径（~/.xhs-leads-profile）均已过时。登录闭环现行口径 = ForceLogin 对话框（A3-A6），由 smoke_login_ui（未登录弹窗）、b08（扫码全链）、e2_wall_popup（采集遇墙弹框）、startup_unlogged_verify（未登录 2 页基线）覆盖 |

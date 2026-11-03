@@ -83,8 +83,8 @@
 |---|---|---|---|
 | 4-Tab 导航 | FlowBar tabs | t02 / t03 | ✅ |
 | 全局状态条 | FlowBar sys | t03 | ✅ |
-| 登录态检测 | FlowBar/App onMounted | e1_s6 | ✅ |
-| 登录二维码弹窗 | LoginModal | e1_s6（弹窗/恢复/关闭） | ✅ |
+| 登录态检测 | FlowBar/App onMounted | smoke_login_ui（login_status API） | ✅ |
+| ForceLogin 强制登录对话框 | components/ForceLogin.vue | smoke_login_ui（弹窗可见性）+ b08（扫码全链） | ✅ |
 | toast | 全局 | e1_s5（保存 toast）等 | ✅ |
 | 卡片右键菜单 | CardMenu | e1_s2（克隆入口） | ✅（克隆/客户两入口 e1 覆盖，打开原作品 ◐） |
 | 全选图文 | CardGrid 批量 | 无 | ❌ |
