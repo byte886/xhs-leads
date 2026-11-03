@@ -8,7 +8,6 @@ API:
   GET  /api/login_status    → 登录状态
   POST /api/search          → 搜索+详情补全+评分+落库（同步返回新增数）
   GET  /api/notes           → 笔记列表（评分排序，支持关键词过滤）
-  GET  /api/note/{feed_id}  → 单条详情（含 desc/图片列表）
   POST /api/clone           → 一键克隆：拉详情+下载图片，返回可编辑载荷
   POST /api/publish         → 发布（默认仅自己可见）
   GET  /api/logs            → 发布记录
@@ -1331,28 +1330,6 @@ async def upload_image(file: UploadFile = File(...)):
 
 
 # ================= 单条详情 =================
-@app.get("/api/note/{feed_id}")
-async def note_detail(feed_id: str):
-    con = _db()
-    r = con.execute("SELECT * FROM notes WHERE feed_id=?", (feed_id,)).fetchone()
-    if not r:
-        raise HTTPException(404, "笔记不存在")
-    n = dict(r)
-    # 尝试用 token 拉最新详情（含图片列表）——本地浏览器 DOM 提取
-    try:
-        detail_note = dict(n)
-        detail_note = await get_feed_detail(detail_note)
-        imgs = detail_note.get("detail_imgs") or []
-        if imgs:
-            n["images"] = imgs
-        if detail_note.get("desc"):
-            n["desc"] = detail_note.get("desc")
-        if detail_note.get("title"):
-            n["title"] = detail_note.get("title")
-    except Exception:
-        pass
-    return n
-
 
 # ================= 一键克隆 =================
 class CloneReq(BaseModel):

@@ -330,30 +330,6 @@ class TestDownloadImages:
         assert data.startswith(b"PK")
 
 
-class TestNoteDetail:
-    def test_detail_404(self, client):
-        assert client.get("/api/note/nope").status_code == 404
-
-    def test_detail_enriched(self, client, monkeypatch, tmp_path):
-        _seed_notes(tmp_path)
-
-        async def fake_detail(n):
-            return {**n, "detail_imgs": ["http://img/1"], "desc": "新描述", "title": "新标题"}
-
-        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
-        r = client.get("/api/note/a1")
-        j = r.json()
-        assert j["images"] == ["http://img/1"] and j["desc"] == "新描述" and j["title"] == "新标题"
-
-    def test_detail_fallback(self, client, monkeypatch, tmp_path):
-        _seed_notes(tmp_path)
-
-        async def boom(n):
-            raise RuntimeError("detail 失败")
-
-        monkeypatch.setattr(server, "get_feed_detail", boom)
-        r = client.get("/api/note/a1")
-        assert r.json()["feed_id"] == "a1" and "images" not in r.json()
 
 
 class TestClone:
