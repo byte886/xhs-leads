@@ -31,7 +31,7 @@
 
 1. 引擎从「单例」→「多账户引擎池」（每账号 = 一个独立 user-data-dir = 一个独立登录态）
 2. 统一配置中心、统一日志审计、每账号风控状态机、优雅生命周期、任务标准化、数据层带账号维度
-3. 生产形态（pywebview 壳 + 后台引擎）与调试形态（可见引擎）共用同一套机制
+3. 生产形态（~~pywebview 壳~~，已被 R-6.16 路线A 改为有头 CFT 应用窗壳）与调试形态共用同一套机制
 4. 兼容现有前端与 API（默认账号语义，前端无感）
 
 ---
@@ -44,7 +44,7 @@
 └──────────────┬──────────────────────────────────────────┘
                │ HTTP
 ┌──────────────▼──────────────────────────────────────────┐
-│ server.py（FastAPI，39 路由适配 account_id）               │
+│ server.py（FastAPI，路由随功能演进，以代码为准；account_id 适配） │
 │  登录校验 → 任务路由 → 数据层（SQLite 带 account_id）        │
 └──────────────┬──────────────────────────────────────────┘
                │ 调用
@@ -56,8 +56,8 @@
 │  │  生命周期：懒启动 / 优雅关闭 / 自愈重启               │   │
 │  │  风控状态机：正常 → 熔断 → 冷却 → 人工介入            │   │
 │  └───────────────────────────────────────────────────┘   │
-│  （账号 A：采集号  ← user_data_dir=~/.codex-xhs/accounts/A）│
-│  （账号 B：发布号  ← user_data_dir=~/.codex-xhs/accounts/B）│
+│  （账号 A：采集号  ← user_data_dir=~/.xhs-leads/accounts/A）│
+│  （账号 B：发布号  ← user_data_dir=~/.xhs-leads/accounts/B）│
 └───────┬──────────────┬──────────────────┬───────────────┘
         │              │                  │
 ┌───────▼──────┐ ┌─────▼───────┐  ┌──────▼──────────────┐
@@ -81,7 +81,7 @@
   "accounts": {
     "default": {
       "role": "collect",
-      "user_data_dir": "~/.codex-xhs/accounts/default",
+      "user_data_dir": "~/.xhs-leads/accounts/default",
       "status": "ok",
       "cookie_expires_at": null,
       "created_at": "...",
@@ -126,7 +126,7 @@ async def clients(note_id, xsec_token="", account_id="default")
 - 保留旧文件（cdp_config.json / llm_config.json / persona.json）通过 config 统一入口读写，**不迁移数据文件**（避免破坏现有用户数据）
 - 读取优先级：环境变量 > config.json > 默认值
 - 路径一律 `~` 相对（沿用 `_home_relative` 模式）
-- **动态端口**：引擎端口不再写死 9223；生产壳启动时探测 8800-8899 空闲端口（或绑定 0），日志输出实际端口；`XHS_PROFILE_PORT` 环境变量仍可强制指定
+- **动态端口**：引擎调试端口固定 **9223**（`config.engine_port`，`XHS_PROFILE_PORT` 可覆盖；engine_pool 实参 `--remote-debugging-port=9223`）；8800-8899 是**前端端口**被占时的自动探测区间（非引擎端口）
 - 前端保留页判断：`cleanup_tabs()` 从 config 读当前前端端口，不再硬编码 8791
 
 ### 3.3 统一日志 + 审计 + 脱敏（logger.py）
@@ -243,9 +243,9 @@ cooldown ──(人工确认/到期)────► ok
 
 | 根因 | 机制对策（已落地） |
 |---|---|
-| 同关键词任务重复提交 | `collect_start` 任务唯一键 `keyword|account_id` + 60s 窗口去重 → 409 提示 |
+| 同关键词任务重复提交 | ~~collect_start 任务唯一键 `keyword|account_id` + 60s 窗口去重 → 409 提示~~【已被 R-6.22h 移除：同词/换词均允许立即重启，dedup 仅留审计展示】 |
 | 失败任务空转重试 | 任务状态机 error 即停；软风控走恢复闭环（见现象 3），不自动重复执行 |
-| 平台任务频率失控 | 每账号节流 90s（`risk.check_throttle`）+ 拟人请求间隔 1-1.8s + 滚动采集 stale 终止（既有） |
+| 平台任务频率失控 | ~~每账号节流 90s（`risk.check_throttle`）~~【已被 R-6.15 移除：`collect_min_interval` 废弃，仅留拟人请求间隔 1-1.8s + 滚动采集 stale 终止】 |
 
 ### 现象 3：遇风控就停死等用户（实际多为临时频率异常，扫码/验证即可恢复）
 
@@ -260,7 +260,7 @@ cooldown ──(人工确认/到期)────► ok
 采集遇验证码 → `mark_manual` + 任务 error（页面保留）→ 前端提示扫码 → 用户扫码/验证 → `refresh_cookie_from_chrome` / `login_status` 检测有效 → `risk.resolve` 自动解锁 → 用户重试采集即继续。
 
 ### 验收补充（现象三机制）
-- [ ] 同关键词 60s 内重复 `collect_start` → 409
+- [ ] ~~同关键词 60s 内重复 `collect_start` → 409~~【R-6.22h 已改为：同词连点均 200】
 - [ ] 连续 3 次 `mark_soft` → 冷却 4 分钟（指数退避），非 24h
 - [ ] `mark_manual` 后扫码成功 → `refresh_cookie_from_chrome` 返回 ok 且 `risk.state` 回 ok
 - [ ] 任务结束引擎窗口保留（不反复开关）；`cleanup_tabs` 仅清理非 APP/空白页

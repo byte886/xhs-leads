@@ -54,7 +54,7 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 | 类/前缀 `CodeXHS` | `XHSLeads` | 代码符号 |
 | App 显示名 | `XHS Leads · 小红书获客助手` | 页面标题 / .app 名 `XHSLeads.app` |
 | Bundle ID `com.codexzhuke.app` | `com.xhsleads.app` | Info.plist / PyInstaller bundle |
-| Chrome 调试 Profile `.codex-xhs-profile` | `.xhs-leads-profile` | 真实态 e1 链路 / 生产引导 |
+| Chrome 调试 Profile `.codex-xhs-profile` | `.xhs-leads-profile` | 历史名；现行 default profile = `<数据目录>/profile`（开发态 `data/profile`），`~/.xhs-leads-profile` 仅兼容残留 |
 | 数据目录 `~/.codex-xhs/accounts` | `~/.xhs-leads/accounts` | 旧账户配置路径 |
 | 环境变量 `CODX_XHS_DATA` | `XHS_LEADS_DATA` | 覆盖数据目录 |
 | 配置节 `[codex-xhs]` | `[xhs-leads]` | 配置分组名 |
