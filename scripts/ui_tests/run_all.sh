@@ -52,8 +52,24 @@ echo "✓ 引擎调试端口 9223 就绪（连引擎实例，登录态=引擎独
 FILTER="${1:-}"
 PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=()
 
-# ---- R-6.22 双窗口分屏布局约定回归（固定化：左主APP/右调试/等宽并排/重建保持）----
-# 含 Tab1 四连关重建，必须与 t 系列串行（并发会 TargetClosedError），故独立前置执行。
+# ---- R-6.31a 未登录启动时序+窗口震荡（只读，必须最先跑：此时实例应在未登录 2 页基线）----
+# 只读断言 page 恰好 2 页（/ + /login-hint）且 15s 内页面集逐次恒定；任何后续脚本都会开窗，
+# 故此 gate 必须位于一切可变布局脚本之前。
+if [ -z "$FILTER" ]; then
+  if PYTHONPATH=backend/src "$PY" scripts/ui_tests/startup_unlogged_verify.py >/tmp/ui_startup.$$ 2>&1; then
+    PASS=$((PASS+1)); echo "PASS  startup_unlogged_verify（未登录2页基线+15s无震荡）"
+  else
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("startup_unlogged_verify")
+    echo "FAIL  startup_unlogged_verify（未登录2页基线+15s无震荡）"
+    tail -6 /tmp/ui_startup.$$
+  fi
+  rm -f /tmp/ui_startup.$$
+fi
+
+# ---- R-6.22 双窗口分屏布局约定回归（固定化：左主APP/右Tab2/等宽并排/关Tab2不复活）----
+# R-6.31b：section2 已改为 R-6.22p 语义（关 Tab2 不复活、应用不退），不再四连关壳窗
+# （关主窗=应用退出，会误杀本后端进程），故 run_all 第一步不会带走后端。
+# 必须与 t 系列串行（并发会 TargetClosedError），故独立前置执行。
 if [ -z "$FILTER" ]; then
   if PYTHONPATH=backend/src "$PY" scripts/ui_tests/layout_verify.py >/tmp/ui_layout.$$ 2>&1; then
     PASS=$((PASS+1)); echo "PASS  layout_verify（双窗口分屏约定）"
