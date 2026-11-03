@@ -98,6 +98,9 @@ async function doCollect() {
         appState.searchNote = pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成')
         toast(pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成'))
         // 采集完成后拉评分排序结果，自动推进到"筛选结果"阶段
+        // R-6.23 对齐：标记"本次运行已产出列表"——登录往返 reload 时恢复列表、
+        // 应用重启（sessionStorage 清空）不重现上次搜索（保持空白输入态）
+        sessionStorage.setItem('xhs_stage_restore', '1')
         const list = await apiNotes('', 'score')
         appState.notes = list.notes
         appState.total = list.total
@@ -126,20 +129,21 @@ onMounted(async () => {
     const lg = await apiLoginStatus()
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪时静默 */ }
-  // R-6.22k：进入采集页即从库恢复最近一次采集结果。
-  // 此前列表只在采集完成回调里写入前端内存（store），页面刷新 / 登录流程
-  // 守卫导航回 APP 重载后 store 清空、stage 回 input → 「采集完的列表消失」。
-  // SQLite 是权威存储，进页拉一次即可恢复列表视图；无数据时保持输入态。
-  try {
-    const list = await apiNotes('', 'score')
-    if (list.total > 0) {
-      appState.notes = list.notes
-      appState.total = list.total
-      appState.count = list.total
-      appState.status = '展示中'
-      setStage('pick')
-    }
-  } catch { /* 后端未就绪时静默 */ }
+  // R-6.23 对齐：恢复最近一次采集结果仅限"本次运行内采集过"（登录守卫导航
+  // 回 APP 重载后 store 清空、列表消失的场景），由 sessionStorage 标记区分——
+  // 应用重启后 sessionStorage 清空，不恢复历史搜索（保持空白输入态）。
+  if (sessionStorage.getItem('xhs_stage_restore')) {
+    try {
+      const list = await apiNotes('', 'score')
+      if (list.total > 0) {
+        appState.notes = list.notes
+        appState.total = list.total
+        appState.count = list.total
+        appState.status = '展示中'
+        setStage('pick')
+      }
+    } catch { /* 后端未就绪时静默 */ }
+  }
 })
 </script>
 
