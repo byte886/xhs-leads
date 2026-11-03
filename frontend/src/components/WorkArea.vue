@@ -59,9 +59,14 @@ function pickAuthor(a: Author) {
   <div>
     <!-- 待输入 -->
     <div v-if="appState.stage === 'input'" class="empty">
-      <div class="big">待输入</div>
-      <p>在左侧填写关键词并设置参数，点击「开始采集」</p>
-      <p class="sub">（视频示例："比如说关键词输入一个减肥"）</p>
+      <template v-if="appState.params.keyword.trim()">
+        <div class="big">已载入上次搜索条件</div>
+        <p>检查左侧参数后点击「开始采集」</p>
+      </template>
+      <template v-else>
+        <div class="big">待输入</div>
+        <p>在左侧填写关键词并设置参数，点击「开始采集」</p>
+      </template>
     </div>
 
     <!-- 采集作品 -->

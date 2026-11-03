@@ -1,5 +1,32 @@
-import { reactive, readonly } from 'vue'
+import { reactive, readonly, watch } from 'vue'
 import type { Note, SearchParams, Stage } from './types'
+
+const CONDITIONS_KEY = 'xhs_collect_conditions'
+const DEFAULT_PARAMS: SearchParams = {
+  keyword: '翡翠',
+  limit: 50,
+  sort: '综合',
+  noteType: '全部',
+  timeRange: '不限',
+  scope: '不限',
+  distance: '不限',
+  interval: 1000,
+  fast: false
+}
+
+// R-6.44c：启动同步恢复上次采集条件（坏 JSON/无历史静默降级默认）
+function loadStoredParams(): SearchParams {
+  try {
+    const raw = localStorage.getItem(CONDITIONS_KEY)
+    if (!raw) return { ...DEFAULT_PARAMS }
+    const parsed = JSON.parse(raw)
+    return { ...DEFAULT_PARAMS, ...parsed }
+  } catch { return { ...DEFAULT_PARAMS } }
+}
+
+function saveParams(p: SearchParams) {
+  try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(p)) } catch { /* 隐私模式等写失败静默 */ }
+}
 
 /** 工作流 4-Tab（v1.5 对齐同类产品模式）：采集 → 创作 → 客户 → 设置 */
 export type Tab = 'collect' | 'create' | 'clients' | 'settings'
@@ -17,18 +44,8 @@ export const appState = reactive({
   sys: {
     aiKey: false,
   } as SysStatus,
-  // 采集配置
-  params: {
-    keyword: '翡翠',
-    limit: 50,
-    sort: '综合',
-    noteType: '全部',
-    timeRange: '不限',
-    scope: '不限',
-    distance: '不限',
-    interval: 1000,
-    fast: false
-  } as SearchParams,
+  // 采集配置（启动时从 localStorage 恢复用户上次条件）
+  params: loadStoredParams() as SearchParams,
   collecting: false,
   // 搜索结果
   notes: [] as Note[],
@@ -59,6 +76,9 @@ export const appState = reactive({
 })
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+// R-6.44c：条件变更即持久化（只存 SearchParams，不存结果数据）
+watch(() => appState.params, (p) => saveParams(p), { deep: true })
 // R-6.43a：error 类红色且不自动消失（需用户感知失败）；ok 类保持 2.4s 自动消失
 export function toast(msg: string, type: 'ok' | 'error' = 'ok') {
   appState.toastMsg = msg
