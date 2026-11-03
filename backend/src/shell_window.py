@@ -25,6 +25,10 @@ import time
 import urllib.request
 import json as _json_mod
 
+# JS 注入脚本统一注册表（R-6.30a）：本模块历史上 5 个 JS 常量 + login_guard 内 2 个
+# 局部 JS 已全部上提至 src/injections.py（单一事实源，防「悬空引用」类历史 bug 重现）。
+from src import injections  # noqa: E402
+
 
 def _json_body(url: str, timeout: float):
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -110,27 +114,20 @@ async def _ensure_debug_title(page) -> None:
     不污染壳窗口/其他页面）+ 当前文档立即生效；防重标记避免重复 add 累积。
     幂等，可反复调用（已装时仅刷新当前文档）。
     """
+    _title_js = injections.get("collect_debug_title")
     if getattr(page, "_debug_title_installed", False):
         try:
-            await page.evaluate(_COLLECT_DEBUG_TITLE_JS)
+            await page.evaluate(_title_js)
         except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
             pass
         return
     try:
-        await page.add_init_script(_COLLECT_DEBUG_TITLE_JS)
-        await page.evaluate(_COLLECT_DEBUG_TITLE_JS)
+        await page.add_init_script(_title_js)
+        await page.evaluate(_title_js)
         page._debug_title_installed = True
     except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
         pass
 
-
-# 采集调试窗口标题守护脚本（页面级 init script，注入即常驻）
-_COLLECT_DEBUG_TITLE_JS = """() => {
-    const T = 'XHS Leads · 采集调试窗口';
-    const setT = () => { if (document.title !== T) document.title = T; };
-    setT();
-    setInterval(setT, 2000);
-}"""
 
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**。
 # 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
@@ -139,57 +136,12 @@ XHS_LOGIN_URL = (
     "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
 )
 
-# R-6.9 登录成功过渡提示：id_token 一出现即注入「等待中」提示，遮挡小红书登录后页面、
-# 拦截用户误操作；引擎注入完成 load_url 切回 APP 时随导航消失。幂等（已有 id 不重复注入）。
-_WAITING_OVERLAY_JS = r"""(() => {
-  if (document.getElementById('xhs-leads-waiting')) return;
-  const d = document.createElement('div');
-  d.id = 'xhs-leads-waiting';
-  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;'
-    + 'background:rgba(255,255,255,.55);backdrop-filter:blur(2px);'
-    + 'z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;'
-    + 'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;';
-  const st = document.createElement('style');
-  st.textContent = '@keyframes xhs-leads-spin{to{transform:rotate(360deg)}}';
-  const t = document.createElement('div');
-  t.textContent = '登录成功，正在进入工作台…';
-  t.style.cssText = 'font-size:18px;color:#333;background:rgba(255,255,255,.92);'
-    + 'padding:10px 20px;border-radius:10px;margin-bottom:16px;letter-spacing:1px;'
-    + 'box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  const s = document.createElement('div');
-  s.style.cssText = 'width:26px;height:26px;border:3px solid #ff2442;border-top-color:transparent;'
-    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;background:rgba(255,255,255,.92);'
-    + 'padding:4px;background-clip:content-box;box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  d.appendChild(st); d.appendChild(t); d.appendChild(s);
-  document.body.appendChild(d);
-})()"""
-_REMOVE_WAITING_OVERLAY_JS = (
-    "(() => { const e = document.getElementById('xhs-leads-waiting'); if (e) e.remove(); })()"
-)
-
-# 登录 UI 改版（用户拍板）：主动重登（设置页「重新登录」force=False）登录页**可关闭**——
-# 注入右上角「✕」返回 APP（登录态不变）；强制登录（force=True）不注入，保持无叉。
-_ACTIVE_CLOSE_JS = (
-    "(function(){if(window.__xhs_leads_active_close)return;window.__xhs_leads_active_close=true;"
-    "var d=document.createElement('div');d.id='xhs-leads-active-close';d.textContent='✕';"
-    "d.style.cssText='position:fixed;top:16px;right:16px;width:34px;height:34px;"
-    "border-radius:50%;background:rgba(255,255,255,.94);box-shadow:0 1px 8px rgba(0,0,0,.2);"
-    "display:flex;align-items:center;justify-content:center;font-size:15px;color:#555;"
-    "cursor:pointer;z-index:2147483646;font-family:-apple-system,\"PingFang SC\",sans-serif;';"
-    "d.onclick=function(){window.location.href='__BASE__';};"
-    "document.body.appendChild(d);})()"
-)
-
-# R-6.10 首页模式：点开小红书首页右上角「登录」面板（二维码浮于首页背景上）。
-# 历史：本常量自 R-6.10 引入调用后从未定义（NameError 被 try 吞掉，静默降级整页登录页），
-# 本次重建——尽力注入，找不到按钮/注入失败时仍由 load_url 整页登录兜底（不新增风险）。
-_OPEN_LOGIN_PANEL_JS = (
-    "(function(){"
-    "var btns=[].slice.call(document.querySelectorAll('a,div,span,button'));"
-    "var el=btns.find(function(e){var t=(e.textContent||'').trim();"
-    "return t==='登录'&&e.offsetWidth>0&&e.offsetHeight>0;});"
-    "if(el){el.click();return 'clicked';}return 'no-login-btn';})()"
-)
+# 注：以下 JS 已全部上提至 injections 注册表（R-6.30a），按名取用：
+#   collect_debug_title（采集调试窗口标题守护，page init script）
+#   waiting_overlay / remove_waiting_overlay（登录成功过渡遮罩/移除）
+#   active_close（主动重登「✕」，__BASE__ 占位符调用方替换）
+#   open_login_panel（首页「登录」面板点击，原 R-6.10 悬空引用隐患已随注册表消除）
+#   force_login / login_fit（原 login_guard 局部 JS，见函数体）
 
 
 class ShellWindow:
@@ -436,41 +388,8 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
 
     base = base_url.rstrip("/")
 
-    # 强制登录 JS（R-6.6→R-6.10）：防御性锁定登录页**明确的关闭按钮**，但**绝不遮蔽页面内容**。
-    force_login_js = (
-        "(function(){"
-        "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
-        "var st=document.createElement('style');st.id='xhs-leads-lock';"
-        "st.textContent='[aria-label=\"关闭\"]{display:none!important}[aria-label=\"close\"]{display:none!important}.close-btn{display:none!important}';"
-        "document.head.appendChild(st);"
-        "new MutationObserver(function(){"
-        "var a=document.querySelectorAll('[aria-label=\"关闭\"],[aria-label=\"close\"],.close-btn');"
-        "for(var i=0;i<a.length;i++){a[i].style.display='none';a[i].removeAttribute('onclick');}"
-        "}).observe(document.body,{childList:true,subtree:true});})();"
-    )
-
-    # 登录页窗口适配 JS（R-6.26c，用户反馈「登录页随窗口大小自动居中，需要滚动条就出现」）：
-    # 小红书登录页是 fixed 遮罩（.reds-modal）+ reds-lock-scroll 锁滚动——窗口小于内容高度时
-    # 卡片底部被裁且无滚动条。适配：解除锁滚动 + 遮罩限高视口并允许纵向滚动 + 内容超高时
-    # 顶部对齐（初始可见头部）、未超高时垂直居中。幂等 + resize/MutationObserver/setInterval 兜底。
-    login_fit_js = (
-        "(function(){"
-        "if(window.__xhs_leads_login_fit)return;window.__xhs_leads_login_fit=true;"
-        "var st=document.createElement('style');st.id='xhs-leads-login-fit';"
-        "st.textContent='html,body{overflow:auto!important}.reds-modal{overflow-y:auto!important;max-height:100vh!important;height:auto!important;min-height:100vh!important}.login-container{flex:none!important}';"
-        "document.head.appendChild(st);"
-        "function fit(){"
-        "var m=document.querySelector('.reds-modal');var c=document.querySelector('.login-container');"
-        "if(!m||!c)return;"
-        "var need=c.getBoundingClientRect().height+24>window.innerHeight;"
-        "m.style.alignItems=need?'flex-start':'center';"
-        "}"
-        "fit();"
-        "window.addEventListener('resize',fit);"
-        "new MutationObserver(fit).observe(document.body,{childList:true,subtree:true});"
-        "setInterval(fit,2000);"
-        "})();"
-    )
+    # 强制登录 JS（R-6.6→R-6.10）与登录页窗口适配 JS（R-6.26c）已上提至
+    # injections 注册表（force_login / login_fit），注入统一走 inject_once 幂等助手。
 
     def _inject_force_login() -> None:
         try:
@@ -483,7 +402,8 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
 
     async def _safe_force_login() -> None:
         try:
-            await win.evaluate_js(force_login_js)
+            if not await injections.inject_once(win.page, "force_login"):
+                print("[xhs-leads] 强制登录 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
 
@@ -497,13 +417,14 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
 
     async def _safe_login_fit() -> None:
         try:
-            await win.evaluate_js(login_fit_js)
+            if not await injections.inject_once(win.page, "login_fit"):
+                print("[xhs-leads] 登录页适配 JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
 
     async def _inject_active_close() -> None:
         try:
-            await win.evaluate_js(_ACTIVE_CLOSE_JS.replace("__BASE__", f"{base}/"))
+            await win.evaluate_js(injections.get("active_close").replace("__BASE__", f"{base}/"))
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads] 主动重登关闭按钮注入暂未成功: {e!r}", flush=True)
 
@@ -589,7 +510,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
         _t_last_inject = 0.0
         # R-6.10 首页模式：先点开右上角「登录」面板（二维码浮于首页背景上）；失败则整页登录兜底。
         try:
-            await win.evaluate_js(_OPEN_LOGIN_PANEL_JS)
+            await win.evaluate_js(injections.get("open_login_panel"))
         except Exception:  # noqa: BLE001（页面未就绪，下轮补注）
             pass
         _inject_login_fit()  # R-6.26c：登录页窗口适配（居中 + 滚动条）——页面未就绪则由监视循环补注
@@ -629,7 +550,8 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                 # ---- 强制登录：锁死 + 无叉 ----
                 if has_id:
                     try:
-                        await win.evaluate_js(_WAITING_OVERLAY_JS)
+                        # 幂等注入：document 切换（新文档）后自动重注，循环内跳过重复 evaluate
+                        await injections.inject_once(win.page, "waiting_overlay")
                     except Exception:  # noqa: BLE001
                         pass
                     if time.monotonic() - _t_last_import >= 0.5:
@@ -644,7 +566,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
                             (r or {}).get("error", "未知原因（等待下次判定）"),
                         )
                         try:
-                            await win.evaluate_js(_REMOVE_WAITING_OVERLAY_JS)
+                            await win.evaluate_js(injections.get("remove_waiting_overlay"))
                         except Exception:  # noqa: BLE001
                             pass
                 else:

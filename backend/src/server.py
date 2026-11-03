@@ -62,6 +62,7 @@ from src.collect_pipeline import (  # noqa: E402
     search_via_browser,
 )
 from src import browser_client  # noqa: E402（快速档 _enrich_notes 直连详情/主页）
+from src import injections  # noqa: E402（R-6.30a：注入脚本集中注册表）
 from src import config, risk  # noqa: E402（架构改造 P1：配置中心 + 每账号风控）
 from src import license as lic  # noqa: E402（授权薄层：free 恒放行，业务入口统一过闸）
 
@@ -366,7 +367,7 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
         # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
         if page is not None:
             try:
-                await page.evaluate(browser_client._EXTRACT_SRC)
+                await page.evaluate(injections.get("extract"))
                 page_logged_in = bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
             except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
                 page_logged_in = False

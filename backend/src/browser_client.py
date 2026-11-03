@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 
-from src import config, engine_pool, logger as xlog, risk
+from src import config, engine_pool, injections, logger as xlog, risk
 from src.engine_pool import pool
 
 log = xlog.get("browser")
@@ -28,7 +28,7 @@ if getattr(sys, "_MEIPASS", None):
     _ROOT = pathlib.Path(sys._MEIPASS).parent / "Resources"
 else:
     _ROOT = pathlib.Path(__file__).resolve().parents[2]  # backend/src -> 项目根
-_EXTRACT_SRC = (_ROOT / "extension" / "lib" / "extract.js").read_text(encoding="utf8")
+# 提取脚本统一由 injections 注册表提供（R-6.30a）：extract 来源 = extension/lib/extract.js
 _PRESS_SCRIPT = _ROOT / "scripts" / "browser" / "cdp" / "press_allow.applescript"
 _XHS = "https://www.xiaohongshu.com"
 
@@ -224,7 +224,7 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
                 await _switch_back_to_shell(page)
         except Exception:  # noqa: BLE001
             pass
-        await page.evaluate(_EXTRACT_SRC)
+        await injections.inject_once(page, "extract")
         await asyncio.sleep(wait_ms / 1000)
         return page
     except Exception:
@@ -299,7 +299,7 @@ async def _headless_explore(cookies: list[dict]) -> dict:
     ctx = b.contexts[0] if b.contexts else await b.new_context()
     try:
         await ctx.clear_cookies()
-        await ctx.add_init_script(_EXTRACT_SRC)
+        await ctx.add_init_script(injections.get("extract"))
         if cookies:
             try:
                 await ctx.add_cookies(cookies)
@@ -311,7 +311,7 @@ async def _headless_explore(cookies: list[dict]) -> dict:
             # 等 SPA 重定向/登录跳转稳定后再注入（goto 期间注入会随旧文档丢失）；
             # add_init_script 仅对【新文档】生效，故在此手动补注一次（幂等）
             await asyncio.sleep(5)
-            await page.evaluate(_EXTRACT_SRC)
+            await injections.inject_once(page, "extract")
             return await page.evaluate(
                 "() => ({"
                 " logged_in: !!xhsIsLoggedIn(),"
@@ -327,7 +327,7 @@ async def _headless_explore(cookies: list[dict]) -> dict:
                 pass
     finally:
         try:
-            await ctx.remove_init_script(_EXTRACT_SRC)
+            await ctx.remove_init_script(injections.get("extract"))
         except Exception:  # noqa: BLE001
             pass
 
@@ -398,7 +398,7 @@ async def _verify_profile(cookies_list: list[dict], account_id: str = "default")
             await page.goto(_XHS + "/explore", wait_until="domcontentloaded", timeout=40000)
             # 同 _headless_explore：等 SPA 重定向稳定后再注入，避免函数随旧文档丢失
             await asyncio.sleep(5)
-            await page.evaluate(_EXTRACT_SRC)
+            await injections.inject_once(page, "extract")
             result = await page.evaluate(
                 "() => ({"
                 " logged_in: !!xhsIsLoggedIn(),"
@@ -545,7 +545,7 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
 
 async def _drain_page(page, items: list, seen: set) -> int:
     """提取当前页可见卡片并入 items（广告卡过滤 + 去重）。返回新增条数。"""
-    await page.evaluate(_EXTRACT_SRC)  # 每次提取前重新注入（幂等）
+    await injections.inject_once(page, "extract")  # 注册表幂等注入：页面已注入则跳过
     got = await page.evaluate("() => xhsExtractSearchNotes()")
     added = 0
     for it in got:

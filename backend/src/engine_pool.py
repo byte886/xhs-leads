@@ -24,7 +24,7 @@ import time
 
 from playwright.async_api import async_playwright
 
-from src import config, logger as xlog, risk
+from src import config, injections, logger as xlog, risk
 from src import browser_client
 
 # 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
@@ -84,45 +84,8 @@ _HEADLESS_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
 )
 
-# 防自动化检测 stealth（小红书等风控会检测 navigator.webdriver / chrome 对象 /
-# plugins / languages 等特征；注入后引擎与普通 Chrome 观感一致）。
-# 保持轻量、无外部依赖；后续如风控升级可在不换机制前提下补充特征。
-_STEALTH_SRC = r"""
-// 直接语句形式（add_init_script 的字符串会被执行；箭头函数表达式只是创建不会执行）
-window.__stealth_injected = true;
-try { delete navigator.webdriver; } catch (e) {}
-try {
-  Object.defineProperty(Navigator.prototype, 'webdriver', {
-    get: () => undefined, configurable: true,
-  });
-} catch (e) {}
-try {
-  Object.defineProperty(Navigator.prototype, 'languages', {
-    get: () => ['zh-CN', 'zh', 'en-US', 'en'], configurable: true,
-  });
-} catch (e) {}
-try {
-  Object.defineProperty(Navigator.prototype, 'plugins', {
-    get: () => [1, 2, 3, 4, 5], configurable: true,
-  });
-} catch (e) {}
-try {
-  const originalQuery = Navigator.prototype.permissions
-      && Navigator.prototype.permissions.query;
-  if (originalQuery) {
-    Navigator.prototype.permissions.query = (parameters) =>
-      parameters && parameters.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission })
-        : originalQuery.call(Navigator.prototype.permissions, parameters);
-  }
-} catch (e) {}
-try {
-  window.chrome = window.chrome || {};
-  window.chrome.runtime = window.chrome.runtime || {
-    connect: () => {}, sendMessage: () => {}, id: undefined,
-  };
-} catch (e) {}
-"""
+# 防自动化检测 stealth 注入脚本已收敛到 injections 注册表（R-6.30a）：
+# injections.get("stealth")——引擎 context add_init_script 启动时注入一次。
 
 
 
@@ -245,7 +208,7 @@ class AccountEngine:
                 )
                 # stealth：隐藏自动化特征（webdriver 等），降低被风控识别概率
                 try:
-                    await self._context.add_init_script(_STEALTH_SRC)
+                    await self._context.add_init_script(injections.get("stealth"))
                 except Exception as se:  # noqa: BLE001
                     log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
                 # 登录态重启保留（R-6.6）：Chrome 磁盘 Cookies 经钥匙串加密，无头环境
