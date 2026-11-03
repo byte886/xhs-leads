@@ -37,7 +37,17 @@ bash scripts/packaging/build_mac.sh
 | 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
 | macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |
 | UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
-| PRD / 调研 / 质检历史 | `docs/`（含 `research/`、`project/`） |
+| PRD / 需求 / 质检历史 | `docs/`（`project/`、`gates/`、`requirements/`） |
+
+## 提交前检查
+
+提交前跑 Gauntlet commit 门：
+
+```bash
+bash /private/tmp/gauntlet/tooling/bin/quality-check.sh --stage commit
+```
+
+（vendor 在 `/private/tmp/gauntlet`，gates 配置在仓库 `quality-gates/`；merge 阶段加 `--stage merge`。最新结果见 `docs/QUALITY-REPORT-2026-11-03.md`。）
 
 ## 状态（2026-11-03）
 
