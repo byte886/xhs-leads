@@ -585,48 +585,10 @@ class TestImportCookie:
         assert (tmp_path / "data" / "cookies.json").exists()
 
 
-class TestRefreshCookie:
-    def test_refresh_need_auth(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_read_chrome_cookies",
-                            lambda: (None, {"ok": False, "need_auth": True, "error": "需要授权"}))
-        r = client.post("/api/refresh_cookie_from_chrome")
-        assert r.json()["need_auth"] is True
-
-    def test_refresh_no_cookies(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_read_chrome_cookies", lambda: ([], None))
-        r = client.post("/api/refresh_cookie_from_chrome")
-        assert r.json()["ok"] is False and "未找到" in r.json()["error"]
-
-    def test_refresh_invalid(self, client, monkeypatch):
-        monkeypatch.setattr(server, "_read_chrome_cookies",
-                            lambda: ([{"name": "a1", "value": "x"}], None))
-
-        async def fake_verify(cookies):
-            return {"logged_in": False, "url": "u", "hasLoginUi": True}
-
-        monkeypatch.setattr(server, "_verify_cookies_or_raise", fake_verify)
-        r = client.post("/api/refresh_cookie_from_chrome")
-        assert r.json()["valid"] is False
-
-    def test_refresh_ok(self, client, monkeypatch, tmp_path):
-        from src import cookie_reader
-
-        monkeypatch.setattr(server, "_read_chrome_cookies",
-                            lambda: ([{"name": "web_session", "value": "abc"}], None))
-        monkeypatch.setattr(cookie_reader, "cookies_to_text", lambda c: "web_session=abc")
-
-        async def fake_verify(cookies):
-            return {"logged_in": True}
-
-        monkeypatch.setattr(server, "_verify_cookies_or_raise", fake_verify)
-        r = client.post("/api/refresh_cookie_from_chrome")
-        j = r.json()
-        assert j["ok"] is True and j["source"] == "chrome" and j["account"].startswith("abc")
-
-
 class TestLoginStatus:
-    """R 批 v1.5 后 /api/login_status 走引擎 CDP 判定（见 _engine_login_state）；
-    文件链路 _read_cookie_status 已停用留档，此处直测其本体（旧链路 expires 语义）。"""
+    """【退役路径留档】R 批 v1.5 后 /api/login_status 走引擎 CDP 判定（见 _engine_login_state）；
+    文件链路 _read_cookie_status 已停用留档，此处直测其本体（旧链路 expires 语义）。
+    保留目的：保持留档代码诚实——若有人改动留档函数体，expires 三分支语义必须仍成立。"""
 
     def test_ws_without_expires(self, tmp_path):
         # web_session 无 expires 字段（exps 空）→ exp_ok=True 视为已登录（or 分支应被杀）
@@ -657,6 +619,9 @@ class TestLoginStatus:
 
 
 class TestReadChromeCookies:
+    """【退役路径留档】server._read_chrome_cookies() 已 R 批 v1.4 下线留档（不再被任何
+    正式接口调用）；保留本类目的 = 保持留档代码诚实——钥匙串 pending/denied 两分支的
+    错误映射若被改动，本类应立即报警，防止留档代码被误改坏。"""
     def test_pending_auth(self, monkeypatch, tmp_path):
         monkeypatch.setenv("XHS_PROFILE_DIR", str(tmp_path / "p"))
         from src import cookie_reader

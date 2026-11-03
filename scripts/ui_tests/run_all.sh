@@ -48,6 +48,18 @@ if [ "$ENGINE_READY" != "1" ]; then
 fi
 echo "✓ 引擎调试端口 9223 就绪（连引擎实例，登录态=引擎独立 profile）"
 
+# ---- G5 轻断言：就绪后页面集不得残留多余小红书登录页 ----
+# 就绪检查循环可能经 /api/mirror/open 拉起引擎（其副作用是打开小红书登录页）。
+# 未登录基线要求页面集={壳窗8791, /login-hint}：若 9223 页面集出现 xiaohongshu.com/login
+# （采集窗在已登录态为 /explore，不含 /login），说明 mirror/open 副作用未清理 → FAIL 早失败。
+PAGES_JSON="$(curl -s http://127.0.0.1:9223/json/list)"
+if echo "$PAGES_JSON" | grep -q "xiaohongshu\.com/login"; then
+  echo "✗ G5 失败：引擎页面集残留多余小红书登录页（mirror/open 副作用未清理）："
+  echo "$PAGES_JSON" | grep -o '"url":"[^"]*"' | head -10
+  exit 1
+fi
+echo "✓ G5 页面集无多余小红书登录页残留"
+
 # ---- 顺序执行 ----
 FILTER="${1:-}"
 PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=()

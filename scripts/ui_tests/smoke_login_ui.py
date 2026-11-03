@@ -125,8 +125,29 @@ def prepare(dirpath, with_cookies):
     return d
 
 
-def click(x, y):
-    subprocess.run(['cliclick', 'c:%d,%d' % (x, y)], check=True)
+def force_mask_visible():
+    """G6：CDP 直连 9223 断言壳窗内 .force-mask 真可见（替代只截图不断言）。
+
+    壳窗页 = 127.0.0.1:<当前 API 端口>；找不到壳窗/弹框不可见/超时 → (False, 原因)。
+    """
+    from playwright.sync_api import sync_playwright
+    port = API.rsplit(':', 1)[-1]
+    with sync_playwright() as p:
+        b = p.chromium.connect_over_cdp('http://127.0.0.1:9223')
+        pg = next((x for ctx in b.contexts for x in ctx.pages
+                   if f'127.0.0.1:{port}' in (x.url or '')), None)
+        if pg is None:
+            b.close()
+            return False, f'壳窗页未找到（127.0.0.1:{port}）'
+        try:
+            pg.wait_for_selector('.force-mask', state='visible', timeout=5000)
+            ok = pg.locator('.force-mask').first.is_visible()
+            text = pg.locator('.force-box').inner_text().strip().replace('\n', ' | ')[:80]
+        except Exception as e:  # noqa: BLE001
+            return False, f'.force-mask 未在 5s 内可见: {e!r}'
+        finally:
+            b.close()
+        return ok, text
 
 
 def scene_a():
@@ -144,6 +165,12 @@ def scene_a():
         print('[smoke] A PASS: 未登录状态正确')
     else:
         print('[smoke] A WARN: 登录状态异常:', st)
+    # G6 真断言：.force-mask 可见性（CDP 直连，不再只靠截图人工核对）
+    ok, detail = force_mask_visible()
+    if ok:
+        print(f'[smoke] A PASS: .force-mask 可见（文案: {detail}）')
+    else:
+        print(f'[smoke] A FAIL: .force-mask 不可见: {detail}')
     kill_app()
 
 
@@ -160,13 +187,16 @@ def scene_b():
     # 后端断言：游客 Cookie 也应全量只读展示（名称/完整值/域/有效期）
     try:
         info = api_json('/api/cookie_info')
-        first = (info.get('cookies') or [{}])[0]
+        cookies_list = info.get('cookies') or []
+        need = ('name', 'value', 'domain', 'expires')
+        bad = [c for c in cookies_list if not all(k in c for k in need)]
         print('[smoke] cookie_info count:', info.get('count'),
-              '| 首条字段:', {k: first.get(k) for k in ('name', 'value', 'domain', 'expires')})
-        if info.get('count') == 14 and all(k in first for k in ('name', 'value', 'domain', 'expires')):
-            print('[smoke] B PASS: cookie_info 完整字段（名称/完整值/域/有效期）')
+              '| 首条字段:', {k: (cookies_list[0].get(k) is not None) for k in need} if cookies_list else '空')
+        # G6：断字段完整性（不再硬编码 count==14——cookie 条数随平台变化，硬编码必脆）
+        if cookies_list and not bad:
+            print(f'[smoke] B PASS: cookie_info 字段完整（{len(cookies_list)} 条均含 name/value/domain/expires）')
         else:
-            print('[smoke] B WARN: cookie_info 字段或条数异常:', info)
+            print('[smoke] B WARN: cookie_info 字段缺失或列表为空:', info.get('count'), bad[:1])
     except Exception as e:
         print('[smoke] B WARN: cookie_info 未取到:', e)
     # 游客 cookie 也触发强制登录（未登录判定与 cookie 数无关，只与 web_session 有关）
