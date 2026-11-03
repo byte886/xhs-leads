@@ -85,3 +85,21 @@ class TestHandleLoginWall:
         bc._handle_login_wall("acc1", "登录墙")
         assert called == {"a": "acc1", "r": "登录墙"}
 
+
+
+# ------------------------------------------------ fake engine 委托路径
+
+import asyncio as _asyncio
+from tests.fake_playwright import FakeEngine, FakeContext, FakePage  # noqa: F401
+
+
+def test_should_stop_collect_logic():
+    # 达到 limit → stop
+    stopped, n = bc._should_stop_collect(30, 30, 0, 0, None)
+    assert stopped is True
+    # 未达 limit 且无 stale → 继续
+    stopped, n = bc._should_stop_collect(5, 30, 0, 0, None)
+    assert stopped is False
+    # stale 高 → stop
+    stopped, n = bc._should_stop_collect(5, 30, 20, 0, None)
+    assert stopped is True
