@@ -90,6 +90,9 @@ def test_app_config_get(client):
 
 def test_app_config_rejects_unknown(client):
     r = client.post("/api/app_config", json={"bogus_key": 1})
+    # R-6.41e：实测 pydantic v2 默认丢弃 extra，bogus_key 未进入 endpoint；
+    # server.py:2240 的 400 分支为死代码（需 model_config extra='forbid' 才生效）。
+    # 暂保留宽容断言，待代码线补 extra='forbid' 后再收紧为 400。
     assert r.status_code in (200, 400, 422)
 
 
