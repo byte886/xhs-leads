@@ -42,53 +42,11 @@ _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一�
 # 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
 # R-6.10（用户反馈）：登录页**保持小红书原生背景与内容**——绝不注入遮蔽类样式（历史版本
 # force_login_js 的 [class*="close"] 全隐藏规则会遮蔽登录页内容致空白，已精确化，见下方）。
-XHS_LOGIN_URL = (
-    "https://www.xiaohongshu.com/login"
-    "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
-)
-
-# R-6.9 登录成功过渡提示：id_token 一出现即注入「等待中」提示，遮挡小红书登录后页面、
-# 拦截用户误操作；引擎注入完成 load_url 切回 APP 时随导航消失。幂等（已有 id 不重复注入）。
-# R-6.10（用户反馈）：改为**半透明**背景——不再纯白全屏遮蔽（历史版 #ffffff 把小红书页面
-# 整个盖住，用户反馈「背景被遮蔽看不见」），背景透出、提示清晰，扫码完成后直接回 APP。
-_WAITING_OVERLAY_JS = r"""(() => {
-  if (document.getElementById('xhs-leads-waiting')) return;
-  const d = document.createElement('div');
-  d.id = 'xhs-leads-waiting';
-  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;'
-    + 'background:rgba(255,255,255,.55);backdrop-filter:blur(2px);'
-    + 'z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;'
-    + 'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;';
-  const st = document.createElement('style');
-  st.textContent = '@keyframes xhs-leads-spin{to{transform:rotate(360deg)}}';
-  const t = document.createElement('div');
-  t.textContent = '登录成功，正在进入工作台…';
-  t.style.cssText = 'font-size:18px;color:#333;background:rgba(255,255,255,.92);'
-    + 'padding:10px 20px;border-radius:10px;margin-bottom:16px;letter-spacing:1px;'
-    + 'box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  const s = document.createElement('div');
-  s.style.cssText = 'width:26px;height:26px;border:3px solid #ff2442;border-top-color:transparent;'
-    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;background:rgba(255,255,255,.92);'
-    + 'padding:4px;background-clip:content-box;box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  d.appendChild(st); d.appendChild(t); d.appendChild(s);
-  document.body.appendChild(d);
-})()"""
-_REMOVE_WAITING_OVERLAY_JS = (
-    "(() => { const e = document.getElementById('xhs-leads-waiting'); if (e) e.remove(); })()"
-)
-
-# 登录 UI 改版（用户拍板）：主动重登（设置页「重新登录」force=False）登录页**可关闭**——
-# 注入右上角「✕」返回 APP（登录态不变）；强制登录（force=True）不注入，保持无叉。
-_ACTIVE_CLOSE_JS = (
-    "(function(){if(window.__xhs_leads_active_close)return;window.__xhs_leads_active_close=true;"
-    "var d=document.createElement('div');d.id='xhs-leads-active-close';d.textContent='✕';"
-    "d.style.cssText='position:fixed;top:16px;right:16px;width:34px;height:34px;"
-    "border-radius:50%;background:rgba(255,255,255,.94);box-shadow:0 1px 8px rgba(0,0,0,.2);"
-    "display:flex;align-items:center;justify-content:center;font-size:15px;color:#555;"
-    "cursor:pointer;z-index:2147483646;font-family:-apple-system,\"PingFang SC\",sans-serif;';"
-    "d.onclick=function(){window.location.href='__BASE__';};"
-    "document.body.appendChild(d);})()"
-)
+# R-6.31c：以下 JS 曾在此处维护死拷贝（_WAITING_OVERLAY_JS / _REMOVE_WAITING_OVERLAY_JS /
+# _ACTIVE_CLOSE_JS / XHS_LOGIN_URL），launcher 体内从未引用（grep 仅命中定义行）。
+# 单一事实源 = backend/src/injections.py 注册表：
+#   waiting_overlay / remove_waiting_overlay / active_close（login_guard 为唯一注入点）；
+#   登录 URL 由 shell_window.login_guard 持有。本文件不再保留副本，避免双写漂移。
 
 
 def _redirect_logs(data_dir: pathlib.Path) -> None:
