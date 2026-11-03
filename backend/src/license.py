@@ -78,6 +78,20 @@ def _check_paid(feature: str, detail: dict) -> tuple[bool, str, dict]:
     return True, "", {"mode": "activation", "feature": feature}
 
 
+def _verify_rsa_signature(blob_b64: str, sig: bytes) -> bool:
+    """R-6.37g 拆自 _verify_activation_code：RSA-SHA256 PKCS1v15 验签。"""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    try:
+        pub = load_pem_public_key(_PUBLIC_KEY_PEM.encode("ascii"))
+        # 签发侧签的是 base64url 字符串（blob.encode("ascii")），验签必须用同一对象
+        pub.verify(sig, blob_b64.encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
+        return True
+    except Exception:  # noqa: BLE001（任何验签失败 = 激活码无效）
+        return False
+
+
 def _verify_activation_code(code: str) -> tuple[bool, str]:
     """验签激活码：blob.sig 格式，RSA 验签 + 机器码匹配 + 有效期。
 
@@ -94,16 +108,7 @@ def _verify_activation_code(code: str) -> tuple[bool, str]:
         return False, "激活码格式错误"
     if not isinstance(payload, dict) or "m" not in payload or "e" not in payload:
         return False, "激活码格式错误"
-    # RSA 验签（PKCS1v15-SHA256）
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import padding
-    from cryptography.hazmat.primitives.serialization import load_pem_public_key
-
-    try:
-        pub = load_pem_public_key(_PUBLIC_KEY_PEM.encode("ascii"))
-        # 签发侧签的是 base64url 字符串（blob.encode("ascii")），验签必须用同一对象
-        pub.verify(sig, blob_b64.encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
-    except Exception:  # noqa: BLE001（任何验签失败 = 激活码无效）
+    if not _verify_rsa_signature(blob_b64, sig):
         return False, "激活码无效（签名不匹配）"
     if payload.get("m") != machine_code():
         return False, "激活码与设备不匹配（激活码绑定机器码）"
@@ -111,6 +116,28 @@ def _verify_activation_code(code: str) -> tuple[bool, str]:
     if not isinstance(exp, (int, float)) or exp < time.time():
         return False, "激活码已过期"
     return True, ""
+
+
+def _darwin_platform_uuid() -> str | None:
+    """R-6.37g 拆自 machine_code：macOS IOPlatformUUID 提取。"""
+    out = subprocess.check_output(
+        ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+        text=True, stderr=subprocess.DEVNULL, timeout=10,
+    )
+    for line in out.splitlines():
+        if "IOPlatformUUID" in line:
+            parts = line.split('"')
+            if len(parts) >= 3 and parts[-2].strip():
+                return _digest(parts[-2].strip())
+    return None
+
+
+def _windows_machine_guid() -> str | None:
+    """R-6.37g 拆自 machine_code：Windows MachineGuid 提取。"""
+    import winreg  # noqa: PLC0415（仅 Windows 导入）
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+        guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+        return _digest(str(guid))
 
 
 def machine_code() -> str:
@@ -123,21 +150,13 @@ def machine_code() -> str:
     """
     try:
         if sys.platform == "darwin":
-            out = subprocess.check_output(
-                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                text=True, stderr=subprocess.DEVNULL, timeout=10,
-            )
-            for line in out.splitlines():
-                if "IOPlatformUUID" in line:
-                    parts = line.split('"')
-                    if len(parts) >= 3 and parts[-2].strip():
-                        return _digest(parts[-2].strip())
+            code = _darwin_platform_uuid()
+            if code:
+                return code
         elif sys.platform in ("win32", "cygwin"):
-            import winreg  # noqa: PLC0415（仅 Windows 导入）
-
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
-                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
-                return _digest(str(guid))
+            code = _windows_machine_guid()
+            if code:
+                return code
     except Exception:  # noqa: BLE001（任一平台探测失败走兜底，不阻断）
         pass
     return _digest(f"{platform.node()}|{os.getlogin() if hasattr(os, 'getlogin') else 'unknown'}")

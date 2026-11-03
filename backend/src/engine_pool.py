@@ -223,11 +223,13 @@ class AccountEngine:
             await self._context.add_init_script(injections.get("stealth"))
         except Exception as se:  # noqa: BLE001
             log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
-        # 登录态重启保留（R-6.6）：Chrome 磁盘 Cookies 经钥匙串加密，无头环境
-        # 重启后内存为空（CDP 读不到）；以 data/cookies.json（注入时明文持久化）
-        # 为权威源，启动即回注——登录态跨重启/重打包保留，守卫可秒回 APP。
-        # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存
-        # （read_cookies 走 CDP 会话，启动期可能挂起；且启动后内存本就为空）。
+        await self._replay_saved_cookies()
+        return self._context
+
+    async def _replay_saved_cookies(self) -> None:
+        """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。"""
+        # 登录态重启保留（R-6.6）：以 data/cookies.json 为权威源，启动即回注。
+        # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存。
         try:
             saved = []
             cf = self.cookie_file
@@ -241,7 +243,6 @@ class AccountEngine:
                 log.info("账号 %s 无持久化 Cookie 可回注", self.account_id)
         except Exception as re:  # noqa: BLE001
             log.warning("账号 %s 回注持久化 Cookie 失败: %s", self.account_id, re)
-        return self._context
 
     async def close(self):
         """优雅关闭：ctx.close() 落盘登录态（pkill -9 会丢登录态，已实证）。"""

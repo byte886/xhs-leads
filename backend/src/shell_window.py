@@ -795,19 +795,27 @@ async def _keeper_find_shell(ctx, base, coord):
     return None
 
 
+def _match_tab2_page(p, shell, coord):
+    """R-6.37g 拆自 _keeper_find_tab2：单页是否 Tab2（explore 或 login-hint）。"""
+    if p is shell or p.is_closed():
+        return None
+    u = p.url or ""
+    if ("xiaohongshu.com" in u and "/login" not in u) or "login-hint" in u:
+        print(f"[xhs-leads][tab2] _find_tab2 命中: url={u[:60]!r}", flush=True)
+        coord.register_tab2(p)
+        return p
+    return None
+
+
 async def _keeper_find_tab2(ctx, shell, coord):
     """采集窗（Tab2）可能在 explore 或 /login-hint，两者都算任务 tab。"""
     alive = coord.tab2()
     if alive is not None and alive is not shell:
         return alive
     for p in ctx.pages:
-        if p is shell or p.is_closed():
-            continue
-        u = p.url or ""
-        if ("xiaohongshu.com" in u and "/login" not in u) or "login-hint" in u:
-            print(f"[xhs-leads][tab2] _find_tab2 命中: url={u[:60]!r}", flush=True)
-            coord.register_tab2(p)
-            return p
+        t2 = _match_tab2_page(p, shell, coord)
+        if t2 is not None:
+            return t2
     return None
 
 

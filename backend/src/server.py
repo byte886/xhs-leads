@@ -162,6 +162,14 @@ def _db() -> sqlite3.Connection:
     return con
 
 
+def _add_column_if_missing(con, table: str, col: str, coltype: str) -> None:
+    """R-6.37g 拆自 _init_tables：幂等补列（列已存在静默）。"""
+    try:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
+
+
 def _init_tables(con):
     con.execute("""
         CREATE TABLE IF NOT EXISTS notes (
@@ -182,15 +190,9 @@ def _init_tables(con):
         )
     """)
     # v3 拟人化护栏需要 raw 列（风控熔断关键词检测）；老库补列
-    try:
-        con.execute("ALTER TABLE publish_logs ADD COLUMN raw TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
+    _add_column_if_missing(con, "publish_logs", "raw", "TEXT")
     # P1 数据回流：发布记录回写互动数据（浏览/赞/藏/评/转 + 抓取时间）
-    try:
-        con.execute("ALTER TABLE publish_logs ADD COLUMN stats_json TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
+    _add_column_if_missing(con, "publish_logs", "stats_json", "TEXT")
     # P4 采集客户：互动用户名单（评论用户）
     con.execute("""
         CREATE TABLE IF NOT EXISTS clients (
@@ -201,20 +203,11 @@ def _init_tables(con):
     """)
     # O1-3：老库补意向/属地/时间列（幂等）
     for col in ("intent", "matched_word", "ip_location", "comment_time"):
-        try:
-            con.execute(f"ALTER TABLE clients ADD COLUMN {col} TEXT")
-        except sqlite3.OperationalError:
-            pass  # 列已存在
+        _add_column_if_missing(con, "clients", col, "TEXT")
     # 评分明细（score_info JSON：4 维度得分，卡片右上角分数可解释）；老库补列
-    try:
-        con.execute("ALTER TABLE notes ADD COLUMN score_info TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
+    _add_column_if_missing(con, "notes", "score_info", "TEXT")
     # 视频克隆：详情页原视频地址（extract.js 提取），供一键克隆下载原视频
-    try:
-        con.execute("ALTER TABLE notes ADD COLUMN video_url TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
+    _add_column_if_missing(con, "notes", "video_url", "TEXT")
     # 存草稿（长期保留资产；区别于搜索/采集结果——用完即失效）
     con.execute("""
         CREATE TABLE IF NOT EXISTS drafts (
@@ -250,6 +243,20 @@ _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半
 _LOGIN_INVALID = False
 
 
+async def _scan_one_xhs_page(p, page):
+    """R-6.37g 拆自 _scan_xhs_pages_for_signals：单页处理（首匹配页+正文+登录重定向）。"""
+    if p.is_closed() or "xiaohongshu" not in (p.url or ""):
+        return page, None, False
+    if page is None:
+        page = p
+    try:
+        txt = (await p.inner_text("body")) or ""
+    except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
+        txt = ""
+    is_login = "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login")
+    return page, txt, is_login
+
+
 async def _scan_xhs_pages_for_signals(ctx):
     """R-6.36e 拆自 _engine_login_state：扫描所有小红书页（body 拼接 + 首个匹配页 + 登录重定向信号）。"""
     if ctx is None:
@@ -258,16 +265,10 @@ async def _scan_xhs_pages_for_signals(ctx):
     page = None
     login_redirect = False
     for p in ctx.pages:
-        if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-            if page is None:
-                page = p
-            try:
-                txt = (await p.inner_text("body")) or ""
-            except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
-                txt = ""
-            bodies.append(txt)
-            if "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login"):
-                login_redirect = True
+        page, body_txt, is_login = await _scan_one_xhs_page(p, page)
+        if body_txt is not None:
+            bodies.append(body_txt)
+            login_redirect = login_redirect or is_login
     return page, "\n".join(bodies), login_redirect
 
 
@@ -1029,6 +1030,13 @@ async def _fill_fans(n: dict, uid: str, cache: dict, account_id: str = "default"
     n["fans_count"] = cache[uid]
 
 
+def _stop_running_collect_tasks() -> None:
+    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。"""
+    for _tid, st in list(_COLLECT_TASKS.items()):
+        if st.get("status") == "running":
+            st["stop_event"] = True
+
+
 @app.post("/api/collect_start")
 async def collect_start(req: SearchReq):
     """启动采集任务：后台滚动平台搜索页逐批提取，直到满额/平台不增长/用户停止。
@@ -1047,9 +1055,7 @@ async def collect_start(req: SearchReq):
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
     dedup_key = f"{req.keyword.strip()}|{account_id}"
     _now = time.time()
-    for tid, st in list(_COLLECT_TASKS.items()):
-        if st.get("status") == "running":
-            st["stop_event"] = True  # 新任务启动时优雅停止旧任务（并发任务管理，非启动限制）
+    _stop_running_collect_tasks()
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
@@ -1595,18 +1601,9 @@ def _build_week_timeline(day_counts: dict) -> list:
     return days
 
 
-@app.get("/api/clients_agg")
-def clients_agg():
-    """数据聚合：线索总数 / 意向分布（四档计数）/ 属地 TOP / 近 7 天产出 / 留联系方式命中。
-
-    与 /api/clients_list 同一数据源，聚合数字与明细一致（验收标准）。
-    """
-    con = _db()
-    from src.intent import INTENT_LABEL, intent_rank, is_contact
-    rows = con.execute(
-        "SELECT intent, matched_word, comment, ip_location, created_at FROM clients"
-    ).fetchall()
-    # 意向分布（按档位数值排序输出：高→上→中→低）
+def _aggregate_client_rows(rows):
+    """R-6.37g 拆自 clients_agg：逐行聚合意向分布/属地/日计数/联系方式命中。"""
+    from src.intent import is_contact
     dist = {k: 0 for k in ("high", "upper", "middle", "low")}
     ip_counts: dict[str, int] = {}
     day_counts: dict[str, int] = {}
@@ -1622,6 +1619,21 @@ def clients_agg():
             day_counts[d] = day_counts.get(d, 0) + 1
         if is_contact(r["comment"] or "", r["matched_word"] or ""):
             contact += 1
+    return dist, ip_counts, day_counts, contact
+
+
+@app.get("/api/clients_agg")
+def clients_agg():
+    """数据聚合：线索总数 / 意向分布（四档计数）/ 属地 TOP / 近 7 天产出 / 留联系方式命中。
+
+    与 /api/clients_list 同一数据源，聚合数字与明细一致（验收标准）。
+    """
+    con = _db()
+    from src.intent import INTENT_LABEL, intent_rank, is_contact
+    rows = con.execute(
+        "SELECT intent, matched_word, comment, ip_location, created_at FROM clients"
+    ).fetchall()
+    dist, ip_counts, day_counts, contact = _aggregate_client_rows(rows)
     intent_dist = [
         {"intent": k, "label": INTENT_LABEL[k], "count": dist[k]}
         for k in sorted(dist, key=intent_rank, reverse=True)
@@ -2079,6 +2091,26 @@ class PublishStatsReq(BaseModel):
     note_url: str = ""
 
 
+async def _resolve_publish_detail(con, row, req):
+    """R-6.37g 拆自 publish_stats：解析笔记详情（用户链接优先，回退来源 feed_id+xsec_token）。"""
+    url = (req.note_url or "").strip()
+    if url:
+        d = await get_note_detail_by_url(url)
+        if not d:
+            raise HTTPException(400, "打开笔记失败：链接无效或需登录（请确认 Chrome 已登录小红书，且链接是公开笔记）")
+        return d
+    feed_id = row["feed_id"] or ""
+    if not feed_id:
+        raise HTTPException(400, "该记录无来源笔记 ID，请粘贴已发布笔记链接后重试")
+    # 搜索来源笔记带 xsec_token 才能打开详情页（explore 直开会 404/风控）
+    tok = ""
+    row2 = con.execute("SELECT xsec_token FROM notes WHERE feed_id=?", (feed_id,)).fetchone()
+    if row2 and row2[0]:
+        tok = row2[0]
+    note = {"feed_id": feed_id, "xsec_token": tok}
+    return await get_feed_detail(note)
+
+
 @app.post("/api/publish_stats")
 async def publish_stats(req: PublishStatsReq):
     """数据回流：本地浏览器打开已发布笔记详情页，抓取互动数据（浏览/赞/藏/评/转）回写发布记录。
@@ -2091,22 +2123,7 @@ async def publish_stats(req: PublishStatsReq):
     row = con.execute("SELECT * FROM publish_logs WHERE id=?", (req.log_id,)).fetchone()
     if not row:
         raise HTTPException(404, "发布记录不存在")
-    url = (req.note_url or "").strip()
-    if url:
-        d = await get_note_detail_by_url(url)
-        if not d:
-            raise HTTPException(400, "打开笔记失败：链接无效或需登录（请确认 Chrome 已登录小红书，且链接是公开笔记）")
-    else:
-        feed_id = row["feed_id"] or ""
-        if not feed_id:
-            raise HTTPException(400, "该记录无来源笔记 ID，请粘贴已发布笔记链接后重试")
-        # 搜索来源笔记带 xsec_token 才能打开详情页（explore 直开会 404/风控）
-        tok = ""
-        row2 = con.execute("SELECT xsec_token FROM notes WHERE feed_id=?", (feed_id,)).fetchone()
-        if row2 and row2[0]:
-            tok = row2[0]
-        note = {"feed_id": feed_id, "xsec_token": tok}
-        d = await get_feed_detail(note)
+    d = await _resolve_publish_detail(con, row, req)
     stats = {k: d.get(k) or "" for k in ("views", "liked_count", "collected_count", "comment_count", "shared_count")}
     if not any(v for v in stats.values()):
         raise HTTPException(400, "未抓到互动数据：请确认 Chrome 已登录小红书且笔记可正常访问（笔记可能已删除/被风控）")
