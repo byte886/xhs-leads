@@ -76,8 +76,6 @@ _DEFAULTS = {
     "collect_tab_visible": False, # R-6.18 壳窗口双 Tab：采集过程是否在壳窗口 Tab2 显示。
                                   #   True=采集 tab 前置可见（调试/演示）；False=采集后台完成、
                                   #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
-    "chrome_path": "",            # 用户自定义 Chrome 路径（~ 相对）
-    "profile_dir": "",            # 兼容字段：default 账号 user_data_dir 旧配置
     "collect_min_interval": 90.0, # 废弃（R-6.15 移除任务间节流；保留字段兼容旧配置）
     "request_interval": [1.0, 1.8],  # 拟人节奏随机区间
 }
@@ -175,15 +173,6 @@ def front_port() -> int:
         return find_free_port(preferred)
     return preferred
 
-
-def chrome_path() -> str:
-    """用户自定义 Chrome 路径（~ 相对 → 绝对；config > 旧 cdp_config.json）。"""
-    cfg = get_config()
-    p = cfg.get("chrome_path") or _read_json(DATA_DIR / "cdp_config.json").get("chrome_path") or ""
-    return expand(p) if p else ""
-
-
-# ---------------------------------------------------------------------------
 # 运行模式（R 批：dev / prod 区分）
 # ---------------------------------------------------------------------------
 # 打包进壳（PyInstaller）后改代码必须重打包、日志落盘、前端为静态产物——不便调试；
