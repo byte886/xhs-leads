@@ -190,10 +190,14 @@ class AccountEngine:
                 # e1/t 系列 UI 测试 connect_over_cdp 连接（同一实例=同一登录态 profile）；
                 # 旧「9223 外部可见 Chrome」测试路径退役。Playwright 经 stdio 管道控制不受影响。
                 eng_port = config.engine_port()
+                # R-6.27：viewport 与窗口几何对齐——非无头（壳窗口）时页面布局宽度
+                # 必须等于窗口宽度，否则窗口（主屏半宽，如 960）显示 1280 宽的布局，
+                # 右侧内容被裁（用户反馈「尺寸没对齐」）。无头引擎保持 1280 采集布局。
+                _geo_w, _geo_h = shell_window_geometry()[:2] if not headless else (1280, 800)
                 launch_kwargs = dict(
                     channel="chrome",
                     headless=headless,
-                    viewport={"width": 1280, "height": 800},
+                    viewport={"width": _geo_w, "height": _geo_h},
                     args=[
                         "--no-first-run", "--no-default-browser-check",
                         "--disable-blink-features=AutomationControlled",

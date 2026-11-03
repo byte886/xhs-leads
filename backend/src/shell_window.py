@@ -296,23 +296,33 @@ async def _calibrate_window(page, left: int, top: int, width: int, height: int) 
     launch_persistent_context 的 viewport 会覆盖 --window-size（实测窗口仍 1280
     宽），但 --window-position 生效；故用 CDP 后置校准窗口 bounds：壳窗口放
     主屏左半 (0,0)、采集调试窗口放右半 (win_left,0)，等宽并排互不重叠。
-    失败静默（CDP 不可用不阻断启动/创建）。
+    R-6.27：page 刚创建时 CDP session 偶发 guid 失效（TargetClosedError），
+    失败静默重试 3 次（间隔 1s）再放弃。
     """
-    try:
-        cdp = await page.context.new_cdp_session(page)
-        t = await cdp.send("Browser.getWindowForTarget")  # 缺省 targetId = 当前 session 页面
-        await cdp.send(
-            "Browser.setWindowBounds",
-            {
-                "windowId": t["windowId"],
-                "bounds": {
-                    "left": left, "top": top, "width": width, "height": height,
-                    "windowState": "normal",
+    last_err = None
+    for attempt in range(3):
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            t = await cdp.send("Browser.getWindowForTarget")  # 缺省 targetId = 当前 session 页面
+            await cdp.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": t["windowId"],
+                    "bounds": {
+                        "left": left, "top": top, "width": width, "height": height,
+                        "windowState": "normal",
+                    },
                 },
-            },
-        )
-    except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads] 窗口校准失败（{left},{top} {width}x{height}）: {e!r}", flush=True)
+            )
+            return
+        except Exception as e:  # noqa: BLE001（CDP 不可用不阻断启动/创建）
+            last_err = e
+            await asyncio.sleep(1.0)
+    print(
+        f"[xhs-leads] 窗口校准失败（{left},{top} {width}x{height}，"
+        f"重试 3 次仍失败）: {last_err!r}",
+        flush=True,
+    )
 
 
 async def ensure_shell(base_url: str):
