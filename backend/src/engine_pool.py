@@ -139,96 +139,7 @@ class AccountEngine:
 
             pw = await _get_pw()
             try:
-                os.makedirs(self.user_data_dir, exist_ok=True)
-                # 关键：launch_persistent_context（内部 stdio 管道，无 TCP 调试端口，
-                # 从机制上不触发「允许远程调试」授权流程；解密在浏览器进程内部，免钥匙串）
-                # R 批 v1.4：headless 无头化（外部零 Chrome 窗口）+ stealth 强化
-                #  - viewport 1280x800：桌面宽屏布局（小红书桌面版），登录小窗/调试镜像同尺寸
-                #  - user_agent：无头时覆盖 HeadlessChrome 特征（风控指纹）
-                #  - AutomationControlled：关掉 CDP 来源的 webdriver 标记（与 init script 双保险）
-                #  - headless=False 兜底档：风控敏感环节可临时切后台可见窗口（config.headless）
-                cfg = config.get_config()
-                headless = bool(cfg.get("headless", True))
-                # R 批 v1.5：引擎带固定 CDP 调试端口（config.engine_port()，默认 9223）供
-                # e1/t 系列 UI 测试 connect_over_cdp 连接（同一实例=同一登录态 profile）；
-                # 旧「9223 外部可见 Chrome」测试路径退役。Playwright 经 stdio 管道控制不受影响。
-                eng_port = config.engine_port()
-                # R-6.27：viewport 与窗口几何对齐——非无头（壳窗口）时页面布局宽度
-                # 必须等于窗口宽度，否则窗口（主屏半宽，如 960）显示 1280 宽的布局，
-                # 右侧内容被裁（用户反馈「尺寸没对齐」）。无头引擎保持 1280 采集布局。
-                _geo_w, _geo_h = shell_window_geometry()[:2] if not headless else (1280, 800)
-                launch_kwargs = dict(
-                    channel="chrome",
-                    headless=headless,
-                    viewport={"width": _geo_w, "height": _geo_h},
-                    args=[
-                        "--no-first-run", "--no-default-browser-check",
-                        "--disable-blink-features=AutomationControlled",
-                        f"--remote-debugging-port={eng_port}",
-                    ],
-                )
-                # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
-                # 实时可见采集/登录操作过程（替代「截图映射」）。
-                # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
-                # 「壳窗口内两个固定 Tab」故移除；R-6.21 用户拍板还原「双窗口」并恢复
-                # 壳窗口应用模式：窗口一=APP/登录（--app 壳窗口：无地址栏/无标签条，
-                # 标签条上的 +/×/pinned 全部不再出现；keep_shell_tab 监护固定不可关），
-                # 窗口二=采集（独立普通窗口，设置开关 collect_tab_visible 控制开/关，
-                # shell_window.open_tab2_window 以 window.open 从壳窗口弹出——app 模式
-                # 下 window.open 新 target 落到普通独立窗口，与双窗口语义一致）。
-                # 注：XHS_SHELL_URL 由 launcher 注入（供 ensure_shell/监护/--app 使用）；
-                # 未注入时（直接跑 server 调试）按 front_port 兜底拼。
-                if not headless:
-                    shell_url = os.environ.get("XHS_SHELL_URL") or (
-                        f"http://127.0.0.1:{config.front_port()}/"
-                    )
-                    # R-6.22c：launch_persistent_context 的 --app 实测不生效（窗口仍为
-                    # 普通 Chrome 形态，带菜单栏/标签栏）。壳窗口应用模式改由
-                    # shell_window.ensure_shell 走 --app 命令行路由（_launch_app_window）
-                    # 弹出；此处保留 --window-size/--window-position 让启动初始普通窗口
-                    # 也落在主屏左半（避免闪现错位，随后被 ensure_shell 关闭）。
-                    # R-6.22 双窗口左右分屏：主 APP 放主屏左半、采集调试窗口右半，
-                    # 等宽并排不重叠（win_w = min(1280, 主屏宽 // 2)）
-                    win_w, win_h, _, _ = shell_window_geometry()
-                    launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
-                    launch_kwargs["args"].append("--window-position=0,0")
-                # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
-                # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
-                # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
-                # CFT 缺失时回退 channel="chrome"（系统 Google Chrome 兜底）。
-                cft = builtin_cft_candidates()
-                if cft:
-                    launch_kwargs["executable_path"] = cft
-                    launch_kwargs.pop("channel", None)
-                log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
-                if headless:
-                    launch_kwargs["user_agent"] = _HEADLESS_UA
-                self._context = await pw.chromium.launch_persistent_context(
-                    self.user_data_dir, **launch_kwargs
-                )
-                # stealth：隐藏自动化特征（webdriver 等），降低被风控识别概率
-                try:
-                    await self._context.add_init_script(injections.get("stealth"))
-                except Exception as se:  # noqa: BLE001
-                    log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
-                # 登录态重启保留（R-6.6）：Chrome 磁盘 Cookies 经钥匙串加密，无头环境
-                # 重启后内存为空（CDP 读不到）；以 data/cookies.json（注入时明文持久化）
-                # 为权威源，启动即回注——登录态跨重启/重打包保留，守卫可秒回 APP。
-                # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存
-                # （read_cookies 走 CDP 会话，启动期可能挂起；且启动后内存本就为空）。
-                try:
-                    saved = []
-                    cf = self.cookie_file
-                    if cf.exists():
-                        data = json.loads(cf.read_text())
-                        saved = data.get("cookies", data) if isinstance(data, dict) else data
-                    if saved:
-                        await self._context.add_cookies(saved)
-                        log.info("账号 %s 回注持久化 Cookie %d 条", self.account_id, len(saved))
-                    else:
-                        log.info("账号 %s 无持久化 Cookie 可回注", self.account_id)
-                except Exception as re:  # noqa: BLE001
-                    log.warning("账号 %s 回注持久化 Cookie 失败: %s", self.account_id, re)
+                self._context = await self._launch_context(pw)
                 xlog.audit(self.account_id, action="engine_start", ok=True,
                            detail=f"dir={config.home_relative(self.user_data_dir)}")
                 return self._context
@@ -237,6 +148,100 @@ class AccountEngine:
                 xlog.audit(self.account_id, action="engine_start", ok=False,
                            detail=f"启动失败: {str(e)[:200]}")
                 raise RuntimeError(f"账号 {self.account_id} 引擎启动失败: {e}") from e
+
+    async def _launch_context(self, pw):
+        """R-6.36e 拆自 context()：构建并 launch_persistent_context（含 Cookie 回注/stealth）。"""
+        os.makedirs(self.user_data_dir, exist_ok=True)
+        # 关键：launch_persistent_context（内部 stdio 管道，无 TCP 调试端口，
+        # 从机制上不触发「允许远程调试」授权流程；解密在浏览器进程内部，免钥匙串）
+        # R 批 v1.4：headless 无头化（外部零 Chrome 窗口）+ stealth 强化
+        #  - viewport 1280x800：桌面宽屏布局（小红书桌面版），登录小窗/调试镜像同尺寸
+        #  - user_agent：无头时覆盖 HeadlessChrome 特征（风控指纹）
+        #  - AutomationControlled：关掉 CDP 来源的 webdriver 标记（与 init script 双保险）
+        #  - headless=False 兜底档：风控敏感环节可临时切后台可见窗口（config.headless）
+        cfg = config.get_config()
+        headless = bool(cfg.get("headless", True))
+        # R 批 v1.5：引擎带固定 CDP 调试端口（config.engine_port()，默认 9223）供
+        # e1/t 系列 UI 测试 connect_over_cdp 连接（同一实例=同一登录态 profile）；
+        # 旧「9223 外部可见 Chrome」测试路径退役。Playwright 经 stdio 管道控制不受影响。
+        eng_port = config.engine_port()
+        # R-6.27：viewport 与窗口几何对齐——非无头（壳窗口）时页面布局宽度
+        # 必须等于窗口宽度，否则窗口（主屏半宽，如 960）显示 1280 宽的布局，
+        # 右侧内容被裁（用户反馈「尺寸没对齐」）。无头引擎保持 1280 采集布局。
+        _geo_w, _geo_h = shell_window_geometry()[:2] if not headless else (1280, 800)
+        launch_kwargs = dict(
+            channel="chrome",
+            headless=headless,
+            viewport={"width": _geo_w, "height": _geo_h},
+            args=[
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+                f"--remote-debugging-port={eng_port}",
+            ],
+        )
+        # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
+        # 实时可见采集/登录操作过程（替代「截图映射」）。
+        # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
+        # 「壳窗口内两个固定 Tab」故移除；R-6.21 用户拍板还原「双窗口」并恢复
+        # 壳窗口应用模式：窗口一=APP/登录（--app 壳窗口：无地址栏/无标签条，
+        # 标签条上的 +/×/pinned 全部不再出现；keep_shell_tab 监护固定不可关），
+        # 窗口二=采集（独立普通窗口，设置开关 collect_tab_visible 控制开/关，
+        # shell_window.open_tab2_window 以 window.open 从壳窗口弹出——app 模式
+        # 下 window.open 新 target 落到普通独立窗口，与双窗口语义一致）。
+        # 注：XHS_SHELL_URL 由 launcher 注入（供 ensure_shell/监护/--app 使用）；
+        # 未注入时（直接跑 server 调试）按 front_port 兜底拼。
+        if not headless:
+            shell_url = os.environ.get("XHS_SHELL_URL") or (
+                f"http://127.0.0.1:{config.front_port()}/"
+            )
+            # R-6.22c：launch_persistent_context 的 --app 实测不生效（窗口仍为
+            # 普通 Chrome 形态，带菜单栏/标签栏）。壳窗口应用模式改由
+            # shell_window.ensure_shell 走 --app 命令行路由（_launch_app_window）
+            # 弹出；此处保留 --window-size/--window-position 让启动初始普通窗口
+            # 也落在主屏左半（避免闪现错位，随后被 ensure_shell 关闭）。
+            # R-6.22 双窗口左右分屏：主 APP 放主屏左半、采集调试窗口右半，
+            # 等宽并排不重叠（win_w = min(1280, 主屏宽 // 2)）
+            win_w, win_h, _, _ = shell_window_geometry()
+            launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
+            launch_kwargs["args"].append("--window-position=0,0")
+        # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
+        # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
+        # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
+        # CFT 缺失时回退 channel="chrome"（系统 Google Chrome 兜底）。
+        cft = builtin_cft_candidates()
+        if cft:
+            launch_kwargs["executable_path"] = cft
+            launch_kwargs.pop("channel", None)
+        log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
+        if headless:
+            launch_kwargs["user_agent"] = _HEADLESS_UA
+        self._context = await pw.chromium.launch_persistent_context(
+            self.user_data_dir, **launch_kwargs
+        )
+        # stealth：隐藏自动化特征（webdriver 等），降低被风控识别概率
+        try:
+            await self._context.add_init_script(injections.get("stealth"))
+        except Exception as se:  # noqa: BLE001
+            log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
+        # 登录态重启保留（R-6.6）：Chrome 磁盘 Cookies 经钥匙串加密，无头环境
+        # 重启后内存为空（CDP 读不到）；以 data/cookies.json（注入时明文持久化）
+        # 为权威源，启动即回注——登录态跨重启/重打包保留，守卫可秒回 APP。
+        # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存
+        # （read_cookies 走 CDP 会话，启动期可能挂起；且启动后内存本就为空）。
+        try:
+            saved = []
+            cf = self.cookie_file
+            if cf.exists():
+                data = json.loads(cf.read_text())
+                saved = data.get("cookies", data) if isinstance(data, dict) else data
+            if saved:
+                await self._context.add_cookies(saved)
+                log.info("账号 %s 回注持久化 Cookie %d 条", self.account_id, len(saved))
+            else:
+                log.info("账号 %s 无持久化 Cookie 可回注", self.account_id)
+        except Exception as re:  # noqa: BLE001
+            log.warning("账号 %s 回注持久化 Cookie 失败: %s", self.account_id, re)
+        return self._context
 
     async def close(self):
         """优雅关闭：ctx.close() 落盘登录态（pkill -9 会丢登录态，已实证）。"""
@@ -285,25 +290,7 @@ class AccountEngine:
         # 右窗只在登录有效时用于采集调试；未登录时登录引导统一由左 APP ForceLogin
         # 承接（避免右窗直接弹出小红书平台登录层造成困惑）。任务页退回引擎内新页
         # （无独立调试窗），采集照常失败并触发前端登录引导。
-        try:
-            cs = await self.read_cookies()
-            has_ws = any(c.get("name") == "web_session" for c in cs)
-            blocked = not has_ws
-            if has_ws:  # 风控/被踢信号（与 login_status 同源文案）
-                for pg in ctx.pages:
-                    if "xiaohongshu" not in (pg.url or ""):
-                        continue
-                    try:
-                        txt = (await pg.inner_text("body")) or ""
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
-                                               "人工验证", "验证后重试", "登录超限",
-                                               "请重新登录", "登录已过期")):
-                        blocked = True
-                        break
-        except Exception:  # noqa: BLE001（判定失败保守不开窗）
-            blocked = True
+        blocked = await self._debug_window_blocked(ctx)
         if blocked:
             log.info("账号 %s 未登录/风控需验证——跳过独立采集调试窗口，任务页走引擎内新页", self.account_id)
             # R-6.22j 修复（用户实测反馈「点采集后被引入空白页/窗口消失」）：
@@ -315,36 +302,9 @@ class AccountEngine:
             p = await ctx.new_page()
             self._task_page = p
             return p
-        try:
-            from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
-
-            # 登录有效：恢复引擎调试窗口为右半屏（与布局约定一致）
-            try:
-                w2, h2, _, l2 = shell_window.shell_window_geometry()
-                cdp = await ctx.new_cdp_session(ctx.pages[0])
-                t = await cdp.send("Browser.getWindowForTarget")
-                await cdp.send("Browser.setWindowBounds",
-                               {"windowId": t["windowId"],
-                                "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
-                                           "windowState": "normal"}})
-            except Exception:  # noqa: BLE001（恢复失败不影响任务页可用性）
-                pass
-            src_page = ctx.pages[0]
-            executable = None
-            try:
-                cfts = builtin_cft_candidates()
-                if cfts:
-                    executable = cfts  # 返回值为单个路径 str（非列表），勿取 [0]
-            except Exception:  # noqa: BLE001（CFT 探测失败：走 window.open 普通窗口兜底）
-                executable = None
-            page = await shell_window.open_tab2_window(
-                ctx, src_page, url="https://www.xiaohongshu.com/explore",
-                user_data_dir=self.user_data_dir, executable=executable,
-            )
-            self._task_page = page
-            return page
-        except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
-            log.warning("独立采集窗口创建失败，退化为前台新页: %r", e)
+        p = await self._open_task_page_window(ctx)
+        if p is not None:
+            return p
         p = await ctx.new_page()
         # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
         try:
@@ -361,6 +321,61 @@ class AccountEngine:
             pass
         self._task_page = p
         return p
+
+    async def _debug_window_blocked(self, ctx) -> bool:
+        """R-6.36e 拆自 new_page()：未登录/风控需验证时不开独立采集窗（判定失败保守阻塞）。"""
+        try:
+            cs = await self.read_cookies()
+            has_ws = any(c.get("name") == "web_session" for c in cs)
+            if not has_ws:
+                return True
+            for pg in ctx.pages:
+                if "xiaohongshu" not in (pg.url or ""):
+                    continue
+                try:
+                    txt = (await pg.inner_text("body")) or ""
+                except Exception:  # noqa: BLE001
+                    continue
+                if any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
+                                           "人工验证", "验证后重试", "登录超限",
+                                           "请重新登录", "登录已过期")):
+                    return True
+            return False
+        except Exception:  # noqa: BLE001（判定失败保守不开窗）
+            return True
+
+    async def _open_task_page_window(self, ctx):
+        """R-6.36e 拆自 new_page()：登录有效时开独立采集调试窗；失败返回 None（退化由调用方处理）。"""
+        try:
+            from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
+
+            try:
+                w2, h2, _, l2 = shell_window.shell_window_geometry()
+                cdp = await ctx.new_cdp_session(ctx.pages[0])
+                t = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds",
+                               {"windowId": t["windowId"],
+                                "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
+                                           "windowState": "normal"}})
+            except Exception:  # noqa: BLE001（恢复失败不影响任务页可用性）
+                pass
+            src_page = ctx.pages[0]
+            executable = None
+            try:
+                cfts = builtin_cft_candidates()
+                if cfts:
+                    executable = cfts
+            except Exception:  # noqa: BLE001
+                executable = None
+            page = await shell_window.open_tab2_window(
+                ctx, src_page, url="https://www.xiaohongshu.com/explore",
+                user_data_dir=self.user_data_dir, executable=executable,
+            )
+            self._task_page = page
+            return page
+        except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
+            log.warning("独立采集窗口创建失败，退化为前台新页: %r", e)
+            return None
 
     async def close_page_safe(self, page):
         """任务收尾：任务 tab【保留不关闭】（浏览器内留着，供下次任务复用导航 /
@@ -392,42 +407,12 @@ class AccountEngine:
         """
         if not keep_url:
             keep_url = f"127.0.0.1:{config.front_port()}"
-        shell_pg = None
-        try:
-            from src import shell_window  # noqa: PLC0415
-
-            # R-6.30c：壳窗引用走协调器（历史 shell_window.shell_ref 是 keeper
-            # 局部变量、模块属性不存在 → AttributeError 被吞，壳窗保护从未生效）。
-            shell_pg = shell_window.current_shell_page()
-            if shell_pg is not None and shell_pg.is_closed():
-                shell_pg = None
-        except Exception:  # noqa: BLE001（引用不可用则退回 URL 匹配）
-            shell_pg = None
+        shell_pg = self._resolve_shell_protected_page()
         try:
             ctx = await self.context()
-            pages = ctx.pages
-            closed = 0
-            for p in pages:
-                u = p.url or ""
-                if p is shell_pg:
-                    continue  # 壳窗无条件保留（引用判活优先）
-                if keep_url in u or u == "about:blank":
-                    continue  # APP 页/空白页保留
-                if "xiaohongshu.com" in u:
-                    # R-6.28：小红书 tab 交给 keep_shell_tab 统一管理——explore 残留
-                    # 复用为采集窗（Tab2），登录残留由 sweep 清理；cleanup 不误关，
-                    # 避免与 Tab2 初始创建竞态（TargetClosedError，采集窗消失）。
-                    continue
-                try:
-                    await p.close()
-                    if self._task_page == p:
-                        self._task_page = None
-                    closed += 1
-                except Exception:  # noqa: BLE001
-                    continue
-            if closed or shell_pg is not None:
-                log.info("cleanup_tabs: closed=%d shell_protected=%s pages=%d",
-                         closed, shell_pg is not None, len(pages))
+            closed = await self._close_unrelated_pages(ctx, shell_pg, keep_url)
+            log.info("cleanup_tabs: closed=%d shell_protected=%s pages=%d",
+                     closed, shell_pg is not None, len(ctx.pages))
             if not ctx.pages:  # 全部清空 → 补空白页保底
                 try:
                     await ctx.new_page()
@@ -437,6 +422,38 @@ class AccountEngine:
         except Exception as exc:  # noqa: BLE001
             log.warning("账号 %s cleanup_tabs 失败（非阻断）: %s", self.account_id, exc)
             return 0
+
+    def _resolve_shell_protected_page(self):
+        """R-6.36e 拆自 cleanup_tabs()：壳窗保护引用（引用不可用返回 None，退回 URL 匹配）。"""
+        try:
+            from src import shell_window  # noqa: PLC0415
+
+            shell_pg = shell_window.current_shell_page()
+            if shell_pg is not None and shell_pg.is_closed():
+                return None
+            return shell_pg
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _close_unrelated_pages(self, ctx, shell_pg, keep_url) -> int:
+        """R-6.36e 拆自 cleanup_tabs()：遍历关闭无关 tab（壳窗/APP 页/空白/小红书 tab 保留）。"""
+        closed = 0
+        for p in ctx.pages:
+            u = p.url or ""
+            if p is shell_pg:
+                continue
+            if keep_url in u or u == "about:blank":
+                continue
+            if "xiaohongshu.com" in u:
+                continue
+            try:
+                await p.close()
+                if self._task_page == p:
+                    self._task_page = None
+                closed += 1
+            except Exception:  # noqa: BLE001
+                continue
+        return closed
 
     async def collapse_debug_windows(self) -> int:
         """R-6.22g：登录引导时收起采集调试窗——关闭非壳窗口页面，壳窗（APP/登录页）保留。

@@ -1,16 +1,25 @@
 # Quality Gates — codex-zhuke 质量关卡（commit/merge 阈值声明）
 # 模板出处：clean-code-gauntlet skill templates/project/quality-gates/gates.yaml
 # 本文件只声明"查什么+阈值"；工具命令见 tools/python.yaml。
+# R-6.36e 用户拍板：核心模块集收窄为 server/engine_pool/collect_pipeline；
+# 覆盖率阈值按可达值定，未达标项登记豁免理由（不放松 CC/CRAP 逐函数硬门槛）。
 
 维度:
   复杂度_CRAP:
     when: commit
-    圈复杂度: { 阈值: "≤8", 说明: "Bob 对 Agent 放宽阈值；人类标准 ≤4" }
+    圈复杂度: { 阈值: "≤8", 说明: "逐函数硬门槛，不因核心集调整放松；人类标准 ≤4" }
     CRAP分:  { 阈值: "<30", 说明: "≥30 高风险：重构或补测试" }
   覆盖率:
     when: commit
     行覆盖:
-      核心模块: { 阈值: "≥80%", 模块: [server, engine_pool, browser_client, collect_pipeline, shell_window, mirror] }
+      核心模块:
+        模块: [server, engine_pool, collect_pipeline]
+        阈值: "server ≥80%；engine_pool/collect_pipeline 按测试线实测可达值登记"
+      非核心登记:
+        模块: [shell_window, mirror, browser_client]
+        阈值: "不回归 2026-11-03 基线（shell_window 7% / mirror 15% / browser_client 24%）"
+        豁免理由: "重度 GUI/Playwright 运行时依赖，单测不可达；由 scripts/ui_tests 套件
+          在真实浏览器上守护行为（G1-G7 门），此处豁免仅登记不回归基线"
       其余模块: { 阈值: "≥60%", 说明: "config/logger/score/risk/license/injections/intent/jsonio/llm_service" }
   变异测试:
     when: merge
@@ -18,7 +27,7 @@
   架构依赖:
     when: merge
     依赖违规: { 阈值: "=0", 说明: "契约见 backend/pyproject.toml [tool.importlinter]" }
-    循环依赖: { 阈值: "=0", 说明: "engine_pool↔browser_client/shell_window 现存 lazy-import 环为基线已知项" }
+    循环依赖: { 阈值: "=0", 说明: "engine_pool↔shell_window 函数级懒导入为现状" }
 
 可选维度:
   DRY重复代码:

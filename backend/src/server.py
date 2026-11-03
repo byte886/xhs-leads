@@ -250,6 +250,27 @@ _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半
 _LOGIN_INVALID = False
 
 
+async def _scan_xhs_pages_for_signals(ctx):
+    """R-6.36e 拆自 _engine_login_state：扫描所有小红书页（body 拼接 + 首个匹配页 + 登录重定向信号）。"""
+    if ctx is None:
+        return None, "", False
+    bodies: list[str] = []
+    page = None
+    login_redirect = False
+    for p in ctx.pages:
+        if not p.is_closed() and "xiaohongshu" in (p.url or ""):
+            if page is None:
+                page = p
+            try:
+                txt = (await p.inner_text("body")) or ""
+            except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
+                txt = ""
+            bodies.append(txt)
+            if "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login"):
+                login_redirect = True
+    return page, "\n".join(bodies), login_redirect
+
+
 async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
     """引擎真实登录态（R 批 v1.5；R-6.6 判定升级；R-6.8 被踢检测统一；
     R-6.22e 风控需人工验证信号）：返回 (web_session 存在?, 页面登录判定?, 被踢信号?, 风控需人工验证?)。
@@ -288,28 +309,7 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
         ctx = await eng.context()
     except Exception:  # noqa: BLE001（测试环境/引擎未就绪：无 context 不判被踢）
         ctx = None
-    # R-6.22f：合并**所有**小红书页 body 判定信号（explore 调试窗与任务页可能并存，
-    # 只读第一个匹配页会在多页场景漏读风控/被踢文案）。page 保留首个匹配页供
-    # 后续 xhsIsLoggedIn 注入判定；body 取全部页面文本拼接。
-    bodies: list[str] = []
-    page = None
-    login_redirect = False
-    if ctx is not None:
-        for p in ctx.pages:
-            if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-                if page is None:
-                    page = p
-                try:
-                    txt = (await p.inner_text("body")) or ""
-                except Exception:  # noqa: BLE001（页面未就绪 → 跳过该页，不误判）
-                    txt = ""
-                bodies.append(txt)
-                # R-6.26：页面 URL 被平台重定向到登录页 → 会话失效的权威信号。
-                # 静默过期时平台不渲染「登录超限」等文本（kicked 文本检测漏掉），
-                # 只把 explore 等页面 302 到 /login——id_token 残留分支据此不再误判已登录。
-                if "/login" in (p.url or "") or p.url.rstrip("/").endswith(".xiaohongshu.com/login"):
-                    login_redirect = True
-    body = "\n".join(bodies)
+    page, body, login_redirect = await _scan_xhs_pages_for_signals(ctx)
     kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body) or login_redirect
     # R-6.22e：风控需人工验证信号（与 risk_manual 审计文案同源）。cookie 与页面登录
     # 标记都在但会话被平台风控拦截（「登录后查看」「需人工扫码/验证后重试」）——登录
@@ -334,6 +334,29 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
             except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
                 page_logged_in = False
     return has_ws, page_logged_in, kicked, risk_verify
+
+
+def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> dict:
+    """R-6.36e 拆自 login_status：判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
+    global _LOGIN_INVALID
+    logged_in = has_ws and page_logged_in and not kicked
+    if kicked or risk_verify:
+        _LOGIN_INVALID = True
+    final_logged_in = logged_in and not _LOGIN_INVALID
+    result = {
+        "status": "kicked" if kicked else ("logged_in" if final_logged_in else "not_logged_in"),
+        "logged_in": final_logged_in,
+        "kicked": kicked,
+        "risk_verify": risk_verify,
+        "nickname": "",
+        "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'} 风控需验证={'是' if risk_verify else '否'} 失效记忆={'是' if _LOGIN_INVALID else '否'}",
+    }
+    if final_logged_in and not kicked:
+        try:
+            risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
+        except Exception:  # noqa: BLE001
+            pass
+    return result
 
 
 @app.get("/api/login_status")
@@ -368,34 +391,7 @@ async def login_status():
 
         eng = await engine_pool.pool.get("default")
         has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
-        # R-6.8：被踢（平台登录超限/请重新登录，cookie 残留假阳性）→ 一律视为未登录
-        logged_in = has_ws and page_logged_in and not kicked
-        # R-6.26 失效记忆置位：任一失效信号（被踢/风控需验证；login_redirect 已并入 kicked）
-        # → 记住失效事实，解除只发生在用户真正重新登录成功（import_cookies 验证通过）。
-        # 防「explore 收起后 id_token 残留 → 判定假阳性 logged_in → 文案误显示已登录」。
-        if kicked or risk_verify:
-            _LOGIN_INVALID = True
-        final_logged_in = logged_in and not _LOGIN_INVALID
-        result = {
-            "status": "kicked" if kicked else ("logged_in" if final_logged_in else "not_logged_in"),
-            "logged_in": final_logged_in,
-            "kicked": kicked,
-            # R-6.22e：风控拦截需人工扫码/验证（cookie 在但会话被平台拦）——登录引导
-            # 不得据此自动关闭（前端 ForceLogin 据此保持打开引导扫码）。
-            "risk_verify": risk_verify,
-            "nickname": "",
-            "raw": f"engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'} 风控需验证={'是' if risk_verify else '否'} 失效记忆={'是' if _LOGIN_INVALID else '否'}",
-        }
-        # 登录恢复闭环：引擎真实登录态有效 → 自动解除该账号软风控
-        if final_logged_in and not kicked:
-            try:
-                risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
-            except Exception:  # noqa: BLE001
-                pass
-        # R-6.22f：**异常信号不缓存**——被踢/风控需验证是实时状态，登录引导（ForceLogin）
-        # 每秒复查必须立即感知，命中 15s 缓存内「风控前」旧判定会误显示「当前已登录」
-        # （实测：采集风控后 ForceLogin 复查命中缓存显示已登录，文案与行为不符）。
-        # 仅正常状态（有效登录/未登录）走 15s 缓存兜底轮询频率。
+        result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
         if not kicked and not risk_verify:
             _LOGIN_CACHE["t"] = now
             _LOGIN_CACHE["data"] = result
