@@ -33,7 +33,7 @@
 | FR-20 | 评分体系 | 评分徽标 / 悬浮 tip / 说明弹窗（维度明细） |
 | FR-21 | 卡片标签 | 结论标签（tagConclusion） |
 | FR-22 | 打开原作品 | 跳转 explore 原链接 |
-| FR-23 | dedup 防重 | 重复笔记提示（60s 任务防重 + 库内去重展示） |
+| FR-23 | dedup 防重 | **任务层无 60s 防重**（同关键词立即重采放行，R-6.22h 拍板移除）；**库内 feed_id 去重保留**（重复笔记不二次落库） |
 | FR-24 | 数据导出 | JSON / CSV 导出 |
 
 ### M4 创作页（PublishPage）
@@ -102,13 +102,13 @@
 | CDP 配置区 | CollectPanel/CDP | e1_s5（CDP 就绪） | ✅ |
 | 保存并验证 CDP | doSaveCdpConfig | 无（对话框型） | ❌ |
 | Cookie 导入 | showImport/doImportCookie | 无 | ❌ |
-| Cookie 状态展示 | CollectPanel 登录条 | e1_s6 | ✅ |
+| Cookie 状态展示 | CollectPanel 登录条 | smoke_login_ui（login_status API） | ✅ |
 | 评分徽标 | score-badge | t06 | ✅ |
 | 悬浮 tip | score-tip | t06 | ✅ |
 | 评分弹窗 | scoreModal | t06 | ✅ |
 | 卡片结论标签 | tagConclusion | 无 | ❌ |
 | 打开原作品 | CardGrid/CardMenu | ◐（跳转路径被 s4/s2 间接覆盖） | ◐ |
-| dedup 防重 | 采集任务层 | t07 | ✅ |
+| dedup 防重 | 库内 feed_id 去重（任务层 60s 防重已 R-6.22h 移除） | 人工实测 SOP TS5；草稿图片 URL 去重 = t07 | ◐ |
 | 一键克隆 | CardMenu → PublishPage | e1_s2（标题填充/图片补全） | ✅ |
 | 标题/正文/标签编辑 | pub-field | e1_s2（标题）；正文/标签手编 | ◐ |
 | 图片追加 | triggerAdd | e1_s3 | ✅ |

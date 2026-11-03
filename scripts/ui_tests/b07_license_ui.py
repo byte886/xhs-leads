@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""b07 授权 UI 补测：free 状态条 + activation 激活流程（连 9333 headless）。
+"""b07 授权 UI 补测：free 状态条 + activation 激活流程（连引擎调试端口 9223）。
 
 覆盖清单用例：F5 授权状态条(free) / F6 激活流程 / F7 激活错误码 / G1 license_status / G2 license_activate。
 前置：8791 free 实例 + 8792 activation 实例均运行；/tmp/b07_code.txt 含 30 天激活码。

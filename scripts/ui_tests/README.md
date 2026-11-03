@@ -40,7 +40,24 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 | e1-s3 | e1_s3_qc_images.py | **真实态质检+图片+草稿**：质检四项、违规词命中、lightbox 看全图、删/追加图、草稿保存/恢复 | 引擎 9223 + 已登录 + 图文卡（草稿数会变） |
 | e1-s4 | e1_s4_clients.py | **真实采集客户**：hover 图文卡→采集客户→互动用户落库→自动切客户 tab | 引擎 9223 + 已登录 + 图文卡（低频，风控窗口内） |
 | e1-s5 | e1_s5_settings.py | **真实态设置三卡**：AI Key 保存/掩码/灰态解除、CDP 区、人设 toast、清除配置复原 | 引擎 9223（会临时写入/清除测试 Key） |
-| e1-s6 | e1_s6_login.py | **登录态闭环**：清 cookie→未登录弹窗→登录小窗镜像→恢复→已登录（自带备份恢复，会重启后端） | 引擎 9223 + 登录小窗（扫码/手机号人工操作属预期） |
+| e1-s6 | ~~e1_s6_login.py~~ | ~~登录态闭环~~ ⛔ **已退役**（2026-11-03）：断言的「立即读取 Chrome 登录态」按钮/旧重启路径已被 R-6.22~6.29 登录闭环取代；现行覆盖见 smoke_login_ui / b08 / e2_wall_popup / startup_unlogged_verify | 留档勿跑 |
+
+## 登录与窗口治理专项（2026-11-03 对齐现行基线）
+
+| 编号 | 文件 | 验证内容 | 进 run_all | 数据/前置依赖 |
+|---|---|---|---|---|
+| 布局 | layout_verify.py | **已登录**双窗分屏：左壳窗(8791)/右采集窗(xiaohongshu)、应用模式、960 等宽并排不重叠；关 Tab2=仅关不复活/不退出（R-6.22p 语义） | ✅ 首跑 | dev 实例在跑（API 8791+CDP 9223）；**需已登录态**（未登录 Tab2=/login-hint 会判右窗缺失） |
+| 启动 | startup_unlogged_verify.py | **未登录启动时序+窗口震荡**（G1+G3）：页面集恰 2 页={/, /login-hint}、无 explore 判定页/空白/第三窗；15s 逐轮页面集恒定=无震荡 | ❌（只读专项，人工触发） | dev 实例在跑；只读，不杀进程/不改登录态 |
+| 登录 | smoke_login_ui.py | 未登录 ForceLogin 弹窗冒烟（空数据目录启动→login_status=未登录→弹窗截图）；游客 cookie→cookie_info 字段 | ❌（需打包产物+人工看图） | dist/XHSLeads.app 已重打包；隔离数据目录 /tmp/xhsleads_smoke |
+| 登录 | b08_login_overlay.py | 扫码登录全链（R-6.9）：清会话→重启→断言 not_logged_in→人工扫码闸口(8min)→断言 logged_in+注入完成 | ❌（人工扫码闸口） | dist/XHSLeads.app；备份 cookies/profile Cookies |
+| 墙弹 | e2_wall_popup.py | 真实采集遇登录墙→后端 note 命中→前端 .force-mask 弹框（R-6.21e/f/g） | ❌（真实采集低频） | 引擎 9223；关键词「南红玛瑙手串」 |
+| b01 | b01_batch_cards.py | 卡片批量：全选图文/清空/单选/下载图片包/导出 JSON/CSV | ❌（人工补测） | notes 表有数据（无数据自动 SKIP=exit 2） |
+| b02 | b02_stop_collect.py | 采集中再点停止→收尾回落空闲 | ❌ | 引擎已登录；低频真实采集 |
+| b03 | b03_draft_img.py | 正文/标签编辑+图片拖拽排序+删草稿 | ❌ | 已登录+图文卡 |
+| b04 | b04_cookie_import.py | Cookie 导入三分支（空/无效/有效） | ❌ | cookies.json 现役 |
+| b05 | b05_misc_cards.py | 结论标签/打开原作品/复制链接 | ❌ | 已评分卡片 |
+| b06 | b06_clients_export.py | 导出线索 CSV | ❌ | clients 表有数据 |
+| b07 | b07_license_ui.py | free 状态条+activation 激活 | ❌ | 8791 free + 8792 activation 双实例 + /tmp/b07_code.txt 激活码 |
 
 ## E1 真实链路系列（连引擎调试端口 9223）
 
@@ -52,7 +69,7 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 ## 说明
 
 - 脚本统一连接引擎调试端口（`--remote-debugging-port=9223`，R 批 v1.5 起引擎自带；旧外部 headless 9333/可见 9223 路径退役），run_all.sh 负责就绪检查与拉起（经 /api/mirror/open 触发引擎），脚本自身不启动/杀 Chrome
-- SKIP 语义：依赖测试数据的脚本（评分/去重/客户/发布日志）在无数据时以退出码 2 报告 SKIP，不误报回归失败；`run_all.sh` 统计时 SKIP 不计入失败
+- SKIP 语义：依赖测试数据的脚本（评分/草稿去重/发布日志/客户聚合/客户列表/客户指引/卡片批量 b01）在无数据时以退出码 2 报告 SKIP，不误报回归失败；`run_all.sh` 统计时 SKIP 不计入失败（基线：t06-t11 共 6 个 SKIP 门控脚本，t01-t05 无数据依赖）
 - DB 路径均用 `Path(__file__).resolve().parents[2] / 'data' / 'xhs_notes.db'` 可移植写法（scripts/ui_tests/ 向上 2 级到仓库根），无 `/Users/<用户名>` 硬编码
 
 ## 关键方法论（血泪教训，改脚本必读）

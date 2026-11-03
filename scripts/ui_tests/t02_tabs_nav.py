@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v1.5 4-Tab 工作流 UI 自动化验证（CDP 9333 + ?stage=pick）"""
+"""v1.5 4-Tab 工作流 UI 自动化验证（CDP 9223 + ?stage=pick）"""
 from playwright.sync_api import sync_playwright
 
 res = []

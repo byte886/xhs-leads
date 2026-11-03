@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""b04 Cookie 导入补测（连 9333 headless）。
+"""b04 Cookie 导入补测（连引擎调试端口 9223）。
 
 覆盖清单用例：B8 Cookie 导入成功/失败分支。
 - 空输入 → toast「请先粘贴 Cookie 文本」
 - 无效文本 → toast「Cookie 无效或已过期」（校验失败引导扫码）
 - 有效文本（取 data/cookies.json 现役 Cookie 构造 name=value 串）→ 校验通过 → toast「Cookie 有效」
-前置：8791；9333 headless；引擎登录态在 data/cookies.json（已由 refresh_cookie 落盘）。
+前置：8791；引擎 9223；引擎登录态在 data/cookies.json（已由 refresh_cookie 落盘）。
 """
 import os, json, urllib.request
 from pathlib import Path

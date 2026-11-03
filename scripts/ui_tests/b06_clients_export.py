@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""b06 客户导出线索 CSV 补测（连 9333 headless）。
+"""b06 客户导出线索 CSV 补测（连引擎调试端口 9223）。
 
 覆盖清单用例：E7 导出线索 CSV。
-前置：8791；9333 headless；clients 表有数据（e1_s4 真实采集 10 条）。
+前置：8791；引擎 9223；clients 表有数据（e1_s4 真实采集 10 条）。
 """
 from playwright.sync_api import sync_playwright
 

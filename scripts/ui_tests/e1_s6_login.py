@@ -1,5 +1,18 @@
 # -*- coding: utf-8 -*-
-"""E1-场景6 登录态与 Cookie 闭环（连 9333 headless）。
+"""[⛔ 已退役 2026-11-03] 本脚本不再适用现行登录闭环，仅留档勿跑。
+
+退役原因（R-6.22~6.29 登录闭环取代）：
+  1. 断言的「立即读取 Chrome 登录态」按钮 = cookie_reader 读系统 Chrome 旧链路，
+     现行前端 ForceLogin.vue 已无此按钮（全仓库源码 grep「立即读取」0 命中）；
+  2. restart_backend() 引用 app/.venv + --app-dir app/src（仓库现结构 backend/src）、
+     pgrep 旧 profile 目录 ~/.xhs-leads-profile（R 批 v1.4 已归一为数据目录内 profile）；
+  3. 登录判定/弹窗形态已整体改为 ForceLogin 对话框 + 壳窗导航官方登录页 + 守卫捕 id_token。
+现行登录闭环覆盖：未登录启动弹窗=smoke_login_ui；扫码全链=b08_login_overlay；
+采集遇墙弹框=e2_wall_popup；未登录 2 页基线=startup_unlogged_verify。
+（审计缺口 G4 的重写版见后续 commit；本文件不删除，作旧链路留档。）
+
+原 docstring（留档）：
+E1-场景6 登录态与 Cookie 闭环（连 9333 headless）。
 
 验证：清本地 cookies.json → 刷新 → 「未登录/Cookie 失效」状态 + LoginModal 引导（Profile 提示/打开小红书链接/
 「立即读取 Chrome 登录态」按钮）→ 点立即读取（读日常 Chrome，未登录则失败走扫码引导）→ 恢复 cookies.json →

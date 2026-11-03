@@ -15,10 +15,10 @@
 |---|---|---|---|
 | A1 | 启动进入 → 点 4 个 Tab | 采集/创作/客户/设置均切换 + 提示文案 | ✅ t02/t03 |
 | A2 | 查看顶部状态条 | 登录态/CDP/AI Key 三态展示 | ✅ t03 |
-| A3 | 刷新页面 | 自动检测登录态并反映 | ✅ e1_s6 |
-| A4 | 未登录 → 点「立即读取」 | 登录弹窗出现 | ✅ e1_s6 |
-| A5 | 弹窗点「打开小红书登录页」 | 新窗口打开 xiaohongshu.com | ✅ e1_s6 |
-| A6 | 登录后点「自动读取/重试」 | 弹窗关闭 + 状态条「已登录」 | ✅ e1_s6 |
+| A3 | 任意页轮询 login_status | 未登录/被踢 → ForceLogin 自动弹；已登录 → 不弹 | ✅ smoke_login_ui / e2_wall_popup |
+| A4 | 未登录启动 → ForceLogin 对话框 | force-mask 出现：标题「需要登录小红书」+ 主按钮「去登录」；**无「立即读取」按钮**（cookie_reader 读系统 Chrome 链路已退役） | ✅ smoke_login_ui（场景 A 截图 + login_status 断言） |
+| A5 | 弹窗点「去登录」 | 壳窗**本身**导航 xiaohongshu.com/login 官方登录页（R-6.22g：非新开窗，同时收起右调试窗；登录页无关闭叉） | 🔶 b08 人工扫码闸口覆盖 |
+| A6 | 扫码登录成功 → 回 APP | 壳窗回 8791、ForceLogin 按 wentLogin && logged_in && !risk_verify 自动关闭、状态条「已登录」 | ✅ b08（login_status 四态断言） |
 | A7 | 任意操作（保存/清除等） | toast 提示出现 | ✅ e1_s5 等 |
 | A8 | 卡片右键菜单三项 | 一键克隆 / 一键采集客户 / 打开原作品入口存在 | ✅ e1_s2/s4 + b05 |
 
@@ -32,9 +32,9 @@
 | B4 | 采集中再点「停止采集」 | 请求停止 → task 收尾（非 force kill） | ✅ b02 |
 | B5 | 点筛选行排序/时间 | 已选筛选行回显 + 参数传递 | ✅ e1_s1 |
 | B6 | CDP 区：路径/Profile/端口/重启/验证 | 配置展示 + 验证结果状态 | ✅ e1_s5 |
-| B7 | 登录状态条 | 已登录（昵称）/ 未登录提示 | ✅ e1_s6 |
+| B7 | 登录状态条 | 已登录（昵称）/ 未登录提示 | ✅ smoke_login_ui（login_status API） |
 | B8 | 点「导入 Cookie」→ 粘贴 → 导入 | 解析注入 + 校验结果展示 | ✅ b04 |
-| B9 | 60s 内重复发起采集 | dedup_key 拦截提示 | ✅ t07 |
+| B9 | 同关键词立即重采 | **任务层无 60s 防重**（R-6.22h 拍板移除同词 60s 拦截，同词/换词连点均 200，dedup_key 仅留审计展示）；**库内 feed_id 去重保留**（已采集笔记不二次落库） | 🔶 人工实测（SOP TS5 PASS，未脚本化；草稿图片 URL 去重由 t07 覆盖） |
 
 ## 三、卡片区（C 组）
 
@@ -108,8 +108,8 @@
 ## 八、覆盖统计（当前）
 
 - 总用例：**51**（A8 + B9 + C10 + D17 + E7 + F7 + G3）
-- ✅ 已有脚本：**49**（t01-t11、e1 系列、b01-b07 全覆盖）
-- 🔶 待补测：**0**
+- ✅ 已有脚本：**48**（t01-t11、e1_s1-s5、b01-b08、e2_wall_popup、smoke_login_ui、layout_verify、startup_unlogged_verify）；e1_s6 已退役（见 §十）
+- 🔶 待补测：**1**（B9 同词重采 = 200 脚本化）
 - ⛔ 留白：**2**（D9 AI 真实生成 / D15 真实发布）
 
 ## 九、待补测脚本规划（b 系列）
@@ -125,3 +125,9 @@
 | b07_license_ui.py | F5-F7/G1-G2 | 授权状态条 + 激活流程（free/activation 两实例） | ✅ PASS |
 
 b 系列已全部 PASS（b01-b07）。后续可并入 run_all 回归基线。
+
+## 十、登录链路脚本退役与现行口径（2026-11-03 对齐）
+
+| 脚本 | 状态 | 说明 |
+|---|---|---|
+| e1_s6_login.py | ⛔ **已退役** | 断言的「立即读取 Chrome 登录态」按钮属 cookie_reader 读系统 Chrome 旧链路，R 批登录态归一引擎独立 profile 后该按钮已不存在；restart 路径（app/.venv/app/src）与 profile 路径（~/.xhs-leads-profile）均已过时。登录闭环现行口径 = ForceLogin 对话框（A3-A6），由 smoke_login_ui（未登录弹窗）、b08（扫码全链）、e2_wall_popup（采集遇墙弹框）、startup_unlogged_verify（未登录 2 页基线）覆盖 |

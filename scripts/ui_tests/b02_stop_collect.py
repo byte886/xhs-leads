@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""b02 停止采集补测（连 9333 headless）。
+"""b02 停止采集补测（连引擎调试端口 9223）。
 
 覆盖清单用例：B4 采集中再点「停止采集」→ 请求停止 → 任务收尾（非 force kill）。
 低频铁律：关键词用「南红玛瑙手串」，limit 小、interval 大，采集中手动停止，不连环重试。
-前置：8791 已启动；9333 headless 已启动且已登录。
+前置：8791 已启动；引擎 9223 已启动且已登录。
 """
 from playwright.sync_api import sync_playwright
 

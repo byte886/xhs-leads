@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""b01 卡片批量操作补测（连 9333 headless）。
+"""b01 卡片批量操作补测（连引擎调试端口 9223）。
 
 覆盖清单用例：C5 全选图文 / C6 清空选择 / C7 单选 / C8 下载图片包 / C9 导出 JSON / C10 导出 CSV。
-前置：8791 已启动（free 模式）；9333 headless 已启动；notes 表有数据（采集页有卡片）。
+前置：8791 已启动（free 模式）；引擎 9223 已启动；notes 表有数据（采集页有卡片；无数据自动 SKIP=exit 2）。
 """
 from playwright.sync_api import sync_playwright
 
