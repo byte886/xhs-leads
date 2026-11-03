@@ -1,0 +1,27 @@
+# 工具映射表 — TypeScript（codex-zhuke 2026-11-03 落地）
+# 运行约定：frontend/ 目录下执行 npm run coverage（vitest + v8 LCOV）。
+# crapper TS 映射按本文件 coverage_cmd 跑 LCOV 产物。
+
+language: typescript
+
+crap_tool: crapper
+crap_cmd: <GAUNTLET_DIR>/tooling/vendor/crapper/crapper -s frontend/src --no-coverage
+
+mutation_tool: mutator
+mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator -s frontend/src
+
+coverage_tool: vitest
+coverage_install: frontend 已装 vitest@2 + @vitest/coverage-v8 + jsdom
+coverage_cmd: cd frontend && npm run coverage
+
+architecture_tool: dependency-cruiser
+architecture_install: （未启用，待组件测试基建落地后再配 .cjs 配置防 ESM 假 PASS）
+architecture_config: dependency-cruiser.config.cjs  # 待建
+architecture_cmd: npx dependency-cruiser --config dependency-cruiser.config.cjs src
+
+dry_tool: dryer
+dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn frontend/src
+
+# 基线（R-6.36d）：TS 逻辑层（api.ts/store.ts/lib/auth.ts）语句覆盖 80.6%、分支 93.5%；
+# .vue 组件（2893 行）尚未挂载测试，v8 配置排除组件不计入阈值目标，
+# 组件测试（@vue/test-utils）为后续轮事项。
