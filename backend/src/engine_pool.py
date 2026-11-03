@@ -396,7 +396,9 @@ class AccountEngine:
         try:
             from src import shell_window  # noqa: PLC0415
 
-            shell_pg = shell_window.shell_ref[0] if shell_window.shell_ref else None
+            # R-6.30c：壳窗引用走协调器（历史 shell_window.shell_ref 是 keeper
+            # 局部变量、模块属性不存在 → AttributeError 被吞，壳窗保护从未生效）。
+            shell_pg = shell_window.current_shell_page()
             if shell_pg is not None and shell_pg.is_closed():
                 shell_pg = None
         except Exception:  # noqa: BLE001（引用不可用则退回 URL 匹配）
