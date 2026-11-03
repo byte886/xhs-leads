@@ -212,8 +212,16 @@
 
 ## 十、调研溯源（关键来源）
 
-> 完整链接清单（12 个生财 + 12 个外部，含每个结论的原文出处）统一维护在 **`docs/research/step4-deepdive-补充报告.md` §四/§六**，本处只保留核心出处，避免重复维护。
+> 立项调研（原 `docs/research/` step1-7 + workbuddy 帧图）已于 R-6.34j 收敛入本 PRD，整目录删除；链接级原文出处随目录删除，下列为仍影响当前需求的结论摘要。视频 OCR 转写文本由 `docs/ocr_result.md` 保留。
 
-- 视频拆解：需求文档 v0.2（OCR/关键帧）
-- 生财核心帖：乔川全自动获客工作流 https://scys.com/articleDetail/xq_topic/55188128214188214 / 大周·推舟AI https://scys.com/articleDetail/xq_topic/14588582154552442 / 亦仁超级标20 https://scys.com/articleDetail/xq_topic/82258281182815242 / 航海《小红书AI提效工作流》activityId=9631 / AI 亦仁会话 20261025120609IREoUrx
-- 外部核心：MediaClaw https://mediaclaw.app/en/features/codex-integration / 玫瑰克隆 https://www.dcxh7.com/ / GitHub 开源清单见 step3-external-findings.md
+### 10.1 立项调研结论摘要（影响现行产品约束/逻辑）
+
+- **风控边界（只读侧）**：采集/评论读取属只读侧，限流约 ~5 req/min；触发验证码退避 24h；发布侧 3h 冷却、每日 ≤2 条、24h 防重。→ 现行实现：请求间隔 1.0-1.8s 拟人抖动、触发验证即停。
+- **养号/自动互动**：养号=正常使用+权重帖；自动点赞/评论/收藏为平台 2026-03 公告打击对象，故养号功能（F1）缓行、仅测试号谨慎档。
+- **评论区意向识别（采集客户逻辑依据）**：参考 MediaClaw 三层筛选+确认发送、Apify buyer intent、生财高意向筛选/需求聚类经验——现行 `intent.py` 高/上/中/低词表 + 留联系方式变体即由此落地；私信只做线索+风险提示，不做话术。
+- **竞品量级**：低粉爆文采集/获客工具典型单任务处理 200-500 条；本产品 MVP 上限 50 条/次。
+- **AI 文稿范式**：OpenAI 兼容 chat/completions 为事实标准；Key/BaseURL/Model Web 配置+测试连接、未配 Key 灰态门控（现行 SettingsPanel 即此范式）。
+
+- 视频拆解：需求文档 v0.2（OCR/关键帧，OCR 文本见 `docs/ocr_result.md`）
+- 生财核心帖：乔川全自动获客工作流 https://scys.com/articleDetail/xq_topic/55188128214188214 / 大周·推舟AI https://scys.com/articleDetail/xq_topic/14588582154552442 / 亦仁超级标20 https://scys.com/articleDetail/xq_topic/82258281182815242 / 航海《小红书AI提效工作流》activityId=9631
+- 外部核心：MediaClaw https://mediaclaw.app/en/features/codex-integration / 玫瑰克隆 https://www.dcxh7.com/
