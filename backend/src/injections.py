@@ -103,12 +103,14 @@ _register(
 )
 
 # ---- 3. 采集调试窗口标题守护（page 级 init script + 当前文档补注） ----
-_COLLECT_DEBUG_TITLE_JS = """() => {
+# R-6.48h：改为自执行 IIFE——add_init_script 对字符串按源码 eval（`() => {...}`
+# 只定义不调用，跨文档导航后守护失效，主窗口登录页 title 裸奔即此根因）。
+_COLLECT_DEBUG_TITLE_JS = """(() => {
     const T = 'XHS Leads · 采集调试窗口';
     const setT = () => { if (document.title !== T) document.title = T; };
     setT();
     setInterval(setT, 2000);
-}"""
+})()"""
 _register(
     "collect_debug_title",
     _COLLECT_DEBUG_TITLE_JS,
@@ -116,6 +118,24 @@ _register(
     note="每次 evaluate 都会新建一个 setInterval（JS 内部无防重），故由"
          "_ensure_debug_title 以 Python 侧 page._debug_title_installed 标志防重——"
          "不走 inject_once 的 window 标记。page.add_init_script + 当前文档立即 evaluate。",
+)
+
+# ---- 3b. 壳窗口标题守护（page 级 init script）：主窗口无论 APP 页还是小红书登录页，
+# 窗口标题恒定品牌名（用户 R-6.48h 拍板：主窗口标题统一一致，不随页面状态变化）。
+# 自执行 IIFE（原因同上：add_init_script 对字符串按源码 eval）。----
+_SHELL_TITLE_JS = """(() => {
+    const T = 'XHS Leads · 小红书获客助手';
+    const setT = () => { if (document.title !== T) document.title = T; };
+    setT();
+    setInterval(setT, 2000);
+})()"""
+_register(
+    "shell_title",
+    _SHELL_TITLE_JS,
+    kind="page_init",
+    note="与 collect_debug_title 同法：page.add_init_script + 当前文档立即 evaluate，"
+         "Python 侧 page._shell_title_installed 标志防重。init script 对后续导航"
+         "（含守卫导航到小红书登录页）自动生效。",
 )
 
 # ---- 4. 登录成功过渡遮罩（id_token 出现时注入） ----

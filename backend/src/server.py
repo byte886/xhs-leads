@@ -451,6 +451,13 @@ _LOGIN_HINT_HTML = """<!doctype html>
   h1 { font-size:17px; font-weight:600; color:#1d1d1f; margin-bottom:12px; }
   .desc { font-size:13.5px; line-height:1.75; color:#666; margin-bottom:8px; }
   .foot { font-size:12px; color:#9b9b9f; margin-top:20px; }
+  .btn {
+    display:inline-block; margin-top:16px; padding:9px 26px; border:0; border-radius:8px;
+    background:#ff2442; color:#fff; font-size:14px; font-weight:600; cursor:pointer;
+    transition:opacity .15s;
+  }
+  .btn:hover { opacity:.88; }
+  .btn:disabled { opacity:.5; cursor:default; }
 </style>
 </head>
 <body>
@@ -462,8 +469,28 @@ _LOGIN_HINT_HTML = """<!doctype html>
     </span>
     <h1>尚未登录小红书</h1>
     <p class="desc">登录后才能开始采集。请在左侧 APP 窗口点击「去登录」，<br>扫码或手机号登录均可。</p>
+    <button class="btn" id="go-login" type="button">去登录</button>
     <p class="foot">登录成功后，本窗口将自动进入采集页</p>
   </div>
+<script>
+  // R-6.48h：调试窗口可操作——「去登录」直接触发强制登录引导（左侧 APP 窗口
+  // 导航到小红书登录页），不再要求用户必须先去左侧窗口点按钮。
+  document.getElementById('go-login').addEventListener('click', async function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = '已打开登录窗口，请扫码…';
+    try {
+      await fetch('/api/auth/login_begin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true })
+      });
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = '去登录';
+    }
+  });
+</script>
 </body>
 </html>"""
 

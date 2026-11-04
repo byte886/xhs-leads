@@ -103,6 +103,28 @@ async def open_tab2_window(
     return page
 
 
+async def _ensure_shell_title(page) -> None:
+    """壳窗口（主窗口）标题守护：无论 APP 页还是守卫导航的小红书登录页，
+    Chrome 窗口标题恒定「XHS Leads · 小红书获客助手」（用户 R-6.48h 拍板：
+    主窗口标题统一一致，不随页面状态变化）。与 _ensure_debug_title 同法：
+    page 级 add_init_script（对后续导航自动生效）+ 当前文档立即生效；
+    Python 侧 _shell_title_installed 标志防重，幂等可反复调用。
+    """
+    _title_js = injections.get("shell_title")
+    if getattr(page, "_shell_title_installed", False):
+        try:
+            await page.evaluate(_title_js)
+        except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
+            pass
+        return
+    try:
+        await page.add_init_script(_title_js)
+        await page.evaluate(_title_js)
+        page._shell_title_installed = True
+    except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
+        pass
+
+
 async def _ensure_debug_title(page) -> None:
     """采集调试窗口标题守护：Chrome 窗口标题跟随 document.title。采集页为真实
     小红书页（SPA 路由/整页导航都会重设 title），用轻量 setInterval 覆盖为
@@ -506,6 +528,7 @@ async def ensure_shell(base_url: str):
         await page.bring_to_front()
     except Exception:  # noqa: BLE001
         pass
+    await _ensure_shell_title(page)
     return ShellWindow(page, base)
 
 
@@ -640,6 +663,41 @@ async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
     return None
 
 
+def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
+    """R-6.48h 强制登录导航拦截：主窗口主 frame 一旦离开 /login（小红书域内
+    乱点/外链跳转），事件级立即拉回登录页——替代纯轮询（0.3s 间隙内白屏/
+    乱跳窗口期，用户实测「点两下变空白」根因）。返回移除函数。
+
+    同步函数（勿 await）：framenavigated 为同步回调，内部只做 URL 判定 +
+    schedule 拉回任务；仅拦主 frame（登录页内的验证码 iframe 等不受影响）；
+    仅拦小红书域（守卫自己 load_url 登录页属 /login 不触发）。登录成功/监视
+    退出时由调用方移除监听，避免循环。
+    """
+    _XHS = "xiaohongshu.com"
+
+    def _on_nav(frame) -> None:
+        try:
+            if not frame.is_main_frame():
+                return
+            url = frame.url or ""
+        except Exception:  # noqa: BLE001（frame 已销毁：忽略）
+            return
+        if _XHS in url and "/login" not in url:
+            if stop.is_set():
+                return
+            print(f"[xhs-leads][guard] 导航拦截：离开登录页（{url[:70]}），立即拉回", flush=True)
+            try:
+                asyncio.get_running_loop().create_task(win.load_url(XHS_LOGIN_URL))
+            except Exception:  # noqa: BLE001（loop 关闭中：轮询兜底）
+                pass
+
+    try:
+        win.page.on("framenavigated", _on_nav)
+        return lambda: win.page.remove_listener("framenavigated", _on_nav)
+    except Exception:  # noqa: BLE001（页面未就绪：轮询兜底）
+        return None
+
+
 async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> bool | None:
     """强制登录单步：返回 True=登录成功 / None=继续监视（离开登录页自动拉回）。"""
     has_id = bool(cs and any(c.get("name") == "id_token" for c in cs))
@@ -668,19 +726,28 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
     """小红书页内监视循环：强制=锁死拉回；主动=可关闭。返回 ok（登录成功回 APP）。"""
     state = {"import": 0.0, "inject": 0.0}
-    while not stop.is_set():
-        if await _rebind_if_closed(win, base):
-            continue
-        try:
-            cs = await win.cookies()
-        except Exception:  # noqa: BLE001
-            cs = []
-        step = _guard_monitor_voluntary if not cur_force else _guard_monitor_forced
-        result = await step(win, base, cs, state)
-        if result is not None:
-            return result
-        await asyncio.sleep(0.3)
-    return False
+    # R-6.48h：强制登录挂事件级导航拦截（离开 /login 立即拉回）；退出时移除。
+    remove_nav_hook = _guard_hook_forced_nav(win, stop) if cur_force else None
+    try:
+        while not stop.is_set():
+            if await _rebind_if_closed(win, base):
+                continue
+            try:
+                cs = await win.cookies()
+            except Exception:  # noqa: BLE001
+                cs = []
+            step = _guard_monitor_voluntary if not cur_force else _guard_monitor_forced
+            result = await step(win, base, cs, state)
+            if result is not None:
+                return result
+            await asyncio.sleep(0.3)
+        return False
+    finally:
+        if remove_nav_hook is not None:
+            try:
+                remove_nav_hook()
+            except Exception:  # noqa: BLE001（loop 关闭中：忽略）
+                pass
 
 
 async def _guard_return_to_app(win: "ShellWindow", base: str) -> None:
@@ -810,12 +877,19 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
 # ---------- keep_shell_tab 拆分助手（R-6.36e：嵌套闭包提升为模块级，控制流逐字等价） ----------
 
 async def _keeper_find_shell(ctx, base, coord):
-    """协调器引用判活优先——壳窗可能正被守卫导航到登录页（URL 不含 base），URL 匹配会误判「壳窗被关」。"""
+    """协调器引用判活优先——壳窗可能正被守卫导航到登录页（URL 不含 base），URL 匹配会误判「壳窗被关」。
+
+    R-6.48h：URL 扫描必须排除 login-hint（同为 8791 前端子路由，startswith(base)
+    会命中）——否则调试窗口会被误登记为壳窗，**关闭调试窗口触发「壳窗被关闭→
+    应用退出」**（用户实测：关调试窗口整个应用退出，日志实锤
+    '壳窗 close 事件（url=.../login-hint）→ 触发应用退出'）。
+    """
     alive = coord.shell()
     if alive is not None:
         return alive
     for p in ctx.pages:
-        if not p.is_closed() and (p.url or "").startswith(base):
+        u = p.url or ""
+        if not p.is_closed() and u.startswith(base) and "login-hint" not in u:
             coord.register_shell(p)
             return p
     return None
@@ -873,6 +947,7 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
     except Exception:  # noqa: BLE001
         pass
     await _calibrate_window(page, 0, 0, win_w, win_h)
+    await _ensure_shell_title(page)
     coord.register_shell(page)
     coord.watch(page, is_shell=True)
     print("[xhs-leads][keeper] 壳窗口初始创建完成（R-6.22p 关主窗=退出应用）", flush=True)
@@ -928,6 +1003,9 @@ async def _calibrate_reused_tab2(t2, _t2_url, coord, engine_pool) -> None:
     try:
         if _t2_url and "login-hint" not in (t2.url or ""):
             await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
+        # R-6.48h：复用残留路径同样补标题守护（此前仅新建路径注入——重启保留的
+        # Tab2 裸奔显示 login-hint 原始标题「尚未登录小红书」）
+        await _ensure_debug_title(t2)
         win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
         await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
         coord.register_tab2(t2)
