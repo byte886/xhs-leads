@@ -108,8 +108,15 @@ _register(
 _COLLECT_DEBUG_TITLE_JS = """(() => {
     const T = 'XHS Leads · 采集调试窗口';
     const setT = () => { if (document.title !== T) document.title = T; };
+    // R-6.48i：事件级守护替代 setInterval 轮询（用户拍板：守护循环不科学、有可见
+    // 中间态）——页面脚本/SPA 一改 title 立即改回，微任务级无闪烁。
+    // 锚点必须是 document：documentElement/head 在 document 创建极早期可能为 null，
+    // observe(null) 抛 TypeError 会中断 IIFE 导致 observer 从未挂载（实测坑）。
+    // document.subtree 覆盖 title 元素增删/文本变化（SPA 重建 head/title 均捕捉）。
+    const obs = new MutationObserver(() => setT());
+    obs.observe(document, { childList: true, characterData: true, subtree: true });
     setT();
-    setInterval(setT, 2000);
+    document.addEventListener('DOMContentLoaded', () => setT());
 })()"""
 _register(
     "collect_debug_title",
@@ -126,8 +133,13 @@ _register(
 _SHELL_TITLE_JS = """(() => {
     const T = 'XHS Leads · 小红书获客助手';
     const setT = () => { if (document.title !== T) document.title = T; };
+    // R-6.48i：事件级守护替代 setInterval 轮询（同 collect_debug_title）。
+    // 锚点必须是 document（documentElement/head 早期可能为 null，observe(null)
+    // 抛 TypeError 中断 IIFE → observer 从未挂载，实测坑）。
+    const obs = new MutationObserver(() => setT());
+    obs.observe(document, { childList: true, characterData: true, subtree: true });
     setT();
-    setInterval(setT, 2000);
+    document.addEventListener('DOMContentLoaded', () => setT());
 })()"""
 _register(
     "shell_title",

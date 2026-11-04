@@ -771,15 +771,21 @@ async def _guard_return_to_app(win: "ShellWindow", base: str) -> None:
 
 
 async def _guard_startup_status(base: str) -> None:
-    """启动时按 login_status 打印三态日志（已登录待命/被踢/未登录）。"""
+    """启动时按 login_status 判定三态；未登录/被踢自动进入强制登录（R-6.48i：
+    用户拍板「主窗口应始终登录页」——启动不再停在 APP 前端等点击「去登录」，
+    直接下发 login_begin(force) 触发完整链路：收起调试窗→清 Cookie→导航登录页
+    →注入适配/拦截。已登录启动不受影响（守卫待命，仅响应登录引导 pending）。"""
     ls = await _guard_get_json(base, "/api/login_status")
     kicked = bool(ls and ls.get("kicked"))
     if ls and ls.get("logged_in") and not kicked:
         print("[xhs-leads][guard] 启动已登录——守卫待命（仅响应登录引导 pending）", flush=True)
-    elif kicked:
-        print("[xhs-leads][guard] 启动检测到登录已被平台踢出——APP 前端显示强制登录对话框", flush=True)
-    else:
-        print("[xhs-leads][guard] 启动未登录——APP 前端显示强制登录对话框", flush=True)
+        return
+    reason = "启动检测到登录已被平台踢出" if kicked else "启动未登录"
+    print(f"[xhs-leads][guard] {reason}——自动进入强制登录（直接导航登录页）", flush=True)
+    try:
+        await _guard_post_json(base, "/api/auth/login_begin", {"force": True})
+    except Exception as e:  # noqa: BLE001（下发失败不阻断：前端 ForceLogin 仍可手动触发）
+        print(f"[xhs-leads][guard] 自动登录引导下发失败（前端可手动触发）: {e!r}", flush=True)
 
 
 async def _guard_wait_pending(win: "ShellWindow", base: str, stop: "threading.Event") -> bool | None:
@@ -803,7 +809,9 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
     """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录；R-6.9 主动重登；R-6.10 首页模式）。
 
     语义（用户拍板）：
-    - 启动不自动导航；运行时被踢不直接导航（前端弹强制登录框）。
+    - 启动未登录/被踢：R-6.48i 起自动进入强制登录（直接导航登录页，不再停在 APP
+      前端等点击「去登录」）；已登录启动守卫待命，不自动导航。
+    - 运行时被踢不直接导航（前端弹强制登录框，用户点击触发）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
     - 登录成功：id_token → 等待遮罩 → import_cookies 注入引擎 → 回 APP。
     CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化路径）。R-6.36e：循环块拆至上方助手，语义逐字保留。
@@ -867,6 +875,9 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
                 # R-6.22：重绑定目标若是重建的新窗口，校准为左半屏布局
                 win_w, win_h, _, _ = engine_pool.shell_window_geometry()
                 await _calibrate_window(p, 0, 0, win_w, win_h)
+                # R-6.48i：重绑定目标补标题守护——裸窗口 document 无注入即
+                # 用户实测「登录页 title 变小红书 / 看到标题变化过程」的根因路径。
+                await _ensure_shell_title(p)
                 print("[xhs-leads][guard] login_guard 已重绑定重建的壳 tab", flush=True)
                 return True
     except Exception:  # noqa: BLE001
