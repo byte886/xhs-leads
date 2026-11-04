@@ -534,35 +534,29 @@ async def ensure_shell(base_url: str):
 
 # ---------- login_guard 拆分助手（R-6.36e：行为与原内联闭包逐字等价） ----------
 
-async def _guard_inject(win: "ShellWindow", key: str, label: str) -> None:
-    """R-6.36k DRY 收敛：force_login/login_fit 共享注入助手（成功/失败文案按 label）。"""
-    try:
-        if not await injections.inject_once(win.page, key):
-            print(f"[xhs-leads][guard] {label} JS 注入暂未成功（页面未就绪，下轮补注）", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][guard] {label} JS 注入暂未成功: {e!r}", flush=True)
-
-
-async def _guard_safe_force_login(win: "ShellWindow") -> None:
-    await _guard_inject(win, "force_login", "强制登录")
-
-
-def _guard_schedule_force_login(win: "ShellWindow") -> None:
-    try:
-        asyncio.get_running_loop().create_task(_guard_safe_force_login(win))
-    except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][guard] 强制登录 JS 注入暂未成功: {e!r}", flush=True)
-
-
-async def _guard_safe_login_fit(win: "ShellWindow") -> None:
-    await _guard_inject(win, "login_fit", "登录页适配")
-
-
-def _guard_schedule_login_fit(win: "ShellWindow") -> None:
-    try:
-        asyncio.get_running_loop().create_task(_guard_safe_login_fit(win))
-    except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][guard] 登录页适配 JS 注入暂未成功: {e!r}", flush=True)
+async def _ensure_login_injects(win: "ShellWindow") -> None:
+    """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配）：
+    page 级 add_init_script——浏览器在每个新 document（整页导航/SPA 重建）创建
+    瞬间自动执行，JS 内部 MutationObserver 事件驱动；无守卫轮询补注
+    （R-6.48k，用户拍板：循环守护不可取，直接注入行为）。
+    幂等：已注册的仅对当前文档 evaluate 立即生效；防重标记避免重复 add 累积。
+    evaluate 失败（页面导航中/未就绪）不重试轮询——下一事件点（导航登录页/
+    重绑定/拉回）自然补注，且新 document 由 init script 自动生效。
+    """
+    for key in ("force_login", "login_fit"):
+        js = injections.get(key)
+        flag = f"_login_{key}_installed"
+        if not getattr(win.page, flag, False):
+            try:
+                await win.page.add_init_script(js)
+                setattr(win.page, flag, True)
+                print(f"[xhs-leads][guard] {key} init script 已注册", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[xhs-leads][guard] {key} add_init_script 失败: {e!r} url={win.page.url[:60]!r}", flush=True)
+        try:
+            await win.page.evaluate(js)
+        except Exception as e:  # noqa: BLE001
+            print(f"[xhs-leads][guard] {key} evaluate 失败: {e!r} url={win.page.url[:60]!r}", flush=True)
 
 
 async def _guard_inject_active_close(win: "ShellWindow", base: str) -> None:
@@ -607,9 +601,9 @@ async def _guard_navigate_to_login(win: "ShellWindow", base: str, cur_force: boo
         print(f"[xhs-leads][guard] evaluate_js 异常: {e!r}", flush=True)
     try:
         await win.evaluate_js(injections.get("open_login_panel"))
-    except Exception:  # noqa: BLE001（页面未就绪，下轮补注）
+    except Exception:  # noqa: BLE001（页面未就绪，下一事件点补注）
         pass
-    _guard_schedule_login_fit(win)
+    await _ensure_login_injects(win)
     if not cur_force:
         await _guard_inject_active_close(win, base)
 
@@ -699,15 +693,14 @@ def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
 
 
 async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> bool | None:
-    """强制登录单步：返回 True=登录成功 / None=继续监视（离开登录页自动拉回）。"""
+    """强制登录单步：返回 True=登录成功 / None=继续监视（离开登录页自动拉回）。
+
+    R-6.48k：移除每 10s 轮询补注——登录页行为（弹窗锁/居中/标题）由
+    add_init_script 在每个新 document 自动注入（事件驱动），无需循环守护。
+    """
     has_id = bool(cs and any(c.get("name") == "id_token" for c in cs))
     if has_id:
         return await _guard_handle_id_token(win, base, cs, state)
-    now = time.monotonic()
-    if now - state["inject"] >= 10.0:
-        state["inject"] = now
-        _guard_schedule_force_login(win)
-        _guard_schedule_login_fit(win)
     try:
         cur = await win.current_url()
     except Exception:  # noqa: BLE001
@@ -718,14 +711,14 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
             await win.load_url(XHS_LOGIN_URL)
         except Exception:  # noqa: BLE001
             pass
-        _guard_schedule_force_login(win)
-        _guard_schedule_login_fit(win)
+        # 拉回产生新 document：事件点补注（init script 已注册时仅 evaluate 当前文档）
+        await _ensure_login_injects(win)
     return None
 
 
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
     """小红书页内监视循环：强制=锁死拉回；主动=可关闭。返回 ok（登录成功回 APP）。"""
-    state = {"import": 0.0, "inject": 0.0}
+    state = {"import": 0.0}
     # R-6.48h：强制登录挂事件级导航拦截（离开 /login 立即拉回）；退出时移除。
     remove_nav_hook = _guard_hook_forced_nav(win, stop) if cur_force else None
     try:
@@ -878,6 +871,9 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
                 # R-6.48i：重绑定目标补标题守护——裸窗口 document 无注入即
                 # 用户实测「登录页 title 变小红书 / 看到标题变化过程」的根因路径。
                 await _ensure_shell_title(p)
+                # R-6.48k：重绑定目标补登录页行为注入（弹窗锁/居中，init script 已
+                # 注册时仅 evaluate 当前文档）——事件点补注，非轮询。
+                await _ensure_login_injects(win)
                 print("[xhs-leads][guard] login_guard 已重绑定重建的壳 tab", flush=True)
                 return True
     except Exception:  # noqa: BLE001

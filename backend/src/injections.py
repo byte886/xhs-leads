@@ -229,33 +229,69 @@ _register(
 )
 
 # ---- 8. 强制登录锁（原 login_guard 局部 force_login_js，R-6.6→R-6.10） ----
+# R-6.48k：改 add_init_script 注入（document 创建即执行）＋ document 锚点
+# MutationObserver 事件驱动；remove 守卫每 10s 轮询补注（用户拍板：循环不可取）。
+# observe 锚点必须 document：add_init_script 极早期 document.body/head 为 null，
+# observe(null) 抛 TypeError 中断 IIFE（R-6.48i 标题同款坑）。
 _FORCE_LOGIN_JS = (
     "(function(){"
     "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
+    "function ensureStyle(){"
+    "if(document.head&&!document.querySelector('#xhs-leads-lock')){"
     "var st=document.createElement('style');st.id='xhs-leads-lock';"
-    "st.textContent='[aria-label=\"关闭\"]{display:none!important}[aria-label=\"close\"]{display:none!important}.close-btn{display:none!important}';"
+    "st.textContent='[aria-label=\"关闭\"]{display:none!important}[aria-label=\"close\"]{display:none!important}.close-btn,.close-icon{display:none!important}';"
     "document.head.appendChild(st);"
-    "new MutationObserver(function(){"
-    "var a=document.querySelectorAll('[aria-label=\"关闭\"],[aria-label=\"close\"],.close-btn');"
+    "}}"
+    "function lockBtns(){"
+    "var a=document.querySelectorAll('[aria-label=\"关闭\"],[aria-label=\"close\"],.close-btn,.close-icon');"
     "for(var i=0;i<a.length;i++){a[i].style.display='none';a[i].removeAttribute('onclick');}"
-    "}).observe(document.body,{childList:true,subtree:true});})();"
+    "}"
+    "ensureStyle();lockBtns();"
+    "new MutationObserver(function(){ensureStyle();lockBtns();}).observe(document,{childList:true,subtree:true});"
+    "/* R-6.48j：锁遮罩点击与 ESC——点击登录组件外空白（遮罩）与按 ESC 都会关闭登录" 
+    "弹窗且 URL 不变，守卫 URL 拉回机制覆盖不到（用户实机 bug，实测盲区）。 */"
+    "document.addEventListener('click',function(e){"
+    "if(!e.target.closest)return;"
+    "var t=e.target.closest('.container,.reds-modal,.login-container');"
+    "if(!t){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}"
+    "},true);"
+    "document.addEventListener('keydown',function(e){"
+    "if(e.key==='Escape'||e.key==='Esc'){e.preventDefault();e.stopPropagation();}"
+    "},true);"
+    "})();"
 )
 _register(
     "force_login",
     _FORCE_LOGIN_JS,
     kind="evaluate",
-    note="强制登录页关闭按钮锁定。JS 内部 window.__xhs_leads_lock_ok 防重；"
-         "login_guard 每 10s 循环补注，现走 inject_once——新文档标记重置即重注，时机不变。",
+    note="强制登录页关闭锁：隐藏关闭按钮＋锁遮罩点击/ESC。add_init_script 注入，"
+         "document 锚点 MutationObserver 事件驱动，无轮询补注（R-6.48k）。",
 )
 
 # ---- 9. 登录页窗口适配（原 login_guard 局部 login_fit_js，R-6.26c） ----
+# R-6.48k：改 add_init_script 注入＋document 锚点事件驱动；remove setInterval 与
+# 守卫循环补注。.container 恒居中独立执行（此前排在 .reds-modal/.login-container
+# 判空 return 之后永不执行——实测弹窗 x=960 视口外的结构根因）。
 _LOGIN_FIT_JS = (
     "(function(){"
     "if(window.__xhs_leads_login_fit)return;window.__xhs_leads_login_fit=true;"
+    "function ensureStyle(){"
+    "if(document.head&&!document.querySelector('#xhs-leads-login-fit')){"
     "var st=document.createElement('style');st.id='xhs-leads-login-fit';"
     "st.textContent='html,body{overflow:auto!important}.reds-modal{overflow-y:auto!important;max-height:100vh!important;height:auto!important;min-height:100vh!important}.login-container{flex:none!important}';"
     "document.head.appendChild(st);"
+    "}}"
     "function fit(){"
+    "ensureStyle();"
+    "/* R-6.48j：弹窗恒居中——小红书 JS 按宽屏基准 transform:translateX(440px) 居中"
+    "弹窗，960 视口下整体平移出屏（实测 .container x=960 视口外=全白，即用户"
+    "所见「登录组件消失」的自动化复现）。覆盖为基于自身尺寸的视口居中。 */"
+    "var cc=document.querySelector('.container');"
+    "if(cc){"
+    "cc.style.transform='none';"
+    "cc.style.left='calc(50% - '+(cc.offsetWidth/2)+'px)';"
+    "cc.style.top='calc(50% - '+(cc.offsetHeight/2)+'px)';"
+    "}"
     "var m=document.querySelector('.reds-modal');var c=document.querySelector('.login-container');"
     "if(!m||!c)return;"
     "var need=c.getBoundingClientRect().height+24>window.innerHeight;"
@@ -263,16 +299,15 @@ _LOGIN_FIT_JS = (
     "}"
     "fit();"
     "window.addEventListener('resize',fit);"
-    "new MutationObserver(fit).observe(document.body,{childList:true,subtree:true});"
-    "setInterval(fit,2000);"
+    "new MutationObserver(fit).observe(document,{childList:true,subtree:true});"
     "})();"
 )
 _register(
     "login_fit",
     _LOGIN_FIT_JS,
     kind="evaluate",
-    note="登录页居中+滚动条适配。JS 内部 window.__xhs_leads_login_fit 防重（含自更新 "
-         "setInterval）；login_guard 每 5/10s 循环补注，走 inject_once——新文档标记重置即重注。",
+    note="登录页弹窗恒居中+滚动条适配。add_init_script 注入，document 锚点 "
+         "MutationObserver 事件驱动，无 setInterval、无守卫轮询补注（R-6.48k）。",
 )
 
 # ---------------------------------------------------------------------------
