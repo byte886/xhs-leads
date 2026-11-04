@@ -90,3 +90,40 @@ def test_recovery_cleanup_skips_closed_and_shell():
     ctx.pages = [shell, dead]
     n = asyncio.run(sw._keeper_recovery_cleanup(ctx, shell))
     assert n == 0
+
+
+# ---------------- R-6.48o：壳窗引用失效判定（崩溃/CDP 断连盲区） ----------------
+
+class _FakeCoord:
+    def __init__(self, s):
+        self._s = s
+
+    def shell(self):
+        return self._s
+
+
+def test_shell_effective_alive():
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    ctx.pages = [shell]
+    assert sw._keeper_shell_effective(_FakeCoord(shell), ctx) is shell
+
+
+def test_shell_effective_none_when_none():
+    assert sw._keeper_shell_effective(_FakeCoord(None), FakeContext()) is None
+
+
+def test_shell_effective_none_when_closed():
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    shell.closed = True
+    ctx.pages = [shell]
+    assert sw._keeper_shell_effective(_FakeCoord(shell), ctx) is None
+
+
+def test_shell_effective_none_when_session_rebuilt():
+    """引擎崩溃/CDP 断连：page 不标记 closed 但引用已不属于新会话页面集 → 判失效。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")  # 旧会话引用
+    ctx.pages = [FakePage("https://www.xiaohongshu.com/login?redirectPath=1")]  # 新会话页面
+    assert sw._keeper_shell_effective(_FakeCoord(shell), ctx) is None

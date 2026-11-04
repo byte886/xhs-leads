@@ -891,6 +891,16 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
 
 # ---------- keep_shell_tab 拆分助手（R-6.36e：嵌套闭包提升为模块级，控制流逐字等价） ----------
 
+def _keeper_shell_effective(coord, ctx):
+    """壳窗引用判活（R-6.48o）：is_closed() 在引擎崩溃/CDP 断连时不可靠
+    （page 对象不标记 closed），必须同时校验引用仍属于当前页面集——
+    不在 ctx.pages = 会话已重建（崩溃恢复），返回 None。"""
+    s = coord.shell()
+    if s is None or s.is_closed() or s not in list(ctx.pages):
+        return None
+    return s
+
+
 async def _keeper_find_shell(ctx, base, coord):
     """协调器引用判活优先——壳窗可能正被守卫导航到登录页（URL 不含 base），URL 匹配会误判「壳窗被关」。
 
@@ -899,7 +909,7 @@ async def _keeper_find_shell(ctx, base, coord):
     应用退出」**（用户实测：关调试窗口整个应用退出，日志实锤
     '壳窗 close 事件（url=.../login-hint）→ 触发应用退出'）。
     """
-    alive = coord.shell()
+    alive = _keeper_shell_effective(coord, ctx)
     if alive is not None:
         return alive
     for p in ctx.pages:
@@ -1116,9 +1126,10 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
         eng = await engine_pool.pool.get("default")
         ctx = await eng.context()
         _keeper_log_snapshot(ctx, coord, last)
-        # R-6.48o：崩溃恢复检测——调用前壳窗引用已失效（引擎崩溃/会话重建），
-        # 扫描后重新找到 → 判定为崩溃恢复，关闭所有非主窗口残留。
-        was_dead = coord.shell() is None
+        # R-6.48o：崩溃恢复检测——壳窗引用失效（引擎崩溃/会话重建）后扫描重新
+        # 找到 → 判定为崩溃恢复，关闭所有非主窗口残留（is_closed 判活盲区见
+        # _keeper_shell_effective：引用不在当前页面集即视为失效）。
+        was_dead = _keeper_shell_effective(coord, ctx) is None
         shell = await _keeper_find_shell(ctx, base, coord)
         if was_dead and shell is not None:
             n = await _keeper_recovery_cleanup(ctx, shell)
