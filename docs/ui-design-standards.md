@@ -54,4 +54,5 @@
 ## 6. 本次落地记录
 
 - R-6.26 登录弹框重设计（ForceLogin.vue）：三段式结构、文案去术语、Phosphor sign-in 图标、遮罩 + 卡片视觉基线。
+- R-6.46 设置页信息架构重构（SettingsPanel.vue）：按功能域分组（账号与登录 / 采集设置 / AI 能力 / 窗口与调试 / 关于与授权）；采集页「极速采集/全局请求间隔」归置进「采集设置」卡并配简约说明；lic 横条改造为「关于与授权」卡并补版本号；标题/描述随实装内容更新，禁止过时文案。
 - 调试窗标题固定：`shell_window.py` 页级 `add_init_script`（`_COLLECT_DEBUG_TITLE_JS`）把采集调试窗标题统一为「XHS Leads · 采集调试窗口」（避免搜索词标题误读），非 extract.js。
