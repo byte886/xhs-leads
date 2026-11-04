@@ -168,27 +168,25 @@ onMounted(async () => {
           </option>
         </select>
       </div>
-      <div class="param">
-        <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
-      </div>
-
-      <!-- 上限 / 开始采集 / 筛选选项 一行：采集按钮在上限右、筛选条件在采集按钮右 -->
-      <div class="ctrl-line">
+      <!-- 关键词 + 结果上限：一行 -->
+      <div class="param-row">
+        <div class="param">
+          <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
+        </div>
         <div class="param param-num">
           <span class="num-label">上限</span>
           <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
           <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
           <button class="num-step" type="button" @click="stepLimit(1)">+</button>
         </div>
-        <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
-          <span v-if="appState.collecting" class="btn-spinner" />
-          {{ appState.collecting ? '停止' : '开始采集' }}
-        </button>
-        <button class="filters-toggle" :class="{ open: showFilters }" @click="showFilters = !showFilters">
-          <span class="f-arrow">{{ showFilters ? '▾' : '▸' }}</span>
-          筛选
-          <span v-if="activeFilters().length" class="f-count">{{ activeFilters().length }}</span>
-        </button>
+      </div>
+
+      <!-- 筛选条件一行：默认直接显示已选内容，右侧倒三角展开全部选项 -->
+      <div class="filters-line" :class="{ open: showFilters }" @click="showFilters = !showFilters">
+        <span class="fl-label">筛选条件</span>
+        <span v-if="activeFilters().length" class="fl-value">{{ activeFilters().join(' · ') }}</span>
+        <span v-else class="fl-none">未选择（默认条件）</span>
+        <span class="fl-arrow">{{ showFilters ? '▴' : '▾' }}</span>
       </div>
 
       <div v-if="showFilters" class="opt-area">
@@ -224,15 +222,13 @@ onMounted(async () => {
             </select>
           </div>
         </div>
-        <!-- 已选筛选汇总：非默认条件实时提示，采集时写入任务标签 -->
-        <div class="param-row">
-          <div class="filters-hint">
-            <span class="filters-hint-k">已选筛选</span>
-            <span v-if="activeFilters().length" class="filters-hint-v">{{ activeFilters().join(' · ') }}</span>
-            <span v-else class="filters-hint-none">未选择（按小红书默认：综合 / 全部 / 不限）</span>
-          </div>
-        </div>
       </div>
+
+      <!-- 开始采集：独立整行 -->
+      <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
+        <span v-if="appState.collecting" class="btn-spinner" />
+        {{ appState.collecting ? '停止' : '开始采集' }}
+      </button>
     </section>
   </aside>
 </template>
@@ -315,16 +311,45 @@ onMounted(async () => {
 .num-step:hover { background: #e8e8e8; color: #111; }
 .num-step:active { background: #ddd; }
 
-/* 上限 / 开始采集 / 筛选选项 一行 */
-.ctrl-line { display: flex; gap: 6px; align-items: center; }
-.btn-search {
+/* 筛选条件一行：默认显示已选内容 + 右侧倒三角展开全部选项 */
+.filters-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px dashed #d5d5d5;
+  background: #fafafa;
+  color: #666;
+  font-size: 12px;
+  border-radius: 7px;
+  padding: 7px 9px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.filters-line:hover { border-color: #e0b36b; background: #fff9f0; }
+.filters-line.open { border-style: solid; border-color: #e0b36b; background: #fff9f0; }
+.fl-label { flex-shrink: 0; color: var(--ink-2, #888); font-weight: 600; }
+.fl-value {
   flex: 1;
-  min-width: 66px;
+  min-width: 0;
+  color: #b08a4d;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fl-none { flex: 1; min-width: 0; color: var(--ink-3, #aaa); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-arrow { flex-shrink: 0; font-size: 10px; color: #999; }
+
+/* 开始采集：独立整行 */
+.btn-search {
+  width: 100%;
+  box-sizing: border-box;
   background: var(--red);
   color: #fff;
-  padding: 9px 6px;
+  padding: 10px 0;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   border: 0;
@@ -372,22 +397,6 @@ onMounted(async () => {
 @keyframes btn-spin {
   to { transform: rotate(360deg); }
 }
-/* 已选筛选汇总行 */
-.filters-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  font-size: 11px;
-  background: #F8F9FA;
-  border: 1px dashed var(--line, #e5e5e5);
-  border-radius: 8px;
-  padding: 7px 10px;
-}
-.filters-hint-k { color: var(--ink-2, #888); font-weight: 600; flex-shrink: 0; }
-.filters-hint-v { color: #b08a4d; font-weight: 600; }
-.filters-hint-none { color: var(--ink-3, #aaa); }
-
 /* 极小视口（换小屏/窄窗口兜底）：筛选选项区改 2 列，避免过挤 */
 @media (max-width: 700px) {
   .opt-grid { grid-template-columns: repeat(2, 1fr); }
