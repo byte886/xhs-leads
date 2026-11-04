@@ -218,18 +218,6 @@ onMounted(async () => {
             <span v-else class="filters-hint-none">未选择（按小红书默认：综合 / 全部 / 不限）</span>
           </div>
         </div>
-        <div class="param-row">
-          <label class="fast-toggle" title="快速档：逐条打开笔记详情/作者主页补全互动与粉丝数时不做拟人等待，速度快约一半；默认关闭（拟人节奏，更安全）">
-            <input type="checkbox" v-model="appState.params.fast" />
-            <span>极速采集（约快一半，节奏更密）</span>
-          </label>
-        </div>
-        <div class="param-row">
-          <div class="param">
-            <label>全局请求间隔（ms）</label>
-            <input v-model.number="appState.params.interval" type="number" min="300" step="100" />
-          </div>
-        </div>
         <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
           <span v-if="appState.collecting" class="btn-spinner" />
           {{ appState.collecting ? '停止采集' : '开始采集' }}
@@ -244,20 +232,6 @@ onMounted(async () => {
 .btn-search:disabled {
   opacity: 0.7;
   cursor: default;
-}
-/* 极速采集开关 */
-.fast-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #666;
-  cursor: pointer;
-  margin-top: 2px;
-  user-select: none;
-}
-.fast-toggle input {
-  accent-color: #ff2442;
 }
 .btn-spinner {
   display: inline-block;

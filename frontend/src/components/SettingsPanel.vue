@@ -283,23 +283,8 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="page-title">设置 · AI 模型 / 账号人设</div>
-    <div class="page-desc">两个配置项收敛一页：AI Key 门控（文稿/质检共用）、账号人设（AI 生成保持行业口吻）。未配置项按钮灰态并引导。</div>
-
-    <div v-if="lic" class="lic-bar">
-      <span class="lic-tag" :class="{ on: lic.mode === 'activation' && lic.has_activation }">
-        {{ lic.mode === 'free' ? '免费版' : (lic.has_activation ? '激活版' : '未激活') }}
-      </span>
-      <span>已开通功能：{{ lic.features.join(' / ') }}</span>
-      <span class="lic-fp" :title="lic.machine_fingerprint">设备指纹：{{ lic.machine_fingerprint.slice(0, 12) }}…</span>
-      <span v-if="lic.has_activation && lic.mode !== 'free'" class="lic-ok">✓ 已激活（机器码绑定）</span>
-    </div>
-
-    <div v-if="lic && lic.mode !== 'free'" class="lic-bar lic-act">
-      <input v-model="actKey" placeholder="粘贴卖家提供的激活码" style="flex:1;min-width:240px" @keyup.enter="activateLicense" />
-      <button class="btn primary sm" :disabled="actBusy" @click="activateLicense">{{ actBusy ? '激活中…' : '激活' }}</button>
-      <span class="set-hint" style="margin:0">激活码由卖家按设备指纹签发，一台设备一个码</span>
-    </div>
+    <div class="page-title">设置</div>
+    <div class="page-desc">账号与登录、AI 能力、采集节奏、窗口显示，集中在这里配置；采集页只保留每次搜索的条件。</div>
 
     <!-- 账号与登录（登录 UI 改版·用户拍板）：状态行 + 重新登录 + Cookie 只读 + 导入 Cookie -->
     <div class="set-card acct-card">
@@ -342,6 +327,19 @@ onMounted(async () => {
           <span v-if="importResult" class="import-result">{{ importResult }}</span>
         </div>
       </div>
+    </div>
+
+    <!-- 采集设置（R-6.46：从采集页移入——极速采集开关 + 请求间隔说明） -->
+    <div class="set-card acct-card">
+      <div class="set-card-h">采集设置</div>
+      <label class="set-switch">
+        <input type="checkbox" v-model="appState.params.fast" />
+        <span>极速采集</span>
+      </label>
+      <p class="set-hint">开启后跳过拟人等待，采集快约一倍（20 条约 5 分钟 → 2 分钟）；节奏更密、被平台风控的概率略升。建议默认关闭，赶数据时再开。</p>
+      <p class="set-hint" style="margin-top:10px">
+        <b>全局请求间隔</b>：系统已固定为真人浏览节奏（每次请求间隔 1–1.8 秒，安全档，防止被识别为机器操作）；开启极速采集时自动跳过该等待。
+      </p>
     </div>
 
     <div class="set-grid">
@@ -406,6 +404,25 @@ onMounted(async () => {
           <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
         </div>
         <p v-if="dbgFailed && !dbgOpen" class="dbg-fail">{{ dbgFailed }}</p>
+      </div>
+    </div>
+
+    <!-- 关于与授权（R-6.46：lic 横条 → 正式卡片，补版本号） -->
+    <div class="set-card acct-card" v-if="lic">
+      <div class="set-card-h">关于与授权</div>
+      <div class="acct-row">
+        <span class="lic-tag" :class="{ on: lic.mode === 'activation' && lic.has_activation }">
+          {{ lic.mode === 'free' ? '免费版' : (lic.has_activation ? '激活版' : '未激活') }}
+        </span>
+        <span>版本 2.0.0</span>
+        <span class="lic-fp" :title="lic.machine_fingerprint">设备指纹：{{ lic.machine_fingerprint.slice(0, 12) }}…</span>
+        <span v-if="lic.has_activation && lic.mode !== 'free'" class="lic-ok">✓ 已激活（机器码绑定）</span>
+      </div>
+      <p class="set-hint">已开通功能：{{ lic.features.join(' / ') }}</p>
+      <div v-if="lic.mode !== 'free'" class="set-actions">
+        <input v-model="actKey" placeholder="粘贴卖家提供的激活码" style="flex:1;min-width:240px" @keyup.enter="activateLicense" />
+        <button class="btn primary sm" :disabled="actBusy" @click="activateLicense">{{ actBusy ? '激活中…' : '激活' }}</button>
+        <span class="set-hint" style="margin:0">激活码由卖家按设备指纹签发，一台设备一个码</span>
       </div>
     </div>
   </div>
@@ -473,6 +490,8 @@ input {
   background: #fff;
 }
 .set-hint { font-size: 12px; color: var(--ink-3, #aaa); line-height: 1.6; margin: 4px 0 0; }
+.set-switch { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: #444; cursor: pointer; user-select: none; }
+.set-switch input { accent-color: #ff2442; }
 .set-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .gate-msg {
   display: flex;
