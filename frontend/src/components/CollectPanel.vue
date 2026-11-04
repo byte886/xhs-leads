@@ -168,28 +168,26 @@ onMounted(async () => {
           </option>
         </select>
       </div>
-      <div class="param-row">
-        <div class="param">
-          <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
-        </div>
+      <div class="param">
+        <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
+      </div>
+
+      <!-- 上限 / 开始采集 / 筛选选项 一行：采集按钮在上限右、筛选条件在采集按钮右 -->
+      <div class="ctrl-line">
         <div class="param param-num">
           <span class="num-label">上限</span>
           <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
           <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
           <button class="num-step" type="button" @click="stepLimit(1)">+</button>
         </div>
-      </div>
-
-      <!-- 选项类：默认收起，展开后两行选完；收起时按钮与筛选开关同行 -->
-      <div class="line-actions">
-        <button class="filters-toggle" :class="{ open: showFilters }" @click="showFilters = !showFilters">
-          <span class="f-arrow">{{ showFilters ? '▾' : '▸' }}</span>
-          筛选选项
-          <span v-if="activeFilters().length" class="f-count">{{ activeFilters().length }}</span>
-        </button>
         <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
           <span v-if="appState.collecting" class="btn-spinner" />
-          {{ appState.collecting ? '停止采集' : '开始采集' }}
+          {{ appState.collecting ? '停止' : '开始采集' }}
+        </button>
+        <button class="filters-toggle" :class="{ open: showFilters }" @click="showFilters = !showFilters">
+          <span class="f-arrow">{{ showFilters ? '▾' : '▸' }}</span>
+          筛选
+          <span v-if="activeFilters().length" class="f-count">{{ activeFilters().length }}</span>
         </button>
       </div>
 
@@ -274,14 +272,14 @@ onMounted(async () => {
   color: #333;
 }
 .param-num {
-  flex: 0 0 118px;
+  flex: 0 0 106px;
   display: flex;
   align-items: center;
   gap: 2px;
   border: 1px solid var(--line, #e5e5e5);
   border-radius: 7px;
   background: #fff;
-  padding: 0 6px;
+  padding: 0 5px;
 }
 .param-num input {
   border: 0;
@@ -289,15 +287,17 @@ onMounted(async () => {
   padding: 7px 0;
   text-align: center;
   font-size: 13px;
+  width: 30px;
+  min-width: 0;
 }
 .param-num input:focus { border: 0; }
 /* 隐藏原生上下箭头，用自定义步进按钮（跨浏览器一致） */
 .param-num input::-webkit-outer-spin-button,
 .param-num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.num-label { font-size: 12px; color: var(--ink-2); flex-shrink: 0; margin-right: 2px; }
+.num-label { font-size: 12px; color: var(--ink-2); flex-shrink: 0; margin-right: 1px; }
 .num-step {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -305,7 +305,7 @@ onMounted(async () => {
   border-radius: 5px;
   background: #f4f4f4;
   color: #555;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
@@ -315,47 +315,20 @@ onMounted(async () => {
 .num-step:hover { background: #e8e8e8; color: #111; }
 .num-step:active { background: #ddd; }
 
-/* 折叠开关 + 采集按钮同行 */
-.line-actions { display: flex; gap: 8px; align-items: center; }
-.filters-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px dashed #d5d5d5;
-  background: #fafafa;
-  color: #666;
-  font-size: 12px;
-  border-radius: 7px;
-  padding: 7px 10px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.filters-toggle:hover { border-color: #e0b36b; color: #b05a1f; background: #fff9f0; }
-.filters-toggle.open { border-style: solid; border-color: #e0b36b; color: #b05a1f; background: #fff9f0; }
-.f-arrow { font-size: 10px; }
-.f-count {
-  background: #e0b36b;
-  color: #fff;
-  border-radius: 9px;
-  font-size: 10px;
-  font-weight: 700;
-  min-width: 16px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-}
+/* 上限 / 开始采集 / 筛选选项 一行 */
+.ctrl-line { display: flex; gap: 6px; align-items: center; }
 .btn-search {
   flex: 1;
+  min-width: 66px;
   background: var(--red);
   color: #fff;
-  padding: 9px 12px;
+  padding: 9px 6px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   border: 0;
+  white-space: nowrap;
 }
 .btn-search:hover { background: #E51F3A; }
 .btn-search.stop { background: #333; }
@@ -414,4 +387,9 @@ onMounted(async () => {
 .filters-hint-k { color: var(--ink-2, #888); font-weight: 600; flex-shrink: 0; }
 .filters-hint-v { color: #b08a4d; font-weight: 600; }
 .filters-hint-none { color: var(--ink-3, #aaa); }
+
+/* 极小视口（换小屏/窄窗口兜底）：筛选选项区改 2 列，避免过挤 */
+@media (max-width: 700px) {
+  .opt-grid { grid-template-columns: repeat(2, 1fr); }
+}
 </style>
