@@ -608,9 +608,17 @@ async def _guard_navigate_to_login(win: "ShellWindow", base: str, cur_force: boo
         await _guard_inject_active_close(win, base)
 
 
+def has_id_token(cookies) -> bool:
+    """登录态判定纯函数：cookies 中是否存在小红书 id_token（R-6.48n 统一 3 处内联）。"""
+    try:
+        return bool(cookies and any(c.get("name") == "id_token" for c in cookies))
+    except TypeError:
+        return False
+
+
 async def _guard_try_import_cookies(win: "ShellWindow", base: str, cs, state) -> bool:
     """id_token 出现且满 0.5s → 注入引擎；成功返回 True。state 持 _t_last_import。"""
-    if not (cs and any(c.get("name") == "id_token" for c in cs)):
+    if not has_id_token(cs):
         return False
     now = time.monotonic()
     if now - state["import"] < 0.5:
@@ -698,7 +706,7 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
     R-6.48k：移除每 10s 轮询补注——登录页行为（弹窗锁/居中/标题）由
     add_init_script 在每个新 document 自动注入（事件驱动），无需循环守护。
     """
-    has_id = bool(cs and any(c.get("name") == "id_token" for c in cs))
+    has_id = has_id_token(cs)
     if has_id:
         return await _guard_handle_id_token(win, base, cs, state)
     try:
@@ -965,7 +973,7 @@ async def _keeper_tab2_target_url(config, engine_pool):
     try:
         eng = await engine_pool.pool.get("default")
         mem = await eng.read_cookies()
-        if any(c.get("name") == "id_token" for c in mem):
+        if has_id_token(mem):
             return None
     except Exception:  # noqa: BLE001（引擎未就绪：按未登录处理）
         pass

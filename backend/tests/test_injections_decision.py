@@ -58,6 +58,30 @@ class TestForceLoginSelectors:
         assert ", '.container," not in js  # 常量 CSV 以常量拼接，不应出现游离旧写法
 
 
+class TestLoginFitSelectors:
+    """login_fit 并入常量表（R-6.48n）：querySelector 插值常量；CSS 类名防漂移。"""
+
+    def test_query_selector_uses_constants(self):
+        js = injections.get("login_fit")
+        # querySelector 必须使用常量当前值（常量改 → JS 同步；此处防旧值残留）
+        for sel in injections.LOGIN_PANEL_SELECTORS:
+            assert f"querySelector('{sel}')" in js, f"{sel} 未以常量插值进入 login_fit"
+
+    def test_css_class_names_in_constants(self):
+        # CSS 字符串类名无法机械插值（带规则体），改常量后若未同步 CSS 此处应失败提醒
+        js = injections.get("login_fit")
+        css_sel = [s for s in injections.LOGIN_PANEL_SELECTORS
+                   if s.split(".")[-1] in js.split("st.textContent='")[1].split("';")[0]]
+        # CSS 规则体里出现过的类名必须仍存在于常量表（顺序固定）
+        assert css_sel, "login_fit CSS 未命中任何 LOGIN_PANEL_SELECTORS 类名（结构可能已漂移）"
+
+    def test_panel_selector_semantics(self):
+        # 索引语义固定：[0] 主容器 / [1] 弹窗外框 / [2] 内层——login_fit 与 force_login 共用
+        assert injections.LOGIN_PANEL_SELECTORS == (
+            ".container", ".reds-modal", ".login-container",
+        ), "LOGIN_PANEL_SELECTORS 顺序被改动（index 语义破坏）"
+
+
 class TestJsSyntax:
     """注入 JS 语法与 48j 坑回归。"""
 
