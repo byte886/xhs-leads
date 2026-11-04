@@ -284,9 +284,6 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="page-title">设置</div>
-    <div class="page-desc">账号、采集、AI 与窗口，左侧选分类，右侧逐项配置。</div>
-
     <div class="settings-layout">
       <!-- 左侧分类导航 -->
       <div class="settings-nav">
@@ -495,9 +492,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-.page-desc { font-size: 12.5px; color: var(--ink-2, #888); margin-bottom: 16px; line-height: 1.6; }
-
 /* 两栏布局：左侧分类导航 + 右侧逐项列表 */
 .settings-layout { display: flex; gap: 16px; align-items: flex-start; }
 .settings-nav {
