@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // SettingsPanel v2.0：设置 Tab（左侧分类导航 + 右侧逐项一行配置）
 // R-6.46 功能域分组 → R-6.47 两栏布局：账号 / 采集 / AI 能力 / 窗口与调试 / 关于与授权
-import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
@@ -21,6 +21,11 @@ const cats = [
   { id: 'about', label: '关于与授权' },
 ]
 const activeCat = ref('account')
+
+// 全局请求间隔：单值基准 + 自动窄随机抖动（Scrapy download_delay 同思路）。
+// UI 如实显示随机区间，避免用户把随机误读为"多处不同值"。
+const intervalBase = computed(() => (appState.params.interval / 1000).toFixed(1))
+const intervalMax = computed(() => ((appState.params.interval + 800) / 1000).toFixed(1))
 
 // ---- 账号与登录 ----
 const loggedIn = ref(false)
@@ -368,7 +373,7 @@ onMounted(async () => {
               <span class="row-label">全局请求间隔</span>
               <input v-model.number="appState.params.interval" type="number" min="1000" max="10000" step="100" class="num-input" />
               <span class="unit">毫秒</span>
-              <span class="cur-val">{{ (appState.params.interval / 1000).toFixed(1) }} 秒</span>
+              <span class="cur-val">实际每次 {{ intervalBase }}–{{ intervalMax }} 秒（随机）</span>
             </div>
             <p class="set-hint">
               每次页面操作之间的间隔。安全范围 1–10 秒，默认 1 秒（真人浏览节奏）。

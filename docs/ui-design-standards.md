@@ -56,4 +56,5 @@
 - R-6.26 登录弹框重设计（ForceLogin.vue）：三段式结构、文案去术语、Phosphor sign-in 图标、遮罩 + 卡片视觉基线。
 - R-6.46 设置页信息架构重构（SettingsPanel.vue）：按功能域分组（账号与登录 / 采集设置 / AI 能力 / 窗口与调试 / 关于与授权）；采集页「极速采集/全局请求间隔」归置进「采集设置」卡并配简约说明；lic 横条改造为「关于与授权」卡并补版本号；标题/描述随实装内容更新，禁止过时文案。
 - R-6.47 设置页两栏布局 + 请求间隔启用（SettingsPanel.vue / FlowBar.vue / server.py / collect_pipeline.py）：左分类导航 + 右每项一行；间隔数字输入（1000–10000ms）经 `SearchReq.interval` → `set_rhythm` 真实作用于采集停顿节奏（安全范围上下限 + 默认 1000 与历史一致）；设置 Tab 下右上角「AI Key」徽标隐藏（页内已有门控提示），其余 Tab 保留。
+- R-6.47c 设置页顶部「设置」标题 + 描述去除（两栏下左侧导航已自解释）；请求间隔改为**方案 A：单值基准 + UI 明示随机区间**（调研 Scrapy download_delay + 反爬行业共识后定，用户拍板）：输入框旁实时显示「实际每次 X–X+0.8 秒（随机）」，默认 1.0–1.8s、3000→3.0–3.8s、8000→8.0–8.8s 已实机验证。
 - 调试窗标题固定：`shell_window.py` 页级 `add_init_script`（`_COLLECT_DEBUG_TITLE_JS`）把采集调试窗标题统一为「XHS Leads · 采集调试窗口」（避免搜索词标题误读），非 extract.js。
