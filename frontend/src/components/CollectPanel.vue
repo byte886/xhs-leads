@@ -327,16 +327,17 @@ onMounted(async () => {
 .filters-line:hover { border-color: #e0b36b; box-shadow: 0 1px 4px rgba(224, 179, 107, .25); }
 .filters-line.open { border-color: #e0b36b; background: #fffaf0; }
 .fl-label { flex-shrink: 0; font-size: 12px; color: #666; font-weight: 600; }
+/* 已选条件完整显示：允许换行，不截断（选多项时自动多行） */
 .fl-value {
   flex: 1;
   min-width: 0;
   color: #b08a4d;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
 }
-.fl-none { flex: 1; min-width: 0; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-none { flex: 1; min-width: 0; color: #aaa; }
 /* 醒目倒三角：金色底胶囊按钮，一眼可点 */
 .fl-arrow {
   flex-shrink: 0;
