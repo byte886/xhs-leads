@@ -23,6 +23,7 @@ class FakePage:
         self.extra_headers: dict[str, str] = {}
         self._eval_results: dict[str, Any] = {}
         self._on_navigate = None
+        self._handlers: dict[str, list] = {}
 
     async def goto(self, url: str, wait_until: str = "load", timeout: int = 30000):
         self.url = url
@@ -54,7 +55,18 @@ class FakePage:
         pass
 
     def on(self, event: str, callback):
-        pass
+        self._handlers.setdefault(event, []).append(callback)
+
+    def emit(self, event: str):
+        for cb in list(self._handlers.get(event, [])):
+            cb()
+
+    def emit_close(self):
+        self.closed = True
+        self.emit("close")
+
+    def emit_crash(self):
+        self.emit("crash")
 
     async def bring_to_front(self):
         pass

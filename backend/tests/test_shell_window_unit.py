@@ -127,3 +127,33 @@ def test_shell_effective_none_when_session_rebuilt():
     shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")  # 旧会话引用
     ctx.pages = [FakePage("https://www.xiaohongshu.com/login?redirectPath=1")]  # 新会话页面
     assert sw._keeper_shell_effective(_FakeCoord(shell), ctx) is None
+
+
+# ---------------- R-6.48o：壳窗口崩溃（渲染器）→ 恢复清理 ----------------
+
+def test_recovery_cleanup_safe_keeps_crashed_shell():
+    """壳窗口崩溃：崩溃页（传入引用）保留由 Chrome 恢复，其余窗口关闭。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    newtab = FakePage("chrome://newtab")
+    ctx.pages = [shell, tab2, newtab]
+    shell.context = ctx
+    coord = sw.WindowCoordinator()
+    asyncio.run(coord._recovery_cleanup_safe(shell))
+    assert tab2.is_closed() and newtab.is_closed()
+    assert not shell.is_closed()
+
+
+def test_watch_shell_mounts_crash_handler():
+    """watch 挂载 crash 监听：壳窗渲染器崩溃 → 触发恢复清理调度（不炸、幂等）。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    ctx.pages = [shell, tab2]
+    coord = sw.WindowCoordinator()
+    coord.bind(None, None)
+    coord.watch(shell, is_shell=True)
+    coord.watch(shell, is_shell=True)  # 幂等：重复挂载不重复注册
+    # 无异常 + 第二次 watch 未重复注册（_watched 大小保持 1）
+    assert len(coord._watched) == 1

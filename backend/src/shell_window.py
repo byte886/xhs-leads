@@ -290,12 +290,45 @@ class WindowCoordinator:
             except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
                 pass
 
+        def _on_crash() -> None:
+            """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
+            App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
+            try:
+                if self._stop is not None and self._stop.is_set():
+                    return
+                if is_shell:
+                    print("[xhs-leads][keeper] 壳窗口崩溃，触发残留窗口清理", flush=True)
+                    try:
+                        loop = asyncio.get_event_loop()
+                        loop.call_later(3.0, lambda: asyncio.ensure_future(
+                            self._recovery_cleanup_safe(page)))
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
             # R-6.22j 取证：记录壳窗 close 时的 URL，定位「壳窗被关」来源
             page.on("close", lambda: print(
                 f"[xhs-leads][keeper] 壳窗 close 事件（url={page.url!r}）", flush=True))
             page.on("close", _on_close)
         except Exception:  # noqa: BLE001
+            pass
+        try:
+            page.on("crash", _on_crash)
+        except Exception:  # noqa: BLE001（事件不支持时静默：真实场景仍由 close/轮询兜底）
+            pass
+
+    async def _recovery_cleanup_safe(self, page):
+        """壳窗口崩溃后的恢复清理（延迟执行）：等 Chrome 会话恢复稳定后，
+        关闭非崩溃页的全部窗口，崩溃页本身保留由 Chrome 恢复。"""
+        try:
+            await asyncio.sleep(3.0)
+            ctx = page.context
+            n = await _keeper_recovery_cleanup(ctx, page)
+            if n:
+                print(f"[xhs-leads][keeper] 崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口", flush=True)
+        except Exception:  # noqa: BLE001（引擎已死/重连中：兜底轮询接管）
             pass
 
     # ---------------- 命令式方法 ----------------
