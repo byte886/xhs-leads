@@ -28,6 +28,45 @@ const distanceOptions = ['不限', '同城', '附近']
 /** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
 const showFilters = ref(false)
 
+/** 已选 chips 折叠阈值：>3 个折叠为「+N」，保持面板高度可预测（参考 Marigold/TDesign） */
+const CHIP_LIMIT = 3
+const chipsExpanded = ref(false)
+
+/** 筛选条件结构化（维度 key + 展示文本），供 chips 渲染与单条件移除 */
+function filterItems(): { key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance'; label: string }[] {
+  const p = appState.params
+  const items: { key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance'; label: string }[] = []
+  if (p.sort && p.sort !== '综合') items.push({ key: 'sort', label: `排序·${p.sort}` })
+  if (p.noteType && p.noteType !== '全部') items.push({ key: 'noteType', label: `类型·${p.noteType}` })
+  if (p.timeRange && p.timeRange !== '不限') items.push({ key: 'timeRange', label: `时间·${p.timeRange}` })
+  if (p.scope && p.scope !== '不限') items.push({ key: 'scope', label: `范围·${p.scope}` })
+  if (p.distance && p.distance !== '不限') items.push({ key: 'distance', label: `距离·${p.distance}` })
+  return items
+}
+
+/** chips 展示子集：折叠时只显示前 CHIP_LIMIT 个 */
+function shownFilters() {
+  return chipsExpanded.value ? filterItems() : filterItems().slice(0, CHIP_LIMIT)
+}
+
+/** 各维度默认值（未选状态） */
+const filterDefaults: Record<'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance', string> = {
+  sort: '综合', noteType: '全部', timeRange: '不限', scope: '不限', distance: '不限'
+}
+
+/** 单个 chip ×：直接移除该条件，无需重开面板 */
+function removeFilter(key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance') {
+  appState.params[key] = filterDefaults[key]
+}
+
+/** 清除全部：一键重置所有筛选维度 */
+function clearFilters() {
+  for (const k of Object.keys(filterDefaults) as ('sort' | 'noteType' | 'timeRange' | 'scope' | 'distance')[]) {
+    appState.params[k] = filterDefaults[k]
+  }
+  chipsExpanded.value = false
+}
+
 /** 结果上限步进：±1，clamp 1–200（输入框仍可自由输入） */
 function stepLimit(d: number) {
   const cur = Number(appState.params.limit) || 20
@@ -181,12 +220,25 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 筛选条件一行：默认直接显示已选内容，右侧倒三角展开全部选项 -->
+      <!-- 筛选条件：独立按钮（展开/收起面板）+ 已选 chips 区（每项可单独 × 移除） -->
       <div class="filters-line" :class="{ open: showFilters }" @click="showFilters = !showFilters">
         <span class="fl-label">筛选条件</span>
-        <span v-if="activeFilters().length" class="fl-value">{{ activeFilters().join(' · ') }}</span>
-        <span v-else class="fl-none">未选择（默认条件）</span>
+        <span class="fl-count">{{ filterItems().length ? `已选 ${filterItems().length} 项` : '未设置' }}</span>
         <span class="fl-arrow">▾</span>
+      </div>
+
+      <!-- 已选条件 chips：浅金胶囊、尾部 × 单个移除；>3 个折叠为 +N；可一键清除全部 -->
+      <div v-if="filterItems().length" class="chips-area">
+        <button v-for="f in shownFilters()" :key="f.key" class="chip" type="button" @click.stop="removeFilter(f.key)">
+          <span class="chip-label">{{ f.label }}</span><span class="chip-x">×</span>
+        </button>
+        <button v-if="filterItems().length > CHIP_LIMIT && !chipsExpanded" class="chip chip-more" type="button" @click.stop="chipsExpanded = true">
+          +{{ filterItems().length - CHIP_LIMIT }}
+        </button>
+        <button v-else-if="filterItems().length > CHIP_LIMIT" class="chip chip-more" type="button" @click.stop="chipsExpanded = false">
+          收起
+        </button>
+        <button class="chip-clear" type="button" @click.stop="clearFilters()">清除全部</button>
       </div>
 
       <div v-if="showFilters" class="opt-area">
@@ -327,17 +379,8 @@ onMounted(async () => {
 .filters-line:hover { border-color: #e0b36b; box-shadow: 0 1px 4px rgba(224, 179, 107, .25); }
 .filters-line.open { border-color: #e0b36b; background: #fffaf0; }
 .fl-label { flex-shrink: 0; font-size: 12px; color: #666; font-weight: 600; }
-/* 已选条件完整显示：允许换行，不截断（选多项时自动多行） */
-.fl-value {
-  flex: 1;
-  min-width: 0;
-  color: #b08a4d;
-  font-weight: 600;
-  white-space: normal;
-  word-break: break-word;
-  line-height: 1.4;
-}
-.fl-none { flex: 1; min-width: 0; color: #aaa; }
+/* 已选数量/未设置提示：弹性占位，把箭头顶到右侧 */
+.fl-count { flex: 1; min-width: 0; text-align: left; font-size: 11px; color: #b08a4d; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 醒目倒三角：金色底胶囊按钮，一眼可点 */
 .fl-arrow {
   flex-shrink: 0;
@@ -355,6 +398,52 @@ onMounted(async () => {
 }
 .filters-line:hover .fl-arrow { background: #e0b36b; color: #fff; }
 .filters-line.open .fl-arrow { background: #e0b36b; color: #fff; transform: rotate(180deg); }
+
+/* 已选条件 chips 区：浅金胶囊、自动换行、每项可单独移除 */
+.chips-area {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #8a6420;
+  background: #fdf3e0;
+  border: 1px solid #e8d5ac;
+  border-radius: 999px;
+  padding: 3px 8px;
+  cursor: default;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chip:hover { border-color: #e0b36b; background: #fdecc9; }
+.chip-x {
+  cursor: pointer;
+  color: #a5651f;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 1px;
+  border-radius: 50%;
+}
+.chip-x:hover { color: #c2410c; background: rgba(194, 65, 12, .12); }
+.chip-more { cursor: pointer; background: #fff; border: 1px dashed #d9c79a; color: #a5651f; font-weight: 600; }
+.chip-more:hover { border-color: #e0b36b; background: #fffaf0; }
+.chip-clear {
+  cursor: pointer;
+  font-size: 11px;
+  color: #999;
+  background: none;
+  border: none;
+  padding: 3px 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.chip-clear:hover { color: #c2410c; }
 
 /* 开始采集：独立整行 */
 .btn-search {
