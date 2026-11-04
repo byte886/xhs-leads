@@ -233,6 +233,19 @@ _register(
 # MutationObserver 事件驱动；remove 守卫每 10s 轮询补注（用户拍板：循环不可取）。
 # observe 锚点必须 document：add_init_script 极早期 document.body/head 为 null，
 # observe(null) 抛 TypeError 中断 IIFE（R-6.48i 标题同款坑）。
+# R-6.48m：登录页结构选择器集中管理——小红书改类名/结构只改这里，JS 生成自动插值
+# 防漂移；拦截判定由 decide_block 纯函数 + pytest 兜底（test_injections_decision.py）。
+LOGIN_PANEL_SELECTORS = (".container", ".reds-modal", ".login-container")
+LOGIN_MASK_SELECTOR = ".reds-mask"
+LOGIN_CLICK_EVENTS = ("pointerdown", "mousedown", "mouseup", "click")
+LOGIN_ESC_EVENTS = ("keydown", "keyup")
+
+
+def decide_block(hits_panel: bool, hits_mask: bool) -> bool:
+    """拦截判定纯函数：命中遮罩（点空白实际命中 .reds-mask）或不在登录组件内 → 拦截；组件内 → 放行。"""
+    return hits_mask or not hits_panel
+
+
 _FORCE_LOGIN_JS = (
     "(function(){"
     "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
@@ -250,20 +263,21 @@ _FORCE_LOGIN_JS = (
     "new MutationObserver(function(){ensureStyle();lockBtns();}).observe(document,{childList:true,subtree:true});"
     "/* R-6.48l：锁遮罩点击与 ESC——点登录组件外空白实际命中遮罩 .reds-mask，页面在其上绑关闭逻辑；" 
     "window+document 双捕获四事件（pointerdown/mousedown/mouseup/click）拦截，init script 保证最先注册，"
-    "target 不在登录组件内一律阻止（用户实机 bug：点空白登录组件消失并切到活动页）。 */"
+    "target 不在登录组件内一律阻止（用户实机 bug：点空白登录组件消失并切到活动页）。"
+    "选择器由 LOGIN_PANEL_SELECTORS/LOGIN_MASK_SELECTOR 常量生成（R-6.48m）。 */"
     "function blockIfMask(e){"
     "if(!e.target||!e.target.closest)return;"
-    "var t=e.target.closest('.container,.reds-modal,.login-container');"
-    "var isMask=!!e.target.closest('.reds-mask');"
+    "var t=e.target.closest('" + ",".join(LOGIN_PANEL_SELECTORS) + "');"
+    "var isMask=!!e.target.closest('" + LOGIN_MASK_SELECTOR + "');"
     "if(isMask||!t){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}"
     "}"
-    "['pointerdown','mousedown','mouseup','click'].forEach(function(ev){"
+    "['" + "','".join(LOGIN_CLICK_EVENTS) + "'].forEach(function(ev){"
     "window.addEventListener(ev,blockIfMask,true);document.addEventListener(ev,blockIfMask,true);"
     "});"
     "function escGuard(e){"
     "if(e.key==='Escape'||e.key==='Esc'){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}"
     "}"
-    "['keydown','keyup'].forEach(function(ev){"
+    "['" + "','".join(LOGIN_ESC_EVENTS) + "'].forEach(function(ev){"
     "window.addEventListener(ev,escGuard,true);document.addEventListener(ev,escGuard,true);"
     "});"
     "})();"
