@@ -87,7 +87,12 @@ function pickAuthor(a: Author) {
           <span class="v small">{{ appState.elapsed }}s</span>
         </div>
       </div>
-      <CardGrid :notes="appState.notes" @menu="emit('menu', $event)" />
+      <!-- 采集中空态：左侧条件已提交、结果尚未产出时的占位提示 -->
+      <div v-if="!appState.notes.length" class="empty" style="padding:48px 0">
+        <div class="big">{{ appState.collecting ? '正在采集中' : '暂无结果' }}</div>
+        <p>{{ appState.collecting ? '已按左侧条件开始采集，获取到的笔记会在此实时展示。' : '本次未获取到笔记，调整关键词或筛选条件后重新采集。' }}</p>
+      </div>
+      <CardGrid v-else :notes="appState.notes" @menu="emit('menu', $event)" />
       <div v-if="appState.searchNote" style="margin-top:12px;font-size:12px;color:var(--ink-2);background:#FFF7E6;border-radius:8px;padding:8px 12px">
         {{ appState.searchNote }}
       </div>

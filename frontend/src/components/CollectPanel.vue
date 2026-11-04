@@ -25,6 +25,9 @@ const timeOptions = ['不限', '一天内', '一周内', '半年内']
 const scopeOptions = ['不限', '已看过', '未看过', '已关注']
 const distanceOptions = ['不限', '同城', '附近']
 
+/** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
+const showFilters = ref(false)
+
 /** 已选筛选条件汇总：跳过默认值（综合/全部/不限），返回“非默认”条件列表 */
 function activeFilters(): string[] {
   const p = appState.params
@@ -149,44 +152,44 @@ onMounted(async () => {
 
 <template>
   <aside class="panel">
-    <!-- 采集功能 -->
-    <section>
-      <div class="sec-title">采集功能 <span class="tag">MVP</span></div>
-      <div class="param">
-        <label>采集方式</label>
-        <select style="width:100%" @change="() => toast('演示：其余采集方式即将上线')">
+    <!-- 常用输入：采集方式 / 关键词 / 结果上限（一行一条，不占多余标题行） -->
+    <section class="collect-sec">
+      <div class="param-line">
+        <span class="p-label">采集方式</span>
+        <select class="p-select" @change="() => toast('演示：其余采集方式即将上线')">
           <option v-for="o in collectOptions" :key="o.value" :value="o.value" :disabled="!o.enabled" :selected="o.value === 'kw'">
             {{ o.label }}
           </option>
         </select>
       </div>
-    </section>
-
-    <!-- 搜索参数 -->
-    <section>
-      <div class="sec-title">搜索参数</div>
-      <div class="param-grid">
+      <div class="param-row">
         <div class="param">
-          <label>关键词</label>
-          <input v-model="appState.params.keyword" placeholder="输入关键词，如：翡翠" @keyup.enter="doCollect" />
+          <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
         </div>
-        <div class="param-row">
-          <div class="param">
-            <label>结果上限</label>
-            <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
-          </div>
+        <div class="param param-num">
+          <input v-model.number="appState.params.limit" type="number" min="1" max="200" title="结果上限" placeholder="上限" />
+        </div>
+      </div>
+
+      <!-- 选项类：默认收起，展开后两行选完；收起时按钮与筛选开关同行 -->
+      <div class="line-actions">
+        <button class="filters-toggle" :class="{ open: showFilters }" @click="showFilters = !showFilters">
+          <span class="f-arrow">{{ showFilters ? '▾' : '▸' }}</span>
+          筛选选项
+          <span v-if="activeFilters().length" class="f-count">{{ activeFilters().length }}</span>
+        </button>
+        <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
+          <span v-if="appState.collecting" class="btn-spinner" />
+          {{ appState.collecting ? '停止采集' : '开始采集' }}
+        </button>
+      </div>
+
+      <div v-if="showFilters" class="opt-area">
+        <div class="opt-grid">
           <div class="param">
             <label>搜索排序</label>
             <select v-model="appState.params.sort" style="width:100%">
               <option v-for="s in sortOptions" :key="s">{{ s }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="param-row">
-          <div class="param">
-            <label>笔记类型</label>
-            <select v-model="appState.params.noteType" style="width:100%">
-              <option v-for="t in typeOptions" :key="t">{{ t }}</option>
             </select>
           </div>
           <div class="param">
@@ -195,8 +198,12 @@ onMounted(async () => {
               <option v-for="t in timeOptions" :key="t">{{ t }}</option>
             </select>
           </div>
-        </div>
-        <div class="param-row">
+          <div class="param">
+            <label>笔记类型</label>
+            <select v-model="appState.params.noteType" style="width:100%">
+              <option v-for="t in typeOptions" :key="t">{{ t }}</option>
+            </select>
+          </div>
           <div class="param">
             <label>搜索范围</label>
             <select v-model="appState.params.scope" style="width:100%">
@@ -218,16 +225,113 @@ onMounted(async () => {
             <span v-else class="filters-hint-none">未选择（按小红书默认：综合 / 全部 / 不限）</span>
           </div>
         </div>
-        <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
-          <span v-if="appState.collecting" class="btn-spinner" />
-          {{ appState.collecting ? '停止采集' : '开始采集' }}
-        </button>
       </div>
     </section>
   </aside>
 </template>
 
 <style scoped>
+/* 紧凑布局：一行内联采集方式；输入控件收紧高度；选项区折叠 */
+.collect-sec { display: flex; flex-direction: column; gap: 8px; }
+
+.param-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.p-label { font-size: 12px; color: var(--ink-2); flex-shrink: 0; }
+.p-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 7px;
+  background: #fff;
+  color: #333;
+}
+.p-select:focus, .param input:focus, .param select:focus { outline: none; border-color: #e0b36b; }
+
+.param-row { display: flex; gap: 8px; }
+.param-row > * { flex: 1; min-width: 0; }
+.param input, .param select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font-size: 13px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 7px;
+  background: #fff;
+  color: #333;
+}
+.param-num { flex: 0 0 92px; }
+.param-num input { text-align: right; }
+
+/* 折叠开关 + 采集按钮同行 */
+.line-actions { display: flex; gap: 8px; align-items: center; }
+.filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed #d5d5d5;
+  background: #fafafa;
+  color: #666;
+  font-size: 12px;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.filters-toggle:hover { border-color: #e0b36b; color: #b05a1f; background: #fff9f0; }
+.filters-toggle.open { border-style: solid; border-color: #e0b36b; color: #b05a1f; background: #fff9f0; }
+.f-arrow { font-size: 10px; }
+.f-count {
+  background: #e0b36b;
+  color: #fff;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+.btn-search {
+  flex: 1;
+  background: var(--red);
+  color: #fff;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 0;
+}
+.btn-search:hover { background: #E51F3A; }
+.btn-search.stop { background: #333; }
+.btn-search.stop:hover { background: #111; }
+
+/* 选项区：两行内选完 */
+.opt-area { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.opt-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.opt-grid .param label { font-size: 11px; color: var(--ink-2); display: block; margin-bottom: 3px; }
+.opt-grid .param select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 7px;
+  font-size: 12px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 7px;
+  background: #fff;
+  color: #333;
+}
+
 /* 搜索中按钮：转圈 + 禁用（淘宝式：点了等结果，无"停止"） */
 .btn-search:disabled {
   opacity: 0.7;
