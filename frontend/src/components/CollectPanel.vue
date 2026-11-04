@@ -186,7 +186,7 @@ onMounted(async () => {
         <span class="fl-label">筛选条件</span>
         <span v-if="activeFilters().length" class="fl-value">{{ activeFilters().join(' · ') }}</span>
         <span v-else class="fl-none">未选择（默认条件）</span>
-        <span class="fl-arrow">{{ showFilters ? '▴' : '▾' }}</span>
+        <span class="fl-arrow">▾</span>
       </div>
 
       <div v-if="showFilters" class="opt-area">
@@ -311,24 +311,22 @@ onMounted(async () => {
 .num-step:hover { background: #e8e8e8; color: #111; }
 .num-step:active { background: #ddd; }
 
-/* 筛选条件一行：默认显示已选内容 + 右侧倒三角展开全部选项 */
+/* 筛选条件一行：下拉控件视觉（白底实线边框 + 右侧醒目倒三角按钮） */
 .filters-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  border: 1px dashed #d5d5d5;
-  background: #fafafa;
-  color: #666;
-  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  background: #fff;
   border-radius: 7px;
-  padding: 7px 9px;
+  padding: 6px 8px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
   user-select: none;
 }
-.filters-line:hover { border-color: #e0b36b; background: #fff9f0; }
-.filters-line.open { border-style: solid; border-color: #e0b36b; background: #fff9f0; }
-.fl-label { flex-shrink: 0; color: var(--ink-2, #888); font-weight: 600; }
+.filters-line:hover { border-color: #e0b36b; box-shadow: 0 1px 4px rgba(224, 179, 107, .25); }
+.filters-line.open { border-color: #e0b36b; background: #fffaf0; }
+.fl-label { flex-shrink: 0; font-size: 12px; color: #666; font-weight: 600; }
 .fl-value {
   flex: 1;
   min-width: 0;
@@ -338,8 +336,24 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.fl-none { flex: 1; min-width: 0; color: var(--ink-3, #aaa); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fl-arrow { flex-shrink: 0; font-size: 10px; color: #999; }
+.fl-none { flex: 1; min-width: 0; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 醒目倒三角：金色底胶囊按钮，一眼可点 */
+.fl-arrow {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f6e6c8;
+  color: #a5651f;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.15s, transform 0.15s;
+}
+.filters-line:hover .fl-arrow { background: #e0b36b; color: #fff; }
+.filters-line.open .fl-arrow { background: #e0b36b; color: #fff; transform: rotate(180deg); }
 
 /* 开始采集：独立整行 */
 .btn-search {
