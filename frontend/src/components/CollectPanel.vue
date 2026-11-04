@@ -28,6 +28,12 @@ const distanceOptions = ['不限', '同城', '附近']
 /** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
 const showFilters = ref(false)
 
+/** 结果上限步进：±1，clamp 1–200（输入框仍可自由输入） */
+function stepLimit(d: number) {
+  const cur = Number(appState.params.limit) || 20
+  appState.params.limit = Math.min(200, Math.max(1, cur + d))
+}
+
 /** 已选筛选条件汇总：跳过默认值（综合/全部/不限），返回“非默认”条件列表 */
 function activeFilters(): string[] {
   const p = appState.params
@@ -167,7 +173,10 @@ onMounted(async () => {
           <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
         </div>
         <div class="param param-num">
-          <input v-model.number="appState.params.limit" type="number" min="1" max="200" title="结果上限" placeholder="上限" />
+          <span class="num-label">上限</span>
+          <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
+          <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
+          <button class="num-step" type="button" @click="stepLimit(1)">+</button>
         </div>
       </div>
 
@@ -264,8 +273,47 @@ onMounted(async () => {
   background: #fff;
   color: #333;
 }
-.param-num { flex: 0 0 92px; }
-.param-num input { text-align: right; }
+.param-num {
+  flex: 0 0 118px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 7px;
+  background: #fff;
+  padding: 0 6px;
+}
+.param-num input {
+  border: 0;
+  box-shadow: none;
+  padding: 7px 0;
+  text-align: center;
+  font-size: 13px;
+}
+.param-num input:focus { border: 0; }
+/* 隐藏原生上下箭头，用自定义步进按钮（跨浏览器一致） */
+.param-num input::-webkit-outer-spin-button,
+.param-num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.num-label { font-size: 12px; color: var(--ink-2); flex-shrink: 0; margin-right: 2px; }
+.num-step {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: #f4f4f4;
+  color: #555;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  user-select: none;
+}
+.num-step:hover { background: #e8e8e8; color: #111; }
+.num-step:active { background: #ddd; }
 
 /* 折叠开关 + 采集按钮同行 */
 .line-actions { display: flex; gap: 8px; align-items: center; }
