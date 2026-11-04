@@ -2,11 +2,11 @@ import { reactive, readonly, watch } from 'vue'
 import type { Note, SearchParams, Stage } from './types'
 
 const CONDITIONS_KEY = 'xhs_collect_conditions'
-const DEFAULT_PARAMS: SearchParams = {
-  keyword: '翡翠',
-  limit: 50,
+export const DEFAULT_PARAMS: SearchParams = {
+  keyword: '',
+  limit: 20,
   sort: '综合',
-  noteType: '全部',
+  noteType: '图文',
   timeRange: '不限',
   scope: '不限',
   distance: '不限',
