@@ -29,7 +29,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
@@ -59,6 +59,7 @@ from src.collect_pipeline import (  # noqa: E402
     get_note_detail_by_url,
     get_user_profile,
     search_via_browser,
+    set_rhythm,
 )
 from src import browser_client  # noqa: E402（快速档 _enrich_notes 直连详情/主页）
 from src import injections  # noqa: E402（R-6.30a：注入脚本集中注册表）
@@ -746,6 +747,9 @@ class SearchReq(BaseModel):
     distance: str = ""
     # 快速档：同页连续导航补全（去拟人等待），默认关（拟人串行，安全优先）
     fast: bool = False
+    # R-6.47 全局请求间隔（ms）：真实生效于采集补全节奏（set_rhythm）。
+    # 安全范围 1000–10000：下限 1s 尊重「勿再调快」拍板，上限 10s 防呆；默认 1000=(1.0,1.8) 与历史一致。
+    interval: int = Field(1000, ge=1000, le=10000)
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
     account_id: str = ""
 
@@ -1085,6 +1089,7 @@ async def collect_start(req: SearchReq):
 
     async def worker():
         try:
+            set_rhythm(req.interval)  # R-6.47：请求间隔真实生效（会话级节奏，默认 1000ms=1–1.8s 与历史一致）
             state["phase"] = "search"
             res = await search_via_browser(
                 req.keyword, req.limit,

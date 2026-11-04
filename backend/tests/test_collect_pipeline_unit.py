@@ -68,3 +68,28 @@ class TestMergeInteractions:
         note = {}
         cp._merge_detail_interactions(note, {"publish_time_ms": 1700000000000})
         assert note["publish_time"] == 1700000000
+
+
+class TestSetRhythm:
+    """R-6.47 全局请求间隔：会话节奏设置与安全范围 clamp。"""
+
+    def test_default_1000_equals_historical(self):
+        cp.set_rhythm(1000)
+        assert cp._RHYTHM == (1.0, 1.8)  # 默认与写死时代完全一致
+
+    def test_slow_down(self):
+        cp.set_rhythm(3000)
+        assert cp._RHYTHM == (3.0, 3.8)
+
+    def test_clamp_lower_bound(self):
+        cp.set_rhythm(500)  # 低于 1s：尊重「勿再调快」下限保护
+        assert cp._RHYTHM == (1.0, 1.8)
+
+    def test_clamp_upper_bound(self):
+        cp.set_rhythm(20000)  # 高于 10s：防呆上限
+        assert cp._RHYTHM == (10.0, 10.8)
+
+    def test_reset_to_default(self):
+        cp.set_rhythm(5000)
+        cp.set_rhythm(1000)
+        assert cp._RHYTHM == (1.0, 1.8)

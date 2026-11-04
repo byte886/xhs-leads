@@ -25,6 +25,22 @@ from src.score import rank_notes, _to_int  # noqa: E402
 REQUEST_INTERVAL = (1.0, 1.8)  # 真人浏览节奏：请求间随机 1-1.8s（用户拍板合理像人档，勿再调快）
 SESSION_MAX_NOTES = 20        # 单次采集会话最多 20 条（真人一次浏览的量级，勿一次拉太多）
 
+# R-6.47 请求间隔启用：会话级节奏由 server 按「全局请求间隔」设置，默认与 REQUEST_INTERVAL 一致
+_RHYTHM = REQUEST_INTERVAL
+
+
+def set_rhythm(interval_ms: int = 1000) -> None:
+    """按「全局请求间隔」设置采集会话节奏（毫秒）。
+
+    安全范围 1000–10000（pydantic 已校验，此处二次 clamp 兜底）：下限 1000ms = 1s，
+    尊重「勿再调快」拍板（不低于真人节奏下限）；上限 10s 防呆。
+    节奏 = (base, base + 0.8) 随机区间；默认 1000ms → (1.0, 1.8)，与历史行为完全一致。
+    fast 快速档不经过本节奏（_enrich_fast 直连无等待）。
+    """
+    global _RHYTHM
+    base = max(1.0, min(10.0, interval_ms / 1000.0))
+    _RHYTHM = (base, base + 0.8)
+
 
 def _parse_likes(s: str) -> int:
     """解析互动数：'151'→151, '1.2万'→12000, '3千'→3000, '999+'→999"""
@@ -119,7 +135,7 @@ async def get_feed_detail(note: dict, account_id: str = "default") -> dict:
     if d:
         _merge_detail_core(note, d)
         _merge_detail_interactions(note, d)
-    time.sleep(REQUEST_INTERVAL[0] + random.random() * (REQUEST_INTERVAL[1] - REQUEST_INTERVAL[0]))
+    time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     return note
 
 
@@ -131,7 +147,7 @@ async def get_note_detail_by_url(url: str, account_id: str = "default") -> dict:
         d = await browser_client.note_url(url, account_id=account_id)
     except Exception:  # noqa: BLE001
         return {}
-    time.sleep(REQUEST_INTERVAL[0] + random.random() * (REQUEST_INTERVAL[1] - REQUEST_INTERVAL[0]))
+    time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     return d or {}
 
 
@@ -201,7 +217,7 @@ async def get_user_profile(note: dict, cache: dict, account_id: str = "default")
             note["nickname"] = u["nickname"]
     cache[uid] = fans
     note["fans_count"] = fans
-    time.sleep(REQUEST_INTERVAL[0] + random.random() * (REQUEST_INTERVAL[1] - REQUEST_INTERVAL[0]))
+    time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     return note
 
 
@@ -282,7 +298,7 @@ async def _cli_search(args) -> list:
             print(f"[xhs-leads][collect] 「{kw}」→ +{len(notes_kw)} 条，累计去重 {len(all_notes)} 条")
         except Exception as e:  # noqa: BLE001
             print(f"[xhs-leads][collect] 「{kw}」失败: {e}")
-        time.sleep(REQUEST_INTERVAL[0] + random.random() * (REQUEST_INTERVAL[1] - REQUEST_INTERVAL[0]))
+        time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     notes = all_notes[: args.limit]
     print(f"[xhs-leads][collect] → 最终取 {len(notes)} 条（去重后）")
     return notes

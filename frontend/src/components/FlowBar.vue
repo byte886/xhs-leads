@@ -10,7 +10,7 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
   { id: 'collect', label: '采集', hint: '关键词采集笔记 · 评分排序' },
   { id: 'create', label: '创作', hint: '克隆 + AI 文稿 + 发布前质检' },
   { id: 'clients', label: '客户', hint: '线索 / 聚合 / 获客指引' },
-  { id: 'settings', label: '设置', hint: 'AI Key / 账号人设' },
+  { id: 'settings', label: '设置', hint: '账号 / 采集 / AI / 窗口 / 关于' },
 ]
 
 function jumpToSettings() {
@@ -54,7 +54,8 @@ onMounted(async () => {
         <span class="dot-s" :class="appState.login.logged_in ? 'on' : 'off'"></span>
         登录 {{ appState.login.kicked ? '已失效，请重新登录' : (appState.login.logged_in ? (appState.login.nickname || '已登录') : '未登录') }}
       </button>
-      <button class="sys-item" :class="appState.sys.aiKey ? 'ok' : 'bad'" @click="jumpToSettings()">
+      <!-- 设置页内已有 AI Key 门控提示，该页不再重复显示徽标（R-6.47） -->
+      <button v-if="appState.tab !== 'settings'" class="sys-item" :class="appState.sys.aiKey ? 'ok' : 'bad'" @click="jumpToSettings()">
         <span class="dot-s" :class="appState.sys.aiKey ? 'on' : 'off'"></span>
         AI Key {{ appState.sys.aiKey ? '已配置' : '未配置' }}
       </button>

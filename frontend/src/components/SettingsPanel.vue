@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// SettingsPanel v1.5：设置 Tab（AI 模型 Key 门控 / 账号人设）
-// 三卡收敛一页；配置后通过 appState.sys 全局状态条即时反映（共享观察）
+// SettingsPanel v2.0：设置 Tab（左侧分类导航 + 右侧逐项一行配置）
+// R-6.46 功能域分组 → R-6.47 两栏布局：账号 / 采集 / AI 能力 / 窗口与调试 / 关于与授权
 import { onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
@@ -12,10 +12,17 @@ import {
 } from '../api'
 import type { CookieItem } from '../api'
 
-// ---- 账号与登录（登录 UI 改版·用户拍板） ----
-// 设置页「账号与登录」区块：登录状态行 + 「重新登录」（唯一主动入口，登录页带叉可关闭，
-// 登录态不变）+ Cookie 只读（名称/完整值/域/有效期 + 「隐藏值」开关防截图外发泄露）
-// + 导入 Cookie（附加调试，保留自采集页旧链路）。
+// ---- 左侧分类导航 ----
+const cats = [
+  { id: 'account', label: '账号与登录' },
+  { id: 'collect', label: '采集设置' },
+  { id: 'ai', label: 'AI 能力' },
+  { id: 'window', label: '窗口与调试' },
+  { id: 'about', label: '关于与授权' },
+]
+const activeCat = ref('account')
+
+// ---- 账号与登录 ----
 const loggedIn = ref(false)
 const loginText = ref('检测中…')
 const cookieItems = ref<CookieItem[]>([])
@@ -83,10 +90,7 @@ async function doImport() {
   }
 }
 
-// ---- R 批 v1.4 / R-6.15：调试视图（引擎实时窗口） ----
-// 口径：登录自动开 / 调试手动开 / 平时关。
-// R-6.15 用户需求：调试视图从「截图映射」改为「引擎独立小窗」——开关切换引擎
-// 为有头小窗（headless=False，960x720），实时可见采集/登录操作过程；不再截图轮询。
+// ---- 调试视图 ----
 const dbgOpen = ref(false)
 const dbgNote = ref('')
 const dbgBusy = ref(false)
@@ -112,8 +116,7 @@ async function toggleDebug() {
   }
 }
 
-// R-6.18 壳窗口双 Tab：采集过程是否在壳窗口 Tab2 显示（collect_tab_visible）。
-// 开=采集 tab 前置可见（调试/演示）；关=采集后台完成、不抢前台（口径：平时关）。
+// ---- 壳窗口双 Tab ----
 const collectTabVisible = ref(false)
 const collectTabBusy = ref(false)
 
@@ -145,7 +148,7 @@ async function toggleCollectTab() {
   }
 }
 
-// ---- 授权状态（薄层：free 恒放行，展示模式/功能清单/指纹摘要） ----
+// ---- 授权状态 ----
 const lic = ref<{ mode: string; features: string[]; machine_fingerprint: string; has_activation: boolean }>()
 const actKey = ref('')
 const actBusy = ref(false)
@@ -212,8 +215,6 @@ async function saveAi() {
   }
 }
 async function clearAi() {
-  // 显式清除已配置 Key/Base/模型（空 key 保存=保留是保护设计，清除走独立接口）
-  // 可逆低风险操作（重新配置即可），直接执行 + toast 提示，不用原生 confirm（CDP 自动化/跨平台兼容问题）
   aiSaving.value = true
   try {
     await apiClearLLMConfig()
@@ -284,145 +285,210 @@ onMounted(async () => {
 <template>
   <div>
     <div class="page-title">设置</div>
-    <div class="page-desc">账号与登录、AI 能力、采集节奏、窗口显示，集中在这里配置；采集页只保留每次搜索的条件。</div>
+    <div class="page-desc">账号、采集、AI 与窗口，左侧选分类，右侧逐项配置。</div>
 
-    <!-- 账号与登录（登录 UI 改版·用户拍板）：状态行 + 重新登录 + Cookie 只读 + 导入 Cookie -->
-    <div class="set-card acct-card">
-      <div class="set-card-h">账号与登录</div>
-      <div class="acct-row">
-        <span class="acct-status" :class="{ on: loggedIn }">
-          {{ loginText }}{{ appState.login.nickname ? ' · ' + appState.login.nickname : '' }}
-        </span>
-        <button class="btn primary sm" @click="relogin">重新登录</button>
-      </div>
-      <p class="set-hint">
-        「重新登录」是唯一主动入口：进入小红书官方登录页（右上角「✕」可关闭，登录态不变）。
-        未登录 / 被踢 / 采集异常时，APP 会自动弹出强制登录对话框（不可关闭）。
-      </p>
-      <details class="cookie-fold">
-        <summary>
-          Cookie（只读 · {{ cookieItems.length }} 条）
-          <span class="mask-toggle" @click.prevent="maskOn = !maskOn">{{ maskOn ? '显示值' : '隐藏值' }}</span>
-        </summary>
-        <table class="cookie-table">
-          <thead>
-            <tr><th>名称</th><th>值</th><th>域</th><th>有效期</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in cookieItems" :key="c.name + c.domain">
-              <td class="mono">{{ c.name }}</td>
-              <td class="mono">{{ maskOn ? maskValue(c.value) : c.value }}</td>
-              <td class="mono">{{ c.domain }}</td>
-              <td>{{ fmtExp(c.expires) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p class="set-hint">会话仅存本机 data/cookies.json；值默认脱敏（防截图外发泄露），可点「显示值」查看完整内容。</p>
-      </details>
-      <div class="import-cookie">
-        <label class="f-label">导入 Cookie（附加调试）</label>
-        <textarea v-model="importText" rows="2" placeholder="name=value; name2=value2 或每行一条（域固定 .xiaohongshu.com）"></textarea>
-        <div class="set-actions">
-          <button class="btn" :disabled="!importText.trim()" @click="doImport">导入并校验</button>
-          <span v-if="importResult" class="import-result">{{ importResult }}</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 采集设置（R-6.46：从采集页移入——极速采集开关 + 请求间隔说明） -->
-    <div class="set-card acct-card">
-      <div class="set-card-h">采集设置</div>
-      <label class="set-switch">
-        <input type="checkbox" v-model="appState.params.fast" />
-        <span>极速采集</span>
-      </label>
-      <p class="set-hint">开启后跳过拟人等待，采集快约一倍（20 条约 5 分钟 → 2 分钟）；节奏更密、被平台风控的概率略升。建议默认关闭，赶数据时再开。</p>
-      <p class="set-hint" style="margin-top:10px">
-        <b>全局请求间隔</b>：系统已固定为真人浏览节奏（每次请求间隔 1–1.8 秒，安全档，防止被识别为机器操作）；开启极速采集时自动跳过该等待。
-      </p>
-    </div>
-
-    <div class="set-grid">
-      <!-- AI 模型 -->
-      <div class="set-card">
-        <div class="set-card-h">AI 模型（Key 门控）</div>
-        <label class="f-label">API Key <span class="limit">{{ aiCfg?.llm_api_key_masked ? '已配置 ' + aiCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span></label>
-        <input v-model="aiForm.api_key" type="password" placeholder="sk-..." style="width:100%" />
-        <label class="f-label">Base URL（OpenAI 兼容端点）</label>
-        <input v-model="aiForm.openai_base_url" placeholder="https://api.openai.com/v1" style="width:100%" />
-        <label class="f-label">模型名称</label>
-        <input v-model="aiForm.default_model" placeholder="gpt-4o-mini / deepseek-chat / claude-…" style="width:100%" />
-        <p class="set-hint">兼容 OpenAI / DeepSeek / 通义 / 中转站 / Claude（base_url 填 api.anthropic.com/v1）。未配置时，创作页 AI 工具条与发布前质检灰态。</p>
-        <div class="set-actions">
-          <button class="btn" @click="testAi">测试连接</button>
-          <button class="btn primary" :disabled="aiSaving" @click="saveAi">{{ aiSaving ? '保存中…' : '保存配置' }}</button>
-          <button v-if="aiCfg?.configured" class="btn danger" :disabled="aiSaving" @click="clearAi">清除配置</button>
-        </div>
-        <div class="gate-msg" :class="{ ok: aiCfg?.configured }">
-          {{ aiCfg?.configured ? '✅ 已配置 AI 模型 —— 文稿生成 / 发布前质检可用' : '⚠ 当前未配置 AI 模型 —— AI 功能处于灰态' }}
-        </div>
+    <div class="settings-layout">
+      <!-- 左侧分类导航 -->
+      <div class="settings-nav">
+        <button
+          v-for="c in cats"
+          :key="c.id"
+          class="nav-item"
+          :class="{ cur: activeCat === c.id }"
+          @click="activeCat = c.id"
+        >{{ c.label }}</button>
       </div>
 
-      <!-- 账号人设 -->
-      <div class="set-card">
-        <div class="set-card-h">账号人设（AI 生成口吻）</div>
-        <label class="f-label">行业 / 主营品类</label>
-        <input v-model="persona.industry" placeholder="如：珠宝翡翠、护肤、餐饮…" style="width:100%" />
-        <label class="f-label">人设口吻</label>
-        <input v-model="persona.tone" placeholder="如：干货型 / 分享型 / 探店型…" style="width:100%" />
-        <label class="f-label">常发主题</label>
-        <input v-model="persona.topics" placeholder="逗号分隔，如：避坑指南、性价比测评…" style="width:100%" />
-        <p class="set-hint">AI 生成标题/正文/标签时保持人设一致，避免"宝子们/家人们/谁懂啊"式通用 AI 味。</p>
-        <div class="set-actions">
-          <button class="btn primary" :disabled="personaSaving || !personaLoaded" @click="savePersona">{{ personaSaving ? '保存中…' : '保存人设' }}</button>
-        </div>
-      </div>
+      <!-- 右侧内容区 -->
+      <div class="settings-body">
+        <!-- 账号与登录 -->
+        <section v-if="activeCat === 'account'">
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">登录状态</span>
+              <span class="acct-status" :class="{ on: loggedIn }">
+                {{ loginText }}{{ appState.login.nickname ? ' · ' + appState.login.nickname : '' }}
+              </span>
+              <button class="btn primary sm" @click="relogin">重新登录</button>
+            </div>
+            <p class="set-hint">
+              「重新登录」是唯一主动入口：进入小红书官方登录页（右上角「✕」可关闭，登录态不变）。
+              未登录 / 被踢 / 采集异常时，APP 会自动弹出强制登录对话框（不可关闭）。
+            </p>
+          </div>
+          <div class="set-row">
+            <details class="cookie-fold">
+              <summary>
+                Cookie（只读 · {{ cookieItems.length }} 条）
+                <span class="mask-toggle" @click.prevent="maskOn = !maskOn">{{ maskOn ? '显示值' : '隐藏值' }}</span>
+              </summary>
+              <table class="cookie-table">
+                <thead>
+                  <tr><th>名称</th><th>值</th><th>域</th><th>有效期</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="c in cookieItems" :key="c.name + c.domain">
+                    <td class="mono">{{ c.name }}</td>
+                    <td class="mono">{{ maskOn ? maskValue(c.value) : c.value }}</td>
+                    <td class="mono">{{ c.domain }}</td>
+                    <td>{{ fmtExp(c.expires) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="set-hint">会话仅存本机 data/cookies.json；值默认脱敏（防截图外发泄露），可点「显示值」查看完整内容。</p>
+            </details>
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">导入 Cookie（附加调试）</span>
+            </div>
+            <textarea v-model="importText" rows="2" placeholder="name=value; name2=value2 或每行一条（域固定 .xiaohongshu.com）"></textarea>
+            <div class="set-actions">
+              <button class="btn" :disabled="!importText.trim()" @click="doImport">导入并校验</button>
+              <span v-if="importResult" class="import-result">{{ importResult }}</span>
+            </div>
+          </div>
+        </section>
 
-      <!-- 壳窗口双 Tab（R-6.18：采集过程显示开关） -->
-      <div class="set-card">
-        <div class="set-card-h">壳窗口 Tab（采集过程显示）</div>
-        <p class="set-hint">APP 壳窗口内固定两个 Tab：Tab1 应用/登录（固定不可关，关闭即自动恢复），Tab2 采集。此开关控制 Tab2：开=采集画面前置可见（调试/演示，Tab2 常驻不可手动关）；关=采集后台完成、不抢前台，空闲时 Tab2 自动收起（平时推荐）。开关即时生效。</p>
-        <div class="set-actions">
-          <button class="btn" :disabled="collectTabBusy" @click="toggleCollectTab">
-            {{ collectTabVisible ? '关闭采集画面（后台采集）' : '打开采集画面（Tab2 显示）' }}
-          </button>
-          <span class="dbg-note" style="margin-left:12px">{{ collectTabVisible ? '✔ 当前：采集画面可见（Tab2）' : '当前：采集后台运行（不显示）' }}</span>
-        </div>
-      </div>
+        <!-- 采集设置 -->
+        <section v-if="activeCat === 'collect'">
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">极速采集</span>
+              <label class="switch">
+                <input type="checkbox" v-model="appState.params.fast" />
+                <span class="track"><span class="thumb" /></span>
+              </label>
+              <span class="cur-val">{{ appState.params.fast ? '已开启' : '已关闭' }}</span>
+            </div>
+            <p class="set-hint">
+              开启后跳过拟人等待，采集快约一倍（20 条约 5 分钟 → 2 分钟）；节奏更密、被平台风控的概率略升。
+              建议默认关闭，赶数据时再开。
+            </p>
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">全局请求间隔</span>
+              <input v-model.number="appState.params.interval" type="number" min="1000" max="10000" step="100" class="num-input" />
+              <span class="unit">毫秒</span>
+              <span class="cur-val">{{ (appState.params.interval / 1000).toFixed(1) }} 秒</span>
+            </div>
+            <p class="set-hint">
+              每次页面操作之间的间隔。安全范围 1–10 秒，默认 1 秒（真人浏览节奏）。
+              调大 = 采集更慢更稳；下限 1 秒受系统保护（不能更快，防风控）。开启极速采集时自动跳过该等待。
+            </p>
+          </div>
+        </section>
 
-      <!-- 调试视图（R 批 v1.4 / R-6.15：引擎实时窗口） -->
-      <div class="set-card">
-        <div class="set-card-h">调试视图（引擎实时窗口）</div>
-        <p class="set-hint">开关切换引擎为独立小窗（真实浏览器窗口，960×720），采集/登录时实时可见每一步操作过程（滚动、点击、跳页）——不是截图。切换会重启引擎一次（登录态自动保留）。口径：调试手动开 / 平时关。</p>
-        <div class="set-actions">
-          <button v-if="!dbgOpen" class="btn primary" :disabled="dbgBusy" @click="toggleDebug">打开实时引擎窗口</button>
-          <button v-else class="btn danger" :disabled="dbgBusy" @click="toggleDebug">关闭实时窗口（回无头）</button>
-        </div>
-        <div v-if="dbgOpen" class="dbg-open">
-          <p class="dbg-note">✔ 实时窗口已打开：桌面可见引擎小窗（Chrome for Testing），正在实时展示引擎页面操作。可拖动/缩放/最小化，采集开始后即可观察全过程。</p>
-          <p v-if="dbgNote" class="dbg-note">{{ dbgNote }}</p>
-          <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
-        </div>
-        <p v-if="dbgFailed && !dbgOpen" class="dbg-fail">{{ dbgFailed }}</p>
-      </div>
-    </div>
+        <!-- AI 能力 -->
+        <section v-if="activeCat === 'ai'">
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">API Key</span>
+              <span class="limit">{{ aiCfg?.llm_api_key_masked ? '已配置 ' + aiCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
+            </div>
+            <input v-model="aiForm.api_key" type="password" placeholder="sk-..." class="full-input" />
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">Base URL（OpenAI 兼容端点）</span>
+            </div>
+            <input v-model="aiForm.openai_base_url" placeholder="https://api.openai.com/v1" class="full-input" />
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">模型名称</span>
+            </div>
+            <input v-model="aiForm.default_model" placeholder="gpt-4o-mini / deepseek-chat / claude-…" class="full-input" />
+            <div class="set-actions">
+              <button class="btn" @click="testAi">测试连接</button>
+              <button class="btn primary" :disabled="aiSaving" @click="saveAi">{{ aiSaving ? '保存中…' : '保存配置' }}</button>
+              <button v-if="aiCfg?.configured" class="btn danger" :disabled="aiSaving" @click="clearAi">清除配置</button>
+            </div>
+            <div class="gate-msg" :class="{ ok: aiCfg?.configured }">
+              {{ aiCfg?.configured ? '✅ 已配置 AI 模型 —— 文稿生成 / 发布前质检可用' : '⚠ 当前未配置 AI 模型 —— AI 功能处于灰态' }}
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">行业 / 主营品类</span>
+            </div>
+            <input v-model="persona.industry" placeholder="如：珠宝翡翠、护肤、餐饮…" class="full-input" />
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">人设口吻</span>
+            </div>
+            <input v-model="persona.tone" placeholder="如：干货型 / 分享型 / 探店型…" class="full-input" />
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">常发主题</span>
+            </div>
+            <input v-model="persona.topics" placeholder="逗号分隔，如：避坑指南、性价比测评…" class="full-input" />
+            <p class="set-hint">AI 生成标题/正文/标签时保持人设一致，避免"宝子们/家人们/谁懂啊"式通用 AI 味。</p>
+            <div class="set-actions">
+              <button class="btn primary" :disabled="personaSaving || !personaLoaded" @click="savePersona">{{ personaSaving ? '保存中…' : '保存人设' }}</button>
+            </div>
+          </div>
+        </section>
 
-    <!-- 关于与授权（R-6.46：lic 横条 → 正式卡片，补版本号） -->
-    <div class="set-card acct-card" v-if="lic">
-      <div class="set-card-h">关于与授权</div>
-      <div class="acct-row">
-        <span class="lic-tag" :class="{ on: lic.mode === 'activation' && lic.has_activation }">
-          {{ lic.mode === 'free' ? '免费版' : (lic.has_activation ? '激活版' : '未激活') }}
-        </span>
-        <span>版本 2.0.0</span>
-        <span class="lic-fp" :title="lic.machine_fingerprint">设备指纹：{{ lic.machine_fingerprint.slice(0, 12) }}…</span>
-        <span v-if="lic.has_activation && lic.mode !== 'free'" class="lic-ok">✓ 已激活（机器码绑定）</span>
-      </div>
-      <p class="set-hint">已开通功能：{{ lic.features.join(' / ') }}</p>
-      <div v-if="lic.mode !== 'free'" class="set-actions">
-        <input v-model="actKey" placeholder="粘贴卖家提供的激活码" style="flex:1;min-width:240px" @keyup.enter="activateLicense" />
-        <button class="btn primary sm" :disabled="actBusy" @click="activateLicense">{{ actBusy ? '激活中…' : '激活' }}</button>
-        <span class="set-hint" style="margin:0">激活码由卖家按设备指纹签发，一台设备一个码</span>
+        <!-- 窗口与调试 -->
+        <section v-if="activeCat === 'window'">
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">壳窗口 Tab（采集画面显示）</span>
+              <label class="switch">
+                <input type="checkbox" :checked="collectTabVisible" @change="toggleCollectTab" />
+                <span class="track"><span class="thumb" /></span>
+              </label>
+              <span class="cur-val">{{ collectTabVisible ? '已开启' : '已关闭' }}</span>
+            </div>
+            <p class="set-hint">
+              APP 壳窗口固定两个 Tab：Tab1 应用/登录（固定不可关），Tab2 采集。开 = 采集画面前置可见（调试/演示）；
+              关 = 采集后台完成、不抢前台（平时推荐）。开关即时生效。
+            </p>
+          </div>
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">调试视图（引擎实时窗口）</span>
+              <button v-if="!dbgOpen" class="btn primary sm" :disabled="dbgBusy" @click="toggleDebug">打开实时引擎窗口</button>
+              <button v-else class="btn danger sm" :disabled="dbgBusy" @click="toggleDebug">关闭实时窗口（回无头）</button>
+            </div>
+            <p class="set-hint">
+              切换引擎为独立小窗（真实浏览器窗口 960×720），采集/登录时实时可见每一步操作（滚动、点击、跳页）——不是截图。
+              切换会重启引擎一次（登录态自动保留）。口径：调试手动开 / 平时关。
+            </p>
+            <div v-if="dbgOpen" class="dbg-open">
+              <p class="dbg-note">✔ 实时窗口已打开：桌面可见引擎小窗，采集开始后即可观察全过程。</p>
+              <p v-if="dbgNote" class="dbg-note">{{ dbgNote }}</p>
+            </div>
+            <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
+          </div>
+        </section>
+
+        <!-- 关于与授权 -->
+        <section v-if="activeCat === 'about'">
+          <div class="set-row" v-if="lic">
+            <div class="row-main">
+              <span class="row-label">授权状态</span>
+              <span class="lic-tag" :class="{ on: lic.mode === 'activation' && lic.has_activation }">
+                {{ lic.mode === 'free' ? '免费版' : (lic.has_activation ? '激活版' : '未激活') }}
+              </span>
+              <span class="lic-fp" :title="lic.machine_fingerprint">版本 2.0.0 · 设备指纹 {{ lic.machine_fingerprint.slice(0, 12) }}…</span>
+              <span v-if="lic.has_activation && lic.mode !== 'free'" class="lic-ok">✓ 已激活（机器码绑定）</span>
+            </div>
+            <p class="set-hint">已开通功能：{{ lic.features.join(' / ') }}</p>
+          </div>
+          <div class="set-row" v-if="lic && lic.mode !== 'free'">
+            <div class="row-main">
+              <span class="row-label">激活码</span>
+              <input v-model="actKey" placeholder="粘贴卖家提供的激活码" class="full-input" @keyup.enter="activateLicense" />
+              <button class="btn primary sm" :disabled="actBusy" @click="activateLicense">{{ actBusy ? '激活中…' : '激活' }}</button>
+            </div>
+            <p class="set-hint">激活码由卖家按设备指纹签发，一台设备一个码。</p>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -431,32 +497,79 @@ onMounted(async () => {
 <style scoped>
 .page-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
 .page-desc { font-size: 12.5px; color: var(--ink-2, #888); margin-bottom: 16px; line-height: 1.6; }
-.set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 1100px) { .set-grid { grid-template-columns: 1fr; } }
-.lic-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 9px 14px; margin-bottom: 14px; border: 1px solid #e6e6eb; border-radius: 8px; background: #fafafa; font-size: 13px; color: #444; }
-.lic-bar.lic-act { gap: 10px; }
-.lic-tag { padding: 2px 10px; border-radius: 999px; background: #e8f5e9; color: #2e7d32; font-weight: 600; }
-.lic-tag.on { background: #e3f2fd; color: #1565c0; }
-.lic-ok { color: #2e7d32; font-weight: 600; }
-.lic-fp { color: #888; font-family: monospace; font-size: 12px; }
-.set-card {
+
+/* 两栏布局：左侧分类导航 + 右侧逐项列表 */
+.settings-layout { display: flex; gap: 16px; align-items: flex-start; }
+.settings-nav {
+  width: 148px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 4px;
+  position: sticky; top: 0;
+}
+.nav-item {
+  text-align: left; padding: 10px 14px; border-radius: 10px;
+  border: 1px solid transparent; background: transparent;
+  font-size: 13px; color: #555; cursor: pointer; user-select: none;
+  transition: all .15s;
+}
+.nav-item:hover { background: #f5f5f7; color: #222; }
+.nav-item.cur {
+  background: #fff; color: #ff2442; font-weight: 700;
+  border-color: #ffe2e8; box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  border-left: 3px solid #ff2442;
+}
+.settings-body { flex: 1; min-width: 0; }
+
+/* 每项一行 */
+.set-row {
   background: var(--bg-card, #fff);
   border: 1px solid var(--line, #ececec);
   border-radius: 12px;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
 }
-.set-card-h { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
-.acct-card { margin-bottom: 16px; gap: 10px; }
-.acct-row { display: flex; align-items: center; gap: 12px; }
+.row-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.row-label { font-size: 13px; font-weight: 700; color: #333; min-width: 150px; }
+.set-hint { font-size: 12px; color: var(--ink-3, #999); line-height: 1.6; margin: 8px 0 0; }
+.cur-val { font-size: 12px; color: #b08a4d; font-weight: 600; }
+.unit { font-size: 12px; color: #888; }
+.num-input { width: 110px; }
+.full-input { width: 100%; box-sizing: border-box; margin-top: 8px; }
+textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; margin-top: 8px;
+  border: 1px solid var(--line, #e5e5e5); border-radius: 8px;
+  padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace;
+}
+input:not([type="checkbox"]) {
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fff;
+}
+
+/* 开关 */
+.switch { display: inline-flex; align-items: center; cursor: pointer; }
+.switch input { display: none; }
+.switch .track {
+  width: 38px; height: 22px; border-radius: 999px;
+  background: #d9d9de; position: relative; transition: background .18s;
+  display: inline-block;
+}
+.switch .thumb {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: left .18s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+.switch input:checked + .track { background: #ff2442; }
+.switch input:checked + .track .thumb { left: 19px; }
+
+/* 状态元素 */
 .acct-status {
   font-size: 13px; font-weight: 600; color: #c0392b;
   padding: 4px 12px; border-radius: 999px; background: #fdf0ef;
 }
 .acct-status.on { color: #1a7f4c; background: #eaf7ef; }
-.cookie-fold { border-top: 1px dashed #ececec; padding-top: 8px; }
+.cookie-fold { border-top: 1px dashed #ececec; padding-top: 8px; margin-top: 4px; }
 .cookie-fold summary { font-size: 12.5px; font-weight: 600; color: #555; cursor: pointer; user-select: none; }
 .mask-toggle {
   margin-left: 10px; font-weight: 600; color: #1565c0; cursor: pointer; font-size: 12px;
@@ -473,45 +586,25 @@ onMounted(async () => {
   word-break: break-all;
 }
 .cookie-table .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
-.import-cookie { margin-top: 10px; }
-.import-cookie textarea {
-  width: 100%; box-sizing: border-box; resize: vertical;
-  border: 1px solid var(--line, #e5e5e5); border-radius: 8px;
-  padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace;
-}
+.set-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .import-result { font-size: 12px; color: #1a7f4c; margin: auto 0 0 4px; }
-.f-label { font-size: 12px; color: var(--ink-2, #666); font-weight: 600; margin-top: 6px; }
-.f-label .limit { color: #b08a4d; font-weight: 500; margin-left: 4px; }
-input {
-  border: 1px solid var(--line, #e5e5e5);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
-  background: #fff;
-}
-.set-hint { font-size: 12px; color: var(--ink-3, #aaa); line-height: 1.6; margin: 4px 0 0; }
-.set-switch { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: #444; cursor: pointer; user-select: none; }
-.set-switch input { accent-color: #ff2442; }
-.set-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.limit { color: #b08a4d; font-weight: 500; font-size: 12px; }
+.lic-tag { padding: 2px 10px; border-radius: 999px; background: #e8f5e9; color: #2e7d32; font-weight: 600; font-size: 12px; }
+.lic-tag.on { background: #e3f2fd; color: #1565c0; }
+.lic-ok { color: #2e7d32; font-weight: 600; font-size: 12px; }
+.lic-fp { color: #888; font-family: monospace; font-size: 11.5px; }
 .gate-msg {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #FFF7E6;
-  border: 1px solid #FFE2B8;
-  color: #B45409;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  margin-top: 10px;
+  display: flex; align-items: center; gap: 8px;
+  background: #FFF7E6; border: 1px solid #FFE2B8; color: #B45409;
+  border-radius: 8px; padding: 10px 12px; font-size: 12px; margin-top: 12px;
 }
 .gate-msg.ok { background: #F2FBF5; border-color: #BFE8D0; color: #1a7f4c; }
-.dbg-frame {
-  border: 1px solid #e5e5e5; border-radius: 8px; overflow: hidden;
-  background: #f7f7f7; text-align: center; margin-top: 8px;
+.dbg-note { font-size: 12px; color: #1a7f4c; margin: 8px 0 0; }
+.dbg-fail { font-size: 12px; color: #c0392b; margin: 8px 0 0; }
+
+@media (max-width: 720px) {
+  .settings-layout { flex-direction: column; }
+  .settings-nav { width: 100%; flex-direction: row; overflow-x: auto; position: static; }
+  .nav-item { white-space: nowrap; }
 }
-.dbg-img { width: 100%; max-height: 360px; object-fit: contain; cursor: crosshair; display: block; user-select: none; }
-.dbg-empty { padding: 60px 0; color: #999; font-size: 13px; }
-.dbg-hint { font-size: 11px; color: #aaa; padding: 4px 0; margin: 0; }
-.dbg-fail { font-size: 12px; color: #c0392b; margin: 4px 0 0; text-align: left; }
 </style>
