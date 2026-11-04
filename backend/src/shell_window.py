@@ -981,15 +981,36 @@ async def _keeper_tab2_target_url(config, engine_pool):
 
 
 async def _keeper_sweep_blank(ctx, shell):
-    """清理 about:blank 残留与独立登录残留 tab（壳窗引用跳过）。"""
+    """清理空白/残留 tab（壳窗引用跳过）。
+
+    R-6.48o：扩展 chrome://newtab 清理——引擎崩溃后 Chrome 会话恢复会把崩溃前
+    的标签全部还原，新上下文首个默认页 chrome://newtab 也在此列；此前只清
+    ""/about:blank 导致崩溃恢复后残留空标签（用户实测：崩溃重启后多出空白窗口）。
+    """
     for p in list(ctx.pages):
         if p is shell or p.is_closed():
             continue
         u = (p.url or "").strip()
-        if u in ("", "about:blank"):
+        if u in ("", "about:blank", "chrome://newtab", "chrome://newtab/"):
             await _safe_close(p)
         elif "xiaohongshu.com" in u and "/login" in u:
             await _safe_close(p)
+
+
+async def _keeper_recovery_cleanup(ctx, shell) -> int:
+    """崩溃恢复清理：壳窗在监护期间失效后重新找到 → 关闭所有非主窗口残留。
+
+    R-6.48o：引擎崩溃 → Chrome 会话恢复还原全部标签（调试窗 Tab2、残留页）。
+    用户拍板「崩溃后要关闭所有相关窗口，重启时关闭之前未关闭的窗口」——
+    恢复后只保留主窗口（登录壳），其余全部关闭。返回关闭数。
+    """
+    closed = 0
+    for p in list(ctx.pages):
+        if p is shell or p.is_closed():
+            continue
+        await _safe_close(p)
+        closed += 1
+    return closed
 
 
 async def _safe_close(p) -> None:
@@ -1095,7 +1116,14 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
         eng = await engine_pool.pool.get("default")
         ctx = await eng.context()
         _keeper_log_snapshot(ctx, coord, last)
+        # R-6.48o：崩溃恢复检测——调用前壳窗引用已失效（引擎崩溃/会话重建），
+        # 扫描后重新找到 → 判定为崩溃恢复，关闭所有非主窗口残留。
+        was_dead = coord.shell() is None
         shell = await _keeper_find_shell(ctx, base, coord)
+        if was_dead and shell is not None:
+            n = await _keeper_recovery_cleanup(ctx, shell)
+            if n:
+                print(f"[xhs-leads][keeper] 崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口", flush=True)
         if shell is not None:
             coord.register_shell(shell)
             coord.watch(shell, is_shell=True)

@@ -38,3 +38,55 @@ def test_close_matching_skips_closed():
     ctx.pages = [p]
     asyncio.run(sw._close_matching_tabs(ctx, None, lambda x: True))
     # 已关闭不重复操作
+
+
+# ---------------- R-6.48o：崩溃恢复残留清理 ----------------
+
+def test_sweep_blank_closes_newtab_residue():
+    """引擎崩溃后 Chrome 会话恢复会还原 chrome://newtab 默认页——必须清理。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    residue = [
+        FakePage("chrome://newtab"),
+        FakePage("chrome://newtab/"),
+        FakePage("about:blank"),
+        FakePage(""),
+    ]
+    ctx.pages = [shell, *residue]
+    asyncio.run(sw._keeper_sweep_blank(ctx, shell))
+    assert all(p.is_closed() for p in residue), "newtab/blank 残留必须全部关闭"
+    assert not shell.is_closed(), "壳窗必须保留"
+
+
+def test_sweep_blank_keeps_working_pages():
+    """正常运行的页面（explore/login-hint/任务页）不被 sweep 误关。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    explore = FakePage("https://www.xiaohongshu.com/explore")
+    ctx.pages = [shell, tab2, explore]
+    asyncio.run(sw._keeper_sweep_blank(ctx, shell))
+    assert not tab2.is_closed() and not explore.is_closed()
+
+
+def test_recovery_cleanup_closes_all_non_shell():
+    """崩溃恢复：只保留主窗口，其余（调试窗 Tab2/残留）全部关闭。"""
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    newtab = FakePage("chrome://newtab")
+    ctx.pages = [shell, tab2, newtab]
+    n = asyncio.run(sw._keeper_recovery_cleanup(ctx, shell))
+    assert n == 2
+    assert tab2.is_closed() and newtab.is_closed()
+    assert not shell.is_closed()
+
+
+def test_recovery_cleanup_skips_closed_and_shell():
+    ctx = FakeContext()
+    shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
+    dead = FakePage("http://127.0.0.1:8791/login-hint")
+    dead.closed = True
+    ctx.pages = [shell, dead]
+    n = asyncio.run(sw._keeper_recovery_cleanup(ctx, shell))
+    assert n == 0
