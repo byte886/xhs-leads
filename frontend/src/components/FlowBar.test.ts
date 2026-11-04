@@ -31,13 +31,12 @@ describe('FlowBar', () => {
     expect(appState.tab).toBe('clients')
   })
 
-  it('当前 Tab 带 cur class 且 hint 随 Tab 切换', async () => {
+  it('当前 Tab 带 cur class', async () => {
     const w = mount(FlowBar)
     setTab('create')
     await w.vm.$nextTick()
     const cur = w.find('.tab.cur')
     expect(cur.text()).toContain('创作')
-    expect(w.find('.flow-hint').text()).toContain('克隆')
   })
 
   it('挂载后拉取登录态写入 appState.login', async () => {

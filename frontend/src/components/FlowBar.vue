@@ -1,16 +1,17 @@
 <script setup lang="ts">
-// FlowBar v1.5：工作流 4-Tab（采集 → 创作 → 客户 → 设置）+ 全局共享状态条
+// FlowBar v1.6：工作流 4-Tab（采集 → 创作 → 客户 → 设置）+ 全局共享状态条
 // 状态条 = 共享观察落点：登录态 / AI Key 一屏可见，任何 Tab 都能看到，点击跳对应设置
+// v1.6：移除右上角 flow-hint（各 Tab 描述冗余，页内信息已自解释）
 import { onMounted } from 'vue'
 import { appState, setTab, refreshSysStatus } from '../store'
 import type { Tab } from '../store'
 import { apiLoginStatus, apiGetLLMConfig } from '../api'
 
-const tabs: { id: Tab; label: string; hint: string }[] = [
-  { id: 'collect', label: '采集', hint: '关键词采集笔记 · 评分排序' },
-  { id: 'create', label: '创作', hint: '克隆 + AI 文稿 + 发布前质检' },
-  { id: 'clients', label: '客户', hint: '线索 / 聚合 / 获客指引' },
-  { id: 'settings', label: '设置', hint: '账号 / 采集 / AI / 窗口 / 关于' },
+const tabs: { id: Tab; label: string }[] = [
+  { id: 'collect', label: '采集' },
+  { id: 'create', label: '创作' },
+  { id: 'clients', label: '客户' },
+  { id: 'settings', label: '设置' },
 ]
 
 function jumpToSettings() {
@@ -39,13 +40,11 @@ onMounted(async () => {
         <button
           class="tab"
           :class="{ cur: appState.tab === t.id }"
-          :title="t.hint"
           @click="setTab(t.id)"
         >
           <span class="dot">{{ i + 1 }}</span>{{ t.label }}
         </button>
       </template>
-      <div class="flow-hint">{{ tabs.find(t => t.id === appState.tab)?.hint }}</div>
     </div>
 
     <!-- 全局共享状态条（跨页观察：登录 / AI Key） -->
@@ -104,7 +103,6 @@ onMounted(async () => {
 }
 .tab.cur .dot { background: #e0b36b; color: #fff; }
 .arrow { color: #ccc; font-size: 14px; padding: 0 2px; }
-.flow-hint { margin-left: auto; font-size: 12px; color: #aaa; }
 .sysbar {
   display: flex;
   gap: 8px;
