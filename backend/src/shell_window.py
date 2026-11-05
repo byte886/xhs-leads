@@ -1125,13 +1125,20 @@ async def _keeper_setup_tab2(ctx, eng, coord, engine_pool, config):
             return
         for _attempt in range(2):
             try:
-                page = await eng.new_page()
-                # R-6.49：启动路径 Tab2 仅本地页（login-hint/base），禁止 explore 兜底——
-                # explore 只由采集 open_tab2_window(url=explore) 打开。
-                await page.goto(_t2_url or f"http://127.0.0.1:{config.front_port()}/login-hint", wait_until="domcontentloaded", timeout=10000)
-                await _ensure_debug_title(page)
-                win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
-                await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
+                # R-6.49c：启动路径 Tab2 走 open_tab2_window 应用模式（--app 无地址栏/标签条），
+                # 与采集路径形态一致——不再 new_page 建普通 tab（带地址栏，用户反馈
+                # 「采集调试窗口变了、出现地址栏、不是 app 形态」）。
+                from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
+                _cfts = builtin_cft_candidates()
+                _exec = _cfts[0] if _cfts else None
+                page = await open_tab2_window(
+                    ctx,
+                    coord.shell(),
+                    url=_t2_url or f"http://127.0.0.1:{config.front_port()}/login-hint",
+                    user_data_dir=eng.user_data_dir,
+                    executable=_exec,
+                )
+                # open_tab2_window 已内建 goto/login-hint、标题守护、窗口校准
                 coord.register_tab2(page)
                 coord.watch(page, is_shell=False)
                 return
