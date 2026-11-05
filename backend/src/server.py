@@ -405,33 +405,47 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
     return result
 
 
+def _login_status_from_cache(now):
+    """命中 15s 缓存则返回结果，否则 None。R-6.26 失效记忆覆盖缓存假阳性。"""
+    if _LOGIN_CACHE["data"] is None or now - _LOGIN_CACHE["t"] >= _LOGIN_CACHE_TTL:
+        return None
+    d = _LOGIN_CACHE["data"]
+    if _LOGIN_INVALID and d.get("logged_in"):
+        d = dict(d)
+        d["logged_in"] = False
+        d["status"] = "not_logged_in"
+    return d
+
+
+def _login_status_unknown(raw):
+    """引擎侧判定失败/假死时的统一返回体（不对外抛 500，前端据此提示）。"""
+    return {"status": "unknown", "logged_in": False, "nickname": "", "raw": raw}
+
+
+async def _login_status_store_cache(now, result, kicked, risk_verify, eng):
+    """正常态写 15s 缓存；已登录时按 5min 节流把 Cookie 落回权威源（R-6.53m）。"""
+    if kicked or risk_verify:
+        return
+    _LOGIN_CACHE["t"] = now
+    _LOGIN_CACHE["data"] = result
+    if result.get("logged_in"):
+        await _persist_session_cookies_if_stale(eng)
+
+
 @app.get("/api/login_status")
 async def login_status():
-    """登录态检测（R 批 v1.5：读引擎独立 profile 真实登录态）。
+    """登录态检测（唯一权威 = 引擎 CDP 内存 Cookie；15s 缓存 + 失效记忆覆盖）。
 
-    改造背景：旧实现只读本地 cookies.json（方案 A「读系统 Chrome 落盘副本」产物）——
-    R 批拍板「登录态只存引擎独立 profile、不依赖系统 Chrome」后，该副本与引擎真实会话
-    脱节：副本未过期而引擎早已失效（或反之），造成假阳性/假阴性。本接口改为
-    **引擎 CDP 内存 Cookie 判定**（web_session 存在即视为有效，与 _require_real_login 同源）。
-
-    - 引擎 headless 无窗口（R2），拉取无 Dock/窗口干扰；30s 缓存兜底登录轮询频率。
-    - 旧 cookies.json 文件链路（方案 A）已随 R-6.34 收敛移除；登录态唯一权威 = 引擎 CDP。
+    缓存/失败/落盘细节分别见 _login_status_from_cache / _login_status_unknown /
+    _login_status_store_cache；本函数只做编排。
     """
     import time
-    global _LOGIN_INVALID  # R-6.26 失效记忆：函数内赋值 → 须声明全局，否则读为局部 UnboundLocal
+    global _LOGIN_INVALID
 
     now = time.monotonic()
-    if _LOGIN_CACHE["data"] is not None and now - _LOGIN_CACHE["t"] < _LOGIN_CACHE_TTL:
-        # R-6.26：失效记忆**覆盖缓存假阳性**——失效信号出现后（kicked 不写新缓存），
-        # 旧缓存里可能还是「正常已登录」，TTL 内命中会误返回 logged_in；失效记忆置位
-        # 时一律按未登录返回，不等 15s 缓存过期。
-        _d = _LOGIN_CACHE["data"]
-        if _LOGIN_INVALID and _d.get("logged_in"):
-            _d = dict(_d)
-            _d["logged_in"] = False
-            _d["status"] = "not_logged_in"
-        return _d
-
+    cached = _login_status_from_cache(now)
+    if cached is not None:
+        return cached
     try:
         from src import engine_pool
 
@@ -439,28 +453,15 @@ async def login_status():
         try:
             has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
         except asyncio.TimeoutError:
-            # R-6.53l（用户拍板分级）：CDP 假死 → 保持级：只标记不立即释放（可能自愈，
-            # 立即释放会误杀可恢复实例）；下次真实动作 context() 先恢复管理（3s 探测），
-            # 无法恢复才优雅→强杀重建。提示：raw 文案返回前端状态条。
             eng.mark_fake_dead()
-            return {
-                "status": "unknown", "logged_in": False, "nickname": "",
-                "raw": "引擎 CDP 假死，已保持待恢复；下次操作将尝试恢复，无法恢复则强制重建",
-            }
+            return _login_status_unknown(
+                "引擎 CDP 假死，已保持待恢复；下次操作将尝试恢复，无法恢复则强制重建"
+            )
         result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
-        if not kicked and not risk_verify:
-            _LOGIN_CACHE["t"] = now
-            _LOGIN_CACHE["data"] = result
-            # R-6.53m：登录态有效（真实验证路径）→ 把含 web_session 的完整 Cookie 落回
-            # cookies.json 权威源。此前该文件 10-30 后从未更新（扫码新会话只存引擎内存，
-            # 短生命周期启动即退出时磁盘落盘失败）→ 重启回注缺 web_session → 登录态丢失。
-            # 节流：距上次落盘 >5 分钟才写（login_status 轮询约 30s 一次，避免频繁写盘）。
-            if result.get("logged_in"):
-                await _persist_session_cookies_if_stale(eng)
+        await _login_status_store_cache(now, result, kicked, risk_verify, eng)
         return result
     except Exception as e:  # noqa: BLE001
-        result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
-        return result
+        return _login_status_unknown(f"引擎判定失败: {str(e)[:80]}")
 
 
 # ============ 采集调试窗登录提示页（R-6.28 / R-6.50）============
