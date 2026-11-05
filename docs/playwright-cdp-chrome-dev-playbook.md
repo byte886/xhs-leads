@@ -171,6 +171,7 @@ print(repr(out[i+len('DYLD_LIBRARY_PATH='):j].strip() if j>i else out[i:i+200]))
 | CDP 假死 | Playwright 内部 timeout 依赖 CDP 响应 → 任务永久挂起 | `asyncio.wait_for` 外层超时兜底（R-6.53i：read_cookies 10s / login_state 15s）+ `force_release()` 无条件释放 context → 下次调用自动重建 → login_status 捕获 TimeoutError 返回 `{"status":"unknown"}`。**真机验证：3 次假死全部自动恢复，对比旧 dist 无限挂起** |
 | 登录链轮询过重 | keeper 30s 轮询遍历全部 xhs 页，持续 CDP 压力（假死诱因之一） | 被踢/风控信号平台全局渲染，**单页化**只扫首个 xhs 页（R-6.53j） |
 | `--no-first-run` 移不干净 | 自己加的删了，ps 里仍出现 → Playwright driver 默认 args 也带 | `launch_kwargs["ignore_default_args"] = ["--no-first-run"]`（R-6.53j follow） |
+| force_release 后进程残留 | CDP 假死 → force_release 释放 context 后**主进程不退**（158 实测），占 profile 锁 → 重建反复 Failed to launch（ProcessSingleton） | 手动 `kill -9 残留PID` 后由 keeper 重试恢复；后续应在 force_release/keeper 补残留进程清理逻辑 |
 | compositor 白屏 | 窗口级死锁，CDP 侧 DOM/截图正常 | 走窗口级恢复，不做页面内修复 |
 | init script 注入失效 | 箭头函数只定义不执行；`//` 注释吞尾段；observer 锚点早 null | 用 IIFE；注释用 `/* */`；锚点用 `document` |
 | 全新 profile headless 被风控 | 小红书安全限制 300012 | 非 headless 有窗口启动 |
