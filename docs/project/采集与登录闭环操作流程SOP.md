@@ -138,7 +138,7 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 
 | # | 差距 | 拍板/约定 | 现状（2026-11-06 核实） | 处置 |
 |---|---|---|---|---|
-| B1 | 24h 硬熔断残留 | R-6.15「风控熔断不需要」 | **已修复**（`e2ec0cc`）：`_handle_login_wall` 现只调 `risk.mark_manual`。`risk.mark_hard` 仍在 `risk.py:160`，但 grep 全仓**无调用方**（仅 `mark_risk` 兼容旧名包一层）→ 属死代码 | 保持软风控；`mark_hard/mark_risk` 可择机删除（删除前需确认无脚本/测试引用） |
+| B1 | 24h 硬熔断残留 | R-6.15「风控熔断不需要」 | **已修复并清理**（`e2ec0cc` + R-6.53z3）：`_handle_login_wall` 只调 `risk.mark_manual`；`mark_hard`/`mark_risk`/`mark_soft`/`mark_throttle`/`check_throttle`/`BlockedError` 全仓无生产调用方，已按「死代码不留」删除，`risk.py` 收敛为 ok/manual 两态 | 保持软风控：登录墙 → manual，登录成功自动 resolve |
 | B2 | 登录恢复后任务不自动继续 | 「不限制」拍板未含自动重试 | 任务 error 后需手动再点采集 | 保持手动（ForceLogin/状态条明确提示「登录成功后请重新点击开始采集」） |
 | B3 | manual 403 文案体验 | 扫码前再点采集被拦 | 403「页面已打开登录入口，请扫码或完成验证，恢复后自动解除」 | 文案优化 + 明确引导 |
 | B4 | 壳窗被登录页接管时 APP 界面消失 | 登录页在壳窗内呈现（用户拍板） | 导航即接管，无过渡提示 | 保留设计；ForceLogin 文案说明「正在打开登录页…」 |
@@ -171,10 +171,13 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 - 根因：R-6.15 拍板移除限制时，同 keyword 60s 防重启动 dedup 被 commit 归类「业务去重」悄悄保留 → 409 拦截。
 - 处置：移除 dedup 检查循环（dedup_key 仅留审计展示）；新任务启动优雅停旧任务并发管理保留。实测同关键词连点均 200。
 
-### R-6.22i — 24h 硬熔断残留（已修复 `e2ec0cc`）
+### R-6.22i — 24h 硬熔断残留（已修复 `e2ec0cc`，死代码已于 R-6.53z3 删除）
 - 现象：登录墙触发后账号被锁 24h（`_require_login` 403「请 X 小时后再试」）。
 - 根因：R-6.15「熔断不需」拍板未全量落地，`_handle_login_wall` 非软风控词仍走 `risk.mark_hard`。
 - 处置：登录墙统一 `mark_manual`（任务中止但账号永不熔断），登录成功自动 resolve、随时可继续。
+- 收尾（R-6.53z3）：硬熔断 API 与「恒放行的频率闸」一起删净——`server._check_collect_throttle`
+  及其两处调用、`risk.check_throttle/BlockedError/mark_soft/mark_hard/mark_risk/mark_throttle`。
+  采集前置现在没有任何闸；`test_risk.py` 留一条断言锁住这些名字不再复活。
 
 ### R-6.22j — 登录墙触发时壳窗被误关/最小化 → 空白页、窗口消失（已修复 `04cebc3`）
 - 现象（用户实测）：「点采集两次反应各异但都不行，最后一次把我引入空白页面」；观感「一直在开空白页面」。

@@ -70,16 +70,7 @@ from src import license as lic  # noqa: E402（授权薄层：free 恒放行，�
 
 app = FastAPI(title="XHS Leads · 小红书获客助手")
 
-# ---- 拟人频率保护（平台风控：操作过频触发临时行为控制，需限流）----
-# 架构改造 P1：全局节流 → risk 每账号节流（见 _check_collect_throttle / _mark_collect_done）
-
-
-def _check_collect_throttle(account_id: str = "default") -> None:
-    """采集/搜索前的频率闸（每账号，替代旧全局节流）：超闸抛 400。"""
-    try:
-        risk.check_throttle(account_id or "default")
-    except risk.BlockedError as e:
-        raise HTTPException(400, e.reason) from e
+# ---- 风控状态记录（R-6.53z3：前置频率闸已随死代码清理移除，只剩结束时间记录）----
 
 
 def _mark_collect_done(account_id: str = "default") -> None:
@@ -963,7 +954,6 @@ async def _require_login(account_id: str = "default"):
 async def search(req: SearchReq):
     """搜索（同步版，兼容旧前端）：采集 → 评分 → 落库。返回新增条数与最新 TOP 评分。"""
     await _require_login()
-    _check_collect_throttle()  # 拟人频率保护
     before = _db().execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     try:
         res = await search_via_browser(
@@ -1322,7 +1312,6 @@ async def collect_start(req: SearchReq):
     account_id = (req.account_id or "default").strip() or "default"
     _check_license_or_raise("collect")  # 授权薄层：collect 功能闸门（free 恒放行）
     await _require_login(account_id)
-    _check_collect_throttle(account_id)  # 每账号拟人频率保护（R-6.15 起恒放行，不抛错）
     # R-6.25 用户对齐：新采集开始时清空旧采集存储（笔记+客户+采集图片），
     # 保证库中只有本次采集数据；登录校验通过后才清，登录失败不破坏数据。
     _reset_collection_data()
