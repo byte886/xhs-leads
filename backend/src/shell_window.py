@@ -1028,15 +1028,18 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
 
 
 async def _keeper_tab2_target_url(config, engine_pool):
-    """Tab2 目标 URL：未登录 → /login-hint；已登录 → None（explore）。只读 id_token，不调 login_status。"""
+    """Tab2 目标 URL（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
+    未登录 → /login-hint；已登录 → APP 首页。永不返回 None/explore——explore 仅由采集
+    engine_pool.new_page→open_tab2_window(url=explore) 打开。只读 id_token，不调 login_status。"""
+    base = f"http://127.0.0.1:{config.front_port()}"
     try:
         eng = await engine_pool.pool.get("default")
         mem = await eng.read_cookies()
         if has_id_token(mem):
-            return None
+            return base + "/"
     except Exception:  # noqa: BLE001（引擎未就绪：按未登录处理）
         pass
-    return f"http://127.0.0.1:{config.front_port()}/login-hint"
+    return base + "/login-hint"
 
 
 async def _keeper_sweep_blank(ctx, shell):
@@ -1094,9 +1097,12 @@ def _keeper_log_snapshot(ctx, coord, last):
 
 
 async def _calibrate_reused_tab2(t2, _t2_url, coord, engine_pool) -> None:
-    """R-6.37i 拆自 _keeper_setup_tab2：复用残留 Tab2 时校准窗口并注册监听。"""
+    """R-6.37i 拆自 _keeper_setup_tab2：复用残留 Tab2 时校准窗口并注册监听。
+
+    R-6.49：采集页（xiaohongshu.com）保持不动（合法采集目标，禁止启动路径导航走）；
+    其余页按目标（未登录 login-hint / 已登录 APP 首页）校准。"""
     try:
-        if _t2_url and "login-hint" not in (t2.url or ""):
+        if _t2_url and "login-hint" not in (t2.url or "") and "xiaohongshu.com" not in (t2.url or ""):
             await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
         # R-6.48h：复用残留路径同样补标题守护（此前仅新建路径注入——重启保留的
         # Tab2 裸奔显示 login-hint 原始标题「尚未登录小红书」）
@@ -1120,7 +1126,9 @@ async def _keeper_setup_tab2(ctx, eng, coord, engine_pool, config):
         for _attempt in range(2):
             try:
                 page = await eng.new_page()
-                await page.goto(_t2_url or "https://www.xiaohongshu.com/explore", wait_until="domcontentloaded", timeout=10000)
+                # R-6.49：启动路径 Tab2 仅本地页（login-hint/base），禁止 explore 兜底——
+                # explore 只由采集 open_tab2_window(url=explore) 打开。
+                await page.goto(_t2_url or f"http://127.0.0.1:{config.front_port()}/login-hint", wait_until="domcontentloaded", timeout=10000)
                 await _ensure_debug_title(page)
                 win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
                 await _calibrate_window(page, win_left2, 0, win_w2, win_h2)
@@ -1153,20 +1161,22 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
 
 
 async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
-    """Tab2 登录态联动：未登录→提示页，已登录→回 explore；未登录时关孤儿 explore 判定页。"""
+    """Tab2 登录态联动（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
+    未登录 → 拉回 login-hint（含采集残留页）；已登录 → 采集页（xiaohongshu.com）保持、
+    其余本地页校准到 APP 首页。explore 不再由 keeper 主动打开——仅采集 open_tab2_window 触发。"""
     coord.register_tab2(t2)
     coord.watch(t2, is_shell=False)
     try:
         _url = await _keeper_tab2_target_url(config, engine_pool)
         u = t2.url or ""
-        if _url and "login-hint" not in u:
+        if "xiaohongshu.com" in u and "login-hint" not in _url:
+            return  # 已登录 + 采集页：保持（合法采集目标）
+        if u != _url and u.rstrip("/") != _url.rstrip("/"):
             await t2.goto(_url, wait_until="domcontentloaded", timeout=8000)
-        elif _url is None and "login-hint" in u:
-            await t2.goto("https://www.xiaohongshu.com/explore", wait_until="domcontentloaded", timeout=10000)
+        if _url:
+            await coord.close_orphan_explore(ctx)
     except Exception:  # noqa: BLE001（导航失败不阻断监护，下轮再试）
-        _url = None
-    if _url:
-        await coord.close_orphan_explore(ctx)
+        pass
 
 
 async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_pool, last) -> str:

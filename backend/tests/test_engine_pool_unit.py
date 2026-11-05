@@ -29,3 +29,33 @@ class TestShellWindowGeometry:
         monkeypatch.setattr(engine_pool, "probe_screen_size", lambda: (1400, 900))
         w, h, left, right = engine_pool.shell_window_geometry()
         assert w == 700 and right == 700
+
+
+class TestClearSessionRestore:
+    """R-6.48s：启动前清会话恢复文件——异常退出恢复旧 tab（小红书页闪现）根因修复。"""
+
+    def test_removes_sessions_and_current_files(self, tmp_path):
+        default = tmp_path / "Default"
+        sessions = default / "Sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "Session_1").write_text("x")
+        (sessions / "Tabs_1").write_text("x")
+        (default / "Current Session").write_text("x")
+        (default / "Current Tabs").write_text("x")
+        engine_pool._clear_session_restore(str(tmp_path))
+        assert list(sessions.iterdir()) == []
+        assert not (default / "Current Session").exists()
+        assert not (default / "Current Tabs").exists()
+
+    def test_preserves_cookies_and_other_files(self, tmp_path):
+        default = tmp_path / "Default"
+        default.mkdir(parents=True)
+        cookies = default / "Cookies"
+        cookies.write_text("keep")
+        (default / "Preferences").write_text("keep")
+        engine_pool._clear_session_restore(str(tmp_path))
+        assert cookies.read_text() == "keep"
+        assert (default / "Preferences").read_text() == "keep"
+
+    def test_missing_dirs_no_error(self, tmp_path):
+        engine_pool._clear_session_restore(str(tmp_path / "nope"))  # 不抛错

@@ -125,6 +125,37 @@ async def _any_blocked_page(ctx) -> bool:
     return False
 
 
+_SESSION_RESTORE_FILES = ("Current Session", "Current Tabs")
+
+
+def _clear_session_restore(user_data_dir: str) -> None:
+    """R-6.48s：启动前清理 Chrome 会话恢复文件——上次异常退出（exit_type=Crashed，
+    如 pkill 停实例）时 Chrome 默认恢复上次全部 tab（可能停在 xiaohongshu.com
+    登录页/首页），导致启动先闪现小红书页再被导航到 APP（用户反馈「启动看到
+    小红书一闪而过」）。
+    只删会话恢复文件（Default/Sessions/*、Current Session、Current Tabs），
+    不动 Cookies/DB——登录态由 _replay_saved_cookies 以 cookies.json 为权威源
+    回注，跨重启保留不受影响（R-6.6 机制）。"""
+    default_dir = os.path.join(user_data_dir, "Default")
+    sessions_dir = os.path.join(default_dir, "Sessions")
+    try:
+        if os.path.isdir(sessions_dir):
+            for name in os.listdir(sessions_dir):
+                try:
+                    os.remove(os.path.join(sessions_dir, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    for name in _SESSION_RESTORE_FILES:
+        try:
+            p = os.path.join(default_dir, name)
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
 class AccountEngine:
     """单账号引擎：持久化上下文 + 生命周期 + 页面管理。"""
 
@@ -177,6 +208,9 @@ class AccountEngine:
     async def _launch_context(self, pw):
         """R-6.36e 拆自 context()：构建并 launch_persistent_context（含 Cookie 回注/stealth）。"""
         os.makedirs(self.user_data_dir, exist_ok=True)
+        # R-6.48s：启动前清会话恢复文件——上次异常退出（exit_type=Crashed）Chrome
+        # 恢复旧 tab（小红书页）→ 启动闪现小红书再被导航 APP；清后启动仅默认空白 tab。
+        _clear_session_restore(self.user_data_dir)
         # 关键：launch_persistent_context（内部 stdio 管道，无 TCP 调试端口，
         # 从机制上不触发「允许远程调试」授权流程；解密在浏览器进程内部，免钥匙串）
         # R 批 v1.4：headless 无头化（外部零 Chrome 窗口）+ stealth 强化
