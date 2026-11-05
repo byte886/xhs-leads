@@ -285,6 +285,19 @@ class AccountEngine:
             win_w, win_h, _, _ = shell_window_geometry()
             launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
             launch_kwargs["args"].append("--window-position=-4000,0")
+        # R-6.53：引擎崩溃 CHECK 文案捕获——--log-file 让 Chromium base::logging
+        # 崩溃前 FATAL 落盘。此前无 stderr 捕获 + 我方 --disable-breakpad 关闭
+        # Crashpad → 17 份 .ips 拿不到确切 CHECK 文案（atos 无 dSYM 死路）。
+        # 崩溃恢复验证（Nov 5）：主进程确定性 SIGTRAP（Chrome_IOThread、前 8 帧
+        # 偏移全批次一致）→ CHECK 点固定；落盘后下次崩溃即可读到 FATAL 文案定位。
+        try:
+            _chrome_log = config.DATA_DIR / "logs" / "chrome-engine.log"
+            _chrome_log.parent.mkdir(parents=True, exist_ok=True)
+            _chrome_log.write_text("")  # 每次引擎启动截断（崩溃点即崩溃前最后内容）
+            launch_kwargs["args"].append("--enable-logging=stderr")
+            launch_kwargs["args"].append(f"--log-file={_chrome_log}")
+        except Exception:  # noqa: BLE001
+            log.warning("引擎 CHECK 日志落盘配置失败（非阻断）")
         # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
         # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
         # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；

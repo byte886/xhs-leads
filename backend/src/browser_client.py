@@ -68,6 +68,55 @@ async def cleanup_tabs(account_id: str = "default") -> int:
     return await (await _engine(account_id)).cleanup_tabs()
 
 
+def _is_crash_error(e: BaseException) -> bool:
+    """R-6.53：判定 Playwright 页面/渲染崩溃类异常（Page crashed / Target closed）。
+
+    真实采集取证（Nov 5）：CFT 156 在 macOS 上导航/运行小红书 search_result 页会
+    概率性渲染进程崩溃（Playwright 报 Page crashed / Target page ... has been closed），
+    轻则采集失败、重则级联主进程 SIGTRAP（17 份 .ips，Chrome_IOThread CHECK）。
+    采集链路据此自动重开页面重试，把「崩溃即失败」变为「崩溃自动恢复继续采集」。
+    """
+    if isinstance(e, asyncio.TimeoutError):
+        return False
+    msg = str(e)
+    return (
+        "crashed" in msg
+        or "has been closed" in msg
+        or "Target page, context or browser has been closed" in msg
+        or "Page crashed" in msg
+    )
+
+
+async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
+    """R-6.53：采集前清理残留的小红书搜索/探索页（登录墙页保留）。
+
+    取证（Nov 5）：历史采集崩溃/中断后残留 search_result 页会僵死（CDP WS 无响应）
+    且 cleanup_tabs 按设计保留所有 xiaohongshu.com tab → 页面累积放大引擎负担，
+    与崩溃相互促进。每次采集前清掉非登录墙的旧 xhs 页，降低累积触发面。
+    """
+    try:
+        eng = await _engine(account_id)
+        ctx = await eng.context()
+        closed = 0
+        for p in list(ctx.pages):
+            u = p.url or ""
+            if (
+                "xiaohongshu.com" in u
+                and "/website-login" not in u
+                and "captcha" not in u
+            ):
+                try:
+                    await p.close()
+                    closed += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        if closed:
+            log.info("采集前清理残留 xhs 页 %d 个", closed)
+        return closed
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 
 
 
@@ -97,11 +146,35 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
         await injections.inject_once(page, "extract")
         await asyncio.sleep(wait_ms / 1000)
         return page
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # R-6.53：渲染进程崩溃（Page crashed / Target closed）时重开页面重试一次
+        # （CFT 156 macOS 概率性崩溃，Nov 5 采集取证：导航 search_result 即 Page crashed）。
         try:
             await _close_page_safe(page, account_id)
         except Exception:  # noqa: BLE001
             pass
+        if _is_crash_error(exc):
+            log.warning("页面加载遇崩溃（%s），重开页面重试: %s", str(exc)[:80], url[:80])
+            page2 = await _page(account_id)
+            try:
+                await asyncio.wait_for(
+                    page2.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
+                try:
+                    if show_front:
+                        await page2.bring_to_front()
+                    else:
+                        await _switch_back_to_shell(page2)
+                except Exception:  # noqa: BLE001
+                    pass
+                await injections.inject_once(page2, "extract")
+                await asyncio.sleep(wait_ms / 1000)
+                return page2
+            except Exception as exc2:  # noqa: BLE001
+                try:
+                    await _close_page_safe(page2, account_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                raise exc2 from exc
         raise
 
 
@@ -463,7 +536,15 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     - filters：搜索筛选（排序/笔记类型/发布时间/搜索范围/位置距离）
     - account_id：使用哪个账号引擎采集（默认 default）
     - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
+    - R-6.53：渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
+      最多 2 次；已采 items 保留。崩溃吸收见 _is_crash_error。
     """
+    crash_tries = 0
+    max_crash_tries = 2
+    try:
+        await _cleanup_stale_xhs_pages(account_id)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         page = await asyncio.wait_for(_prepare_search_page(keyword, filters, account_id), timeout=25)
     except asyncio.TimeoutError:
@@ -482,6 +563,23 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
                 # R-6.52：引擎卡死（CDP 无响应）时 8s 超时打断收尾——否则 worker
                 # 卡在无响应的 evaluate 上，用户点停止迟迟不停、任务永不退出。
                 break
+            except Exception as exc:  # noqa: BLE001
+                # R-6.53：渲染进程崩溃→重开搜索页继续（保留已采 items）
+                if _is_crash_error(exc) and crash_tries < max_crash_tries:
+                    crash_tries += 1
+                    log.warning("采集页崩溃（%s），重开搜索页继续（第 %d/%d 次）",
+                                str(exc)[:80], crash_tries, max_crash_tries)
+                    try:
+                        await _close_page_safe(page, account_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        page = await asyncio.wait_for(
+                            _prepare_search_page(keyword, filters, account_id), timeout=25)
+                    except Exception:  # noqa: BLE001
+                        break  # 重开失败，收尾返回已采
+                    continue
+                break
             if on_progress:
                 on_progress(len(items))
             done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
@@ -491,6 +589,22 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
                 await asyncio.wait_for(
                     page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"), timeout=8)
             except asyncio.TimeoutError:
+                break
+            except Exception as exc:  # noqa: BLE001
+                if _is_crash_error(exc) and crash_tries < max_crash_tries:
+                    crash_tries += 1
+                    log.warning("滚动崩溃（%s），重开搜索页继续（第 %d/%d 次）",
+                                str(exc)[:80], crash_tries, max_crash_tries)
+                    try:
+                        await _close_page_safe(page, account_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        page = await asyncio.wait_for(
+                            _prepare_search_page(keyword, filters, account_id), timeout=25)
+                    except Exception:  # noqa: BLE001
+                        break
+                    continue
                 break
             await asyncio.sleep(1.8)
         stopped = bool(should_stop and should_stop())
