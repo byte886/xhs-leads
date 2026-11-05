@@ -82,7 +82,10 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
     """
     page = await _page(account_id)
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=40000)
+        # R-6.52：asyncio.wait_for 外层兜底——引擎 CDP 假死时 Playwright 内部
+        # timeout 依赖 CDP 响应、不会触发，goto 会永久挂起；wait_for 强制 15s 打断。
+        await asyncio.wait_for(
+            page.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
         try:
             if show_front:
                 await page.bring_to_front()
@@ -303,9 +306,9 @@ async def _detect_login_wall(page) -> str:
     try:
         if "/login" in page.url:
             return "页面已跳转登录（小红书会话失效，请重新扫码或导入 Cookie）"
-        text = await page.evaluate(
-            "() => document.body ? document.body.innerText.slice(0, 1500) : ''"
-        )
+        text = await asyncio.wait_for(
+            page.evaluate("() => document.body ? document.body.innerText.slice(0, 1500) : ''"),
+            timeout=6)  # R-6.52：引擎卡死时 6s 超时，不阻塞登录墙检测
     except Exception:  # noqa: BLE001
         return ""
     for kw in ("扫码登录", "登录后查看", "请先登录", "完成验证", "安全验证", "验证码"):
@@ -322,8 +325,10 @@ async def _wait_note_cards(page, timeout_s: float = 45) -> tuple[bool, str]:
         if wall:
             return False, wall
         try:
-            n = await page.evaluate("() => document.querySelectorAll('section.note-item').length")
-        except Exception:  # noqa: BLE001
+            n = await asyncio.wait_for(
+                page.evaluate("() => document.querySelectorAll('section.note-item').length"),
+                timeout=6)
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001 引擎卡死时 6s 超时，不空等
             n = 0
         if n > 0:
             return True, ""
@@ -395,7 +400,7 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     url = _XHS + "/search_result?keyword=" + _urlencode(keyword) + "&source=web_search_result_notes"
     page = await _load(url, 2500, account_id,
                        show_front=config.get_config().get("collect_tab_visible", False))
-    appeared, wall = await _wait_note_cards(page, timeout_s=45)
+    appeared, wall = await _wait_note_cards(page, timeout_s=20)
     if wall:
         _handle_login_wall(account_id, wall)  # 软→引导扫码恢复；硬→熔断
         raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
@@ -403,14 +408,14 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
         await _close_page_safe(page, account_id)
         page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500, account_id,
                            show_front=config.get_config().get("collect_tab_visible", False))
-        appeared, wall = await _wait_note_cards(page, timeout_s=45)
+        appeared, wall = await _wait_note_cards(page, timeout_s=20)
         if wall:
             _handle_login_wall(account_id, wall)
             raise BrowserLoginRequiredError(wall)
     if appeared:
         await _apply_filters(page, filters or {})
         if filters:
-            _, wall = await _wait_note_cards(page, timeout_s=30)
+            _, wall = await _wait_note_cards(page, timeout_s=20)
             if wall:
                 _handle_login_wall(account_id, wall)
                 raise BrowserLoginRequiredError(wall)
@@ -459,20 +464,34 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     - account_id：使用哪个账号引擎采集（默认 default）
     - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
     """
-    page = await _prepare_search_page(keyword, filters, account_id)
+    try:
+        page = await asyncio.wait_for(_prepare_search_page(keyword, filters, account_id), timeout=25)
+    except asyncio.TimeoutError:
+        # R-6.52：引擎 CDP 假死（search_result 页拖死）时 35s 强制打断——否则 worker
+        # 卡在准备阶段永不返回，用户点停止迟迟不停。返回空结果收尾，状态由调用方判定。
+        return {"keyword": keyword, "count": 0, "items": [], "stopped": bool(should_stop and should_stop())}
     items: list = []
     seen: set = set()
     stale = 0
     deadline = time.time() + 120
     try:
         while time.time() < deadline:
-            added = await _drain_page(page, items, seen)
+            try:
+                added = await asyncio.wait_for(_drain_page(page, items, seen), timeout=8)
+            except asyncio.TimeoutError:
+                # R-6.52：引擎卡死（CDP 无响应）时 8s 超时打断收尾——否则 worker
+                # 卡在无响应的 evaluate 上，用户点停止迟迟不停、任务永不退出。
+                break
             if on_progress:
                 on_progress(len(items))
             done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
             if done:
                 break
-            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            try:
+                await asyncio.wait_for(
+                    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"), timeout=8)
+            except asyncio.TimeoutError:
+                break
             await asyncio.sleep(1.8)
         stopped = bool(should_stop and should_stop())
         return {"keyword": keyword, "count": len(items), "items": items, "stopped": stopped}

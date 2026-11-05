@@ -422,16 +422,11 @@ class AccountEngine:
         try:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
-            try:
-                w2, h2, _, l2 = shell_window.shell_window_geometry()
-                cdp = await ctx.new_cdp_session(ctx.pages[0])
-                t = await cdp.send("Browser.getWindowForTarget")
-                await cdp.send("Browser.setWindowBounds",
-                               {"windowId": t["windowId"],
-                                "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
-                                           "windowState": "normal"}})
-            except Exception:  # noqa: BLE001（恢复失败不影响任务页可用性）
-                pass
+            # R-6.52 修复：不再对壳窗（ctx.pages[0]）执行 setWindowBounds。
+            # 原实现把壳窗窗口 bounds 设到右半屏(l2)，随后 open_tab2_window 又把
+            # 采集窗弹到右半——两窗重叠，开始采集瞬间采集窗(小红书页)覆盖壳窗，
+            # 用户观感「主窗瞬间跳小红书再切回」（主窗 URL 全程未变，纯窗口覆盖）。
+            # 壳窗位置由 keeper 守护（左半），采集窗位置由 open_tab2_window 内部校准。
             src_page = ctx.pages[0]
             executable = None
             try:
