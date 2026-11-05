@@ -207,6 +207,23 @@ class AccountEngine:
         except Exception:  # noqa: BLE001（连接检测异常视同断开）
             return False
 
+    async def force_release(self) -> None:
+        """CDP 假死强制释放：无条件关闭当前 context 并置空，下次 context() 调用自动重建。
+
+        R-6.53i：假死（进程存活、WS 未断、协议无响应）时 is_connected() 仍可能返回 True，
+        自愈重建不会触发；由 login_status 超时捕获后调用本方法主动释放。
+        """
+        async with self._lock:
+            c = self._context
+            self._context = None
+            self._rebuild_ts = time.monotonic()
+            if c is not None:
+                try:
+                    await c.close()
+                except Exception:  # noqa: BLE001（假死 close 可能失败，忽略）
+                    pass
+            log.warning("账号 %s 引擎 CDP 假死，已强制释放（下次调用自动重建）", self.account_id)
+
     async def context(self):
         """取（或懒启动）该账号的 persistent context。自愈：断开自动重建。"""
         async with self._lock:
@@ -572,16 +589,23 @@ class AccountEngine:
             p = config.DATA_DIR / "cookies" / f"{self.account_id}.json"
         return p
 
-    async def read_cookies(self) -> list[dict]:
-        """通过 CDP 读该账号引擎当前全部小红书 Cookie（只读，不关闭页面）。"""
-        ctx = await self.context()
-        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        cdp = await ctx.new_cdp_session(page)
-        data = await cdp.send("Network.getAllCookies")
-        return [
-            c for c in data.get("cookies", [])
-            if "xiaohongshu" in c.get("domain", "") or "xhscdn" in c.get("domain", "")
-        ]
+    async def read_cookies(self, timeout: float = 10.0) -> list[dict]:
+        """通过 CDP 读该账号引擎当前全部小红书 Cookie（只读，不关闭页面）。
+
+        R-6.53i：CDP 假死防御——引擎进程存活但 DevTools 协议无响应时，
+        Playwright 内部 timeout 依赖 CDP 响应不触发，任务会无限挂起；
+        外层 wait_for 超时保证调用链不被卡死（超时抛 asyncio.TimeoutError，由上层处置）。
+        """
+        async def _impl() -> list[dict]:
+            ctx = await self.context()
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            cdp = await ctx.new_cdp_session(page)
+            data = await cdp.send("Network.getAllCookies")
+            return [
+                c for c in data.get("cookies", [])
+                if "xiaohongshu" in c.get("domain", "") or "xhscdn" in c.get("domain", "")
+            ]
+        return await asyncio.wait_for(_impl(), timeout=timeout)
 
     async def inject_cookies(self, cookies: list[dict]) -> bool:
         """把 Cookie 注入该账号引擎（幂等，供校验/恢复用）。"""

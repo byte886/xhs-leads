@@ -245,3 +245,21 @@ def test_login_guard_event_consumed_when_pending_cancelled(monkeypatch):
             pass
 
     asyncio.run(run())
+
+
+def test_engine_login_state_fake_death_timeout():
+    """R-6.53i：CDP 假死（CDP 调用挂起）时 _engine_login_state 外层 wait_for 超时上抛，
+    不再无限挂起（keeper/login_status 链不被卡死）。"""
+    from src import server
+
+    class FakeEng:
+        async def read_cookies(self):
+            await asyncio.sleep(60)  # 模拟 CDP 假死：永不返回
+        async def context(self):
+            return None
+
+    try:
+        asyncio.run(server._engine_login_state(FakeEng(), timeout=0.1))
+        raise AssertionError("CDP 假死应触发 wait_for 超时上抛")
+    except asyncio.TimeoutError:
+        pass

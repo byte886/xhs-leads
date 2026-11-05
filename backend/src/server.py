@@ -12,6 +12,7 @@ API:
   POST /api/publish         → 发布（默认仅自己可见）
   GET  /api/logs            → 发布记录
 """
+import asyncio
 import datetime
 import io
 import json
@@ -278,9 +279,10 @@ async def _scan_xhs_pages_for_signals(ctx):
     return page, "\n".join(bodies), login_redirect
 
 
-async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
+async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, bool, bool]:
     """引擎真实登录态（R 批 v1.5；R-6.6 判定升级；R-6.8 被踢检测统一；
-    R-6.22e 风控需人工验证信号）：返回 (web_session 存在?, 页面登录判定?, 被踢信号?, 风控需人工验证?)。
+    R-6.22e 风控需人工验证信号；R-6.53i CDP 假死超时防御）：返回
+    (web_session 存在?, 页面登录判定?, 被踢信号?, 风控需人工验证?)。
 
     只读、不清 cookie、不新建浏览器实例（复用引擎现有小红书页，无则开 explore）：
     ① CDP 读引擎内存 cookie → web_session / id_token 是否存在；
@@ -301,26 +303,32 @@ async def _engine_login_state(eng) -> tuple[bool, bool, bool, bool]:
       因此：id_token 存在 → 直接判已登录（页面判定不阻塞）；否则回退 web_session + 页面判定。
     - **R-6.8 被踢覆盖**：被踢信号只认「登录超限 / 请重新登录」这类明确登录 UI 文本，
       不依赖 xhsIsLoggedIn（空白页无这些文本 → 不误判），任一分支出现该信号 → 判失效。
+    - **R-6.53i 假死防御**：CDP 假死（进程存活、WS 未断、协议无响应）时 Playwright 内部
+      timeout 依赖 CDP 响应不触发、任务无限挂起（keeper 轮询链被卡死）；外层 wait_for
+      超时兜底，超时抛 asyncio.TimeoutError 由调用方处置（login_status → force_release 强制重建）。
     """
-    from src import browser_client
+    async def _impl() -> tuple[bool, bool, bool, bool]:
+        from src import browser_client
 
-    mem = await eng.read_cookies()
-    has_ws = any(c.get("name") == "web_session" for c in mem)
-    has_id_token = any(c.get("name") == "id_token" for c in mem)
-    page_logged_in = False
-    kicked = False
-    # R-6.8 被踢信号检测（尽力而为）：仅复用**现成**小红书页读取 inner_text；
-    # 无页面/读取失败/空白 → 不误判（id_token 权威分支不因页面问题被降级，R-6.6 精神）。
-    ctx = None
-    try:
-        ctx = await eng.context()
-    except Exception:  # noqa: BLE001（测试环境/引擎未就绪：无 context 不判被踢）
+        mem = await eng.read_cookies()
+        has_ws = any(c.get("name") == "web_session" for c in mem)
+        has_id_token = any(c.get("name") == "id_token" for c in mem)
+        page_logged_in = False
+        kicked = False
+        # R-6.8 被踢信号检测（尽力而为）：仅复用**现成**小红书页读取 inner_text；
+        # 无页面/读取失败/空白 → 不误判（id_token 权威分支不因页面问题被降级，R-6.6 精神）。
         ctx = None
-    page, body, login_redirect = await _scan_xhs_pages_for_signals(ctx)
-    kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body) or login_redirect
-    risk_verify = _detect_risk_verify(body)
-    page_logged_in = await _decide_page_logged_in(page, has_id_token, has_ws, kicked)
-    return has_ws, page_logged_in, kicked, risk_verify
+        try:
+            ctx = await eng.context()
+        except Exception:  # noqa: BLE001（测试环境/引擎未就绪：无 context 不判被踢）
+            ctx = None
+        page, body, login_redirect = await _scan_xhs_pages_for_signals(ctx)
+        kicked = ("登录超限" in body) or ("请重新登录" in body) or ("登录已过期" in body) or login_redirect
+        risk_verify = _detect_risk_verify(body)
+        page_logged_in = await _decide_page_logged_in(page, has_id_token, has_ws, kicked)
+        return has_ws, page_logged_in, kicked, risk_verify
+
+    return await asyncio.wait_for(_impl(), timeout=timeout)
 
 
 def _detect_risk_verify(body: str) -> bool:
@@ -414,7 +422,16 @@ async def login_status():
         from src import engine_pool
 
         eng = await engine_pool.pool.get("default")
-        has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
+        try:
+            has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
+        except asyncio.TimeoutError:
+            # R-6.53i：CDP 假死（进程活、协议无响应）超时 → 强制释放引擎触发下次重建，
+            # 返回 unknown（keeper 轮询链不再被卡死；下次轮询走新引擎真实判定）。
+            await eng.force_release()
+            return {
+                "status": "unknown", "logged_in": False, "nickname": "",
+                "raw": "引擎 CDP 假死，已触发强制重建",
+            }
         result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
         if not kicked and not risk_verify:
             _LOGIN_CACHE["t"] = now
