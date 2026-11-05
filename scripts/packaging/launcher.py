@@ -201,7 +201,13 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001（引擎拉起失败：服务仍可用，仅打日志）
             print(f"[xhs-leads] 壳窗口启动异常（服务仍可用）: {e!r}", file=sys.stderr)
             return
-        guard = asyncio.create_task(shell_window.login_guard(win, url, stop))
+        # R-6.48q：pending 事件驱动——注入同进程 _LOGIN_GATE（含 asyncio.Event），
+        # login_begin 置位唤醒守卫，主循环零轮询（守卫退化路径仅限 gate 未注入时）
+        if server._LOGIN_GATE.get("evt") is None:
+            server._LOGIN_GATE["evt"] = asyncio.Event()
+        guard = asyncio.create_task(
+            shell_window.login_guard(win, url, stop, gate=server._LOGIN_GATE)
+        )
         keeper = asyncio.create_task(
             shell_window.keep_shell_tab(url, stop, on_shell_closed=_request_exit)
         )

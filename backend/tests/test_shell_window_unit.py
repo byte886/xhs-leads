@@ -1,4 +1,4 @@
-"""shell_window 纯助手特征测试（R-6.37c：tab 关闭/安全关闭/JSON 助手）。"""
+"""shell_window 纯助手特征测试（R-6.37c：tab 关闭/安全关闭/JSON 助手；R-6.48q：登录守卫事件驱动）。"""
 import asyncio
 
 from src import shell_window as sw
@@ -157,3 +157,91 @@ def test_watch_shell_mounts_crash_handler():
     coord.watch(shell, is_shell=True)  # 幂等：重复挂载不重复注册
     # 无异常 + 第二次 watch 未重复注册（_watched 大小保持 1）
     assert len(coord._watched) == 1
+
+
+# ---------------- R-6.48q：login_guard 事件驱动（零轮询） ----------------
+
+class _FakeWin:
+    """login_guard 最小接口：page + rebind；导航/监视/回APP 均被 monkeypatch。"""
+
+    def __init__(self, page):
+        self.page = page
+        self.rebound = 0
+
+    def rebind(self, p):
+        self.rebound += 1
+        self.page = p
+
+
+async def _noop(*a, **k):
+    return None
+
+
+async def _fake_monitor(*a, **k):
+    return True  # 立即"登录成功"结束监视，缩短测试
+
+
+def test_login_guard_event_driven_no_polling(monkeypatch):
+    """pending 事件化：事件未置位守卫挂起零导航；置位后立即导航。"""
+    monkeypatch.setattr(sw, "_guard_startup_status", _noop)
+    monkeypatch.setattr(sw, "_guard_announce_and_navigate", _noop)
+    monkeypatch.setattr(sw, "_guard_monitor_loop", _fake_monitor)
+    monkeypatch.setattr(sw, "_guard_return_to_app", _noop)
+
+    win = _FakeWin(FakePage())
+    stop = asyncio.Event()
+    gate = {"pending": False, "force": False, "evt": asyncio.Event()}
+    navigated = []
+
+    async def fake_announce(*a, **k):
+        navigated.append(True)
+    monkeypatch.setattr(sw, "_guard_announce_and_navigate", fake_announce)
+
+    async def run():
+        task = asyncio.create_task(sw.login_guard(win, "http://127.0.0.1:8791", stop, gate=gate))
+        await asyncio.sleep(0.05)  # 事件未置位：应仍挂起，未导航
+        assert navigated == [], "事件未置位时守卫不应导航（零轮询挂起）"
+        gate["pending"] = True
+        gate["force"] = False
+        gate["evt"].set()  # login_begin 置位 → 守卫醒来
+        await asyncio.sleep(0.05)
+        assert navigated, "事件置位后守卫应立即导航"
+        assert gate["evt"].is_set() is False, "守卫应 clear 消费事件"
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+
+
+def test_login_guard_event_consumed_when_pending_cancelled(monkeypatch):
+    """pending 被 login_cancel 清除时：事件唤醒后不误导航，回挂起。"""
+    monkeypatch.setattr(sw, "_guard_startup_status", _noop)
+    navigated = []
+
+    async def fake_announce(*a, **k):
+        navigated.append(True)
+    monkeypatch.setattr(sw, "_guard_announce_and_navigate", fake_announce)
+
+    win = _FakeWin(FakePage())
+    stop = asyncio.Event()
+    gate = {"pending": False, "force": False, "evt": asyncio.Event()}
+
+    async def run():
+        task = asyncio.create_task(sw.login_guard(win, "http://127.0.0.1:8791", stop, gate=gate))
+        await asyncio.sleep(0.05)
+        gate["evt"].set()  # 模拟：login_begin set 后又被 login_cancel 清 pending
+        gate["pending"] = False  # cancel 已清 pending，evt 残留 set
+        await asyncio.sleep(0.05)
+        assert navigated == [], "pending=False 时守卫不得导航（避免误导航登录页）"
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())

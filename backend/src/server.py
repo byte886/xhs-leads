@@ -504,10 +504,11 @@ async def login_hint():
 # ================= 真实登录页方案（R-6.5）=================
 # 用户拍板：登录交互改为「壳窗口内打开真实小红书登录页」（原生扫码/手机号+获取验证码），
 # 登录后 Cookie 注入无头引擎独立 profile（两套会话闭环：WebView 登录 → CDP 注入 → 引擎复用）。
-# 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫轮询到 pending →
-#       窗口 load_url(小红书登录页) → 守卫轮询 get_cookies 出现 web_session →
-#       import_cookies 注入引擎 → 真实判定登录态 → 回 APP 前端。
-_LOGIN_GATE = {"pending": False, "force": False}
+# 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫导航登录页
+#       （R-6.48q：evt=asyncio.Event 事件驱动唤醒，主循环零轮询）→ 守卫轮询
+#       get_cookies 出现 web_session → import_cookies 注入引擎 → 真实判定登录态 → 回 APP 前端。
+# evt 由 launcher 启动守卫前注入（同进程同 loop）；无壳/测试直跑 evt=None，守卫退化低频轮询。
+_LOGIN_GATE: dict = {"pending": False, "force": False, "evt": None}
 
 
 class LoginBeginReq(BaseModel):
@@ -533,6 +534,9 @@ async def login_begin(req: LoginBeginReq | None = None):
     force = bool(req and req.force)
     _LOGIN_GATE["pending"] = True
     _LOGIN_GATE["force"] = force
+    evt = _LOGIN_GATE.get("evt")  # R-6.48q：事件驱动唤醒守卫（同进程同 loop，零轮询）
+    if evt is not None:
+        evt.set()
     # R-6.22g：登录引导触发即收起采集调试窗（右窗关闭），壳窗（登录页所在）保留——
     # 用户约定「触发需要登录时右侧要么关闭要么有提示」；扫码成功后 new_page 按登录态恢复。
     try:
@@ -571,6 +575,9 @@ async def login_cancel():
     """取消待处理登录请求（主动重登用户点「✕」回 APP 时由守卫调用；强制登录无取消路径）。"""
     _LOGIN_GATE["pending"] = False
     _LOGIN_GATE["force"] = False
+    evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
+    if evt is not None:
+        evt.clear()
     return {"ok": True}
 
 
@@ -660,6 +667,9 @@ async def import_cookies(req: ImportCookiesReq):
         _LOGIN_INVALID = False
         _LOGIN_GATE["pending"] = False
         _LOGIN_GATE["force"] = False
+        evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
+        if evt is not None:
+            evt.clear()
     return _import_cookies_result(has_ws, page_logged_in, kicked, logged_in)
 
 

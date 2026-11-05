@@ -841,15 +841,19 @@ async def _guard_announce_and_navigate(win, base, force) -> None:
     await _guard_navigate_to_login(win, base, force)
 
 
-async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") -> None:
+async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", gate: dict | None = None) -> None:
     """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录；R-6.9 主动重登；R-6.10 首页模式）。
 
     语义（用户拍板）：
-    - 启动未登录/被踢：R-6.48i 起自动进入强制登录（直接导航登录页，不再停在 APP
-      前端等点击「去登录」）；已登录启动守卫待命，不自动导航。
+    - 启动未登录/被踢：R-6.48p 起壳窗保持 APP 界面，前端 ForceLogin 提示框弹出，
+      用户点「去登录」才导航登录页（不再自动导航）；已登录启动守卫待命。
     - 运行时被踢不直接导航（前端弹强制登录框，用户点击触发）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
     - 登录成功：id_token → 等待遮罩 → import_cookies 注入引擎 → 回 APP。
+    - R-6.48q：pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
+      （含 asyncio.Event），用户点「去登录」→ login_begin 置位 evt → 守卫 `await
+      evt.wait()` 醒来导航，主循环零轮询。gate 为 None（测试/无壳直跑）退化为
+      1.5s 低频轮询，语义等价。
     CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化路径）。R-6.36e：循环块拆至上方助手，语义逐字保留。
     """
     if os.environ.get("CZ_SKIP_LOGIN_GUARD"):
@@ -862,19 +866,26 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
     while not stop.is_set():
         if stop.is_set():
             return
-        # R-6.48q：pending 轮询降频 0.5→1.5s——pending 是后端内存态（_LOGIN_GATE），
-        # 平时不存在、仅用户点「去登录」后短暂置位；1.5s 响应完全够（点击→导航
-        # 感知无差），减少空转 HTTP 轮询频率
-        await asyncio.sleep(1.5)
+        # R-6.48q：pending 事件驱动——login_begin 置位 evt 才醒来（同进程同 loop）。
+        # 守卫无条件 clear 消费；pending 被 cancel 清掉（login_cancel）时不误导航。
+        if gate is not None and gate.get("evt") is not None:
+            await gate["evt"].wait()
+            gate["evt"].clear()
+            if not gate.get("pending"):
+                continue  # 事件已消费但 pending 被清：不导航，回挂起
+            force = bool(gate.get("force"))
+        else:
+            # 退化路径（gate 未注入：测试/无壳直跑）保留低频轮询
+            await asyncio.sleep(1.5)
+            force = await _guard_wait_pending(win, base, stop)
+            if force is None:
+                continue
         # R-6.19：Tab1 被关闭后 keeper 即时重建——守卫重绑定新壳 page，重建即重置登录状态
         if await _rebind_if_closed(win, base):
             in_login = False
             continue
         if in_login:
             continue  # 正在登录页（局部轮询控制）
-        force = await _guard_wait_pending(win, base, stop)
-        if force is None:
-            continue
         await _guard_announce_and_navigate(win, base, force)
         in_login = True
         ok = await _guard_monitor_loop(win, base, stop, force)
