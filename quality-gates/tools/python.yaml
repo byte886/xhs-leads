@@ -7,7 +7,7 @@
 language: python
 
 crap_tool: crapper
-crap_cmd: <GAUNTLET_DIR>/tooling/vendor/crapper/crapper -s backend/src --no-coverage
+crap_cmd: export CRAPPER_BIN=<GAUNTLET_DIR>/tooling/vendor/crapper/crapper && <GAUNTLET_DIR>/tooling/vendor/crapper/crapper -s backend/src --no-coverage && bash quality-gates/tools/check_cc.sh
 
 mutation_tool: mutator
 mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator -s backend/src

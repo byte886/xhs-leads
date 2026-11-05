@@ -1,0 +1,17 @@
+# CC baseline for quality-gates/tools/check_cc.sh
+# rows below are accepted debt; delete a row as soon as that function is split.
+# rule: new over-8 function, or a listed one getting worse, fails the gate.
+server.login_status 10
+engine_pool.AccountEngine.context 10
+engine_pool.AccountEngine._launch_context 9
+engine_pool._clear_session_restore 14
+browser_client.search 20
+browser_client._prepare_search_page 14
+browser_client._load 10
+browser_client._cleanup_stale_xhs_pages 9
+shell_window._keeper_poll_pass 20
+shell_window.login_guard 11
+shell_window._guard_hook_forced_nav 9
+shell_window._guard_monitor_loop 9
+shell_window.WindowCoordinator.watch 15
+shell_window.WindowCoordinator._shell_closed_verify 11
