@@ -346,6 +346,10 @@ class AccountEngine:
         log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
         if headless:
             launch_kwargs["user_agent"] = _HEADLESS_UA
+        # R-6.53j：ignore_default_args 滤掉 Playwright 默认的 --no-first-run——
+        # Chromium 150+ 带该 flag 有 CHECK/SIGTRAP 崩溃报告（Debian #1141618）；
+        # 只移除我们追加的那行不够，Playwright driver 默认 args 也含它，须显式忽略。
+        launch_kwargs["ignore_default_args"] = ["--no-first-run"]
         self._context = await pw.chromium.launch_persistent_context(
             self.user_data_dir, **launch_kwargs
         )
