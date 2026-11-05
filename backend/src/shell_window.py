@@ -241,6 +241,7 @@ class WindowCoordinator:
         self._stop = None
         self._on_shell_closed = None
         self._engine = None  # R-6.53c：引擎实例（close 事件校验「用户关窗 vs 引擎崩溃」）
+        self._shell_close_ts = 0.0  # R-6.53f：壳窗 close 事件时间戳（0=无记录）
 
     # ---------------- 回调绑定（keeper 启动时一次） ----------------
     def bind(self, stop, on_shell_closed) -> None:
@@ -250,6 +251,13 @@ class WindowCoordinator:
     def attach_engine(self, engine) -> None:
         """R-6.53c：绑定账号引擎实例，供壳窗 close 事件校验引擎连接状态。"""
         self._engine = engine
+
+    def shell_close_age(self) -> float:
+        """距最近一次壳窗 close 事件的秒数（无记录返回极大值），供 keeper 轮询
+        兜底区分「用户关窗」与「引擎崩溃」——不依赖 close 回调的异步调度。"""
+        if self._shell_close_ts <= 0:
+            return 1e18
+        return time.monotonic() - self._shell_close_ts
 
     async def _shell_closed_verify(self) -> None:
         """R-6.53c：壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
@@ -313,12 +321,16 @@ class WindowCoordinator:
                 if is_shell:
                     # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能
                     # 立即退出——延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
+                    self._shell_close_ts = time.monotonic()  # R-6.53f：供轮询兜底
                     print("[xhs-leads][keeper] 壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）", flush=True)
                     try:
-                        loop = asyncio.get_event_loop()
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = asyncio.get_event_loop()
                         loop.call_later(3.0, lambda: asyncio.ensure_future(
                             self._shell_closed_verify()))
-                    except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
+                    except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
                         pass
                 else:
                     print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
@@ -1251,6 +1263,11 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
                 else:
                     print("[xhs-leads][keeper] 引擎重建期壳窗未就绪，下轮轮询重试（不退出）", flush=True)
                     return "continue"
+            elif coord.shell_close_age() < 1e17 and eng.is_connected_now():
+                # R-6.53f：壳窗 close 事件已有记录且引擎存活（非崩溃）→ 用户真关主窗
+                print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭（引擎存活），触发应用退出", flush=True)
+                on_shell_closed()
+                return "exit"
             elif on_shell_closed is not None:
                 print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
                 on_shell_closed()
