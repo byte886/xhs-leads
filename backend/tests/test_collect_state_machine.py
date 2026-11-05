@@ -91,6 +91,16 @@ class _FakeTask:
         self.cancel_calls += 1
 
 
+def _run_takeover(monkeypatch) -> None:
+    """跑一次顶掉动作；把「等收尾」和「复位采集窗」换成空实现，只验取消/标停语义。"""
+    async def _noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(server, "_await_orphans", _noop)
+    monkeypatch.setattr(server, "_reset_collect_windows", _noop)
+    asyncio.run(server._stop_running_collect_tasks())
+
+
 class TestStopRunningTasks:
     """R-6.53v：新任务顶旧任务 = stop_event + task.cancel() 双动作。"""
 
@@ -98,7 +108,7 @@ class TestStopRunningTasks:
         task = _FakeTask()
         st = _state(task=task)
         monkeypatch.setattr(server, "_COLLECT_TASKS", {"t1": st})
-        server._stop_running_collect_tasks()
+        _run_takeover(monkeypatch)
         assert st["stop_event"] is True
         assert task.cancel_calls == 1
 
@@ -107,14 +117,14 @@ class TestStopRunningTasks:
         task._done = True
         st = _state(task=task, status="done")
         monkeypatch.setattr(server, "_COLLECT_TASKS", {"t1": st})
-        server._stop_running_collect_tasks()
+        _run_takeover(monkeypatch)
         assert st["stop_event"] is False
         assert task.cancel_calls == 0
 
     def test_running_without_task_ref(self, monkeypatch):
         st = _state()
         monkeypatch.setattr(server, "_COLLECT_TASKS", {"t1": st})
-        server._stop_running_collect_tasks()  # 不抛
+        _run_takeover(monkeypatch)  # 不抛
         assert st["stop_event"] is True
 
 
@@ -188,3 +198,53 @@ class TestCollectOne:
         asyncio.run(server._collect_one({"feed_id": "f2"}, st, _ctx(con, fast=True)))
         assert calls == [{"feed_id": "f2"}]
         assert st["saved"] == 1 and con.commits == 1
+
+
+class TestOrphanTakeover:
+    """R-6.53z4：新任务顶掉旧任务时，必须和「点停止」一样复位采集窗。"""
+
+    def test_takeover_cancels_old_and_recovers_window(self, monkeypatch):
+        async def scenario():
+            recovered = []
+
+            async def _fake_recover(account_id):
+                recovered.append(account_id)
+
+            monkeypatch.setattr(server, "_recover_collect_window", _fake_recover)
+            started = asyncio.Event()
+
+            async def _long_running():
+                started.set()
+                await asyncio.sleep(30)
+
+            task = asyncio.create_task(_long_running())
+            await started.wait()
+            old = {"status": "running", "account_id": "collect_a", "stop_event": False, "task": task}
+            server._COLLECT_TASKS["tid_old"] = old
+            try:
+                await server._stop_running_collect_tasks()
+            finally:
+                server._COLLECT_TASKS.clear()
+
+            assert old["stop_event"] is True, "旧任务必须先被标停"
+            assert task.done(), "旧任务必须被 cancel 且已收尾"
+            assert recovered == ["collect_a"], "被顶掉的账号必须复位采集窗（与 collect_stop 同语义)"
+
+        asyncio.run(scenario())
+
+    def test_takeover_without_running_task_is_noop(self, monkeypatch):
+        async def scenario():
+            recovered = []
+
+            async def _fake_recover(account_id):
+                recovered.append(account_id)
+
+            monkeypatch.setattr(server, "_recover_collect_window", _fake_recover)
+            server._COLLECT_TASKS["tid_done"] = {"status": "done", "account_id": "a1"}
+            try:
+                await server._stop_running_collect_tasks()
+            finally:
+                server._COLLECT_TASKS.clear()
+            assert recovered == [], "没有在跑的任务就不该去动采集窗"
+
+        asyncio.run(scenario())

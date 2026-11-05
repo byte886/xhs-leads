@@ -1171,18 +1171,49 @@ def _finalize_stopped(state: dict, req, account_id: str) -> None:
     state["phase"] = "done"
 
 
-def _stop_running_collect_tasks() -> None:
-    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。
-
-    R-6.53v：同时 task.cancel() 框架级取消（旧任务的所有 await 点被中断，立即收尾），
-    与 collect_stop 行为一致——避免旧任务仍占用引擎做采集动作。
-    """
+def _collect_orphans() -> tuple[list, set]:
+    """标停并取消所有运行中的旧采集任务，返回 (被取消的任务, 涉及账号集合)。"""
+    orphans, accounts = [], set()
     for _tid, st in list(_COLLECT_TASKS.items()):
         if st.get("status") == "running":
             st["stop_event"] = True
             task = st.get("task")
             if task and not task.done():
                 task.cancel()
+                orphans.append(task)
+            accounts.add(st.get("account_id", "default"))
+    return orphans, accounts
+
+
+async def _await_orphans(orphans: list) -> None:
+    """等旧任务真正收尾（最多 8s）；卡在不可中断 await 时不拖住新采集。"""
+    if not orphans:
+        return
+    try:
+        await asyncio.wait_for(asyncio.gather(*orphans, return_exceptions=True), timeout=8)
+    except Exception:  # noqa: BLE001
+        log.warning("旧采集任务 8s 内未收尾，继续启动新任务")
+
+
+async def _reset_collect_windows(accounts: set) -> None:
+    """逐账号复位采集窗（关闭残留搜索/笔记页），与 collect_stop 同一动作。"""
+    for acct in accounts:
+        await _recover_collect_window(acct)
+
+
+async def _stop_running_collect_tasks() -> None:
+    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。
+
+    R-6.53v：task.cancel() 框架级取消（旧任务所有 await 点被中断，立即收尾）。
+    R-6.53z4：与 collect_stop 补齐同一条「停止」语义——旧任务真正结束后逐账号
+    _recover_collect_window，否则「被新任务顶掉」这条路径会漏掉采集窗复位。先等
+    旧任务收尾再复位，避免复位误关掉新任务刚打开的那一页。
+    """
+    orphans, accounts = _collect_orphans()
+    if not accounts:
+        return
+    await _await_orphans(orphans)
+    await _reset_collect_windows(accounts)
 
 
 def _collect_finalize_empty(state: dict, res: dict) -> None:
@@ -1318,7 +1349,7 @@ async def collect_start(req: SearchReq):
     # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
     # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
-    _stop_running_collect_tasks()
+    await _stop_running_collect_tasks()
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
