@@ -278,12 +278,13 @@ class AccountEngine:
             # 普通 Chrome 形态，带菜单栏/标签栏）。壳窗口应用模式改由
             # shell_window.ensure_shell 走 --app 命令行路由（_launch_app_window）
             # 弹出；此处保留 --window-size/--window-position 让启动初始普通窗口
-            # 也落在主屏左半（避免闪现错位，随后被 ensure_shell 关闭）。
-            # R-6.22 双窗口左右分屏：主 APP 放主屏左半、采集调试窗口右半，
-            # 等宽并排不重叠（win_w = min(1280, 主屏宽 // 2)）
+            # R-6.49d：初始普通窗口移出屏幕（负坐标）——消除「普通→应用提升」时
+            # 初始窗口在左半屏闪现两次的观感（CDP 取证：启动期两个 8791/ target，
+            # 先普通后 --app，<1s 切换）。应用窗仍由 ensure_shell --app 路由弹主屏
+            # 左半（--window-position=0,0 语义不变），初始窗屏幕外自生自灭。
             win_w, win_h, _, _ = shell_window_geometry()
             launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
-            launch_kwargs["args"].append("--window-position=0,0")
+            launch_kwargs["args"].append("--window-position=-4000,0")
         # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
         # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
         # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
