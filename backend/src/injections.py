@@ -122,9 +122,9 @@ _register(
     "collect_debug_title",
     _COLLECT_DEBUG_TITLE_JS,
     kind="page_init",
-    note="每次 evaluate 都会新建一个 setInterval（JS 内部无防重），故由"
-         "_ensure_debug_title 以 Python 侧 page._debug_title_installed 标志防重——"
-         "不走 inject_once 的 window 标记。page.add_init_script + 当前文档立即 evaluate。",
+    note="事件级守护（MutationObserver，R-6.48i 替代 setInterval 轮询）。page.add_init_script"
+         " + 当前文档立即 evaluate；Python 侧 _debug_title_installed 标志防重——"
+         "不走 inject_once 的 window 标记。",
 )
 
 # ---- 3b. 壳窗口标题守护（page 级 init script）：主窗口无论 APP 页还是小红书登录页，

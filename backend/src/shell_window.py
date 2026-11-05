@@ -127,8 +127,8 @@ async def _ensure_shell_title(page) -> None:
 
 async def _ensure_debug_title(page) -> None:
     """采集调试窗口标题守护：Chrome 窗口标题跟随 document.title。采集页为真实
-    小红书页（SPA 路由/整页导航都会重设 title），用轻量 setInterval 覆盖为
-    「XHS Leads · 采集调试窗口」，让用户一眼看出这是调试/观察窗口。
+    小红书页（SPA 路由/整页导航都会重设 title），用事件级守护（MutationObserver）
+    覆盖为「XHS Leads · 采集调试窗口」，让用户一眼看出这是调试/观察窗口。
     title 为纯浏览器元数据：不触发网络请求、不改页面逻辑与 DOM 结构，
     风控面极小（远小于既有 stealth 注入）。
 
@@ -774,7 +774,9 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
             result = await step(win, base, cs, state)
             if result is not None:
                 return result
-            await asyncio.sleep(0.3)
+            # R-6.48q：登录成功检测降频 0.3→1s（扫码登录本身秒级，0.3s 精度无意义，
+            # 减少登录页期间高频 cookies 读取）
+            await asyncio.sleep(1.0)
         return False
     finally:
         if remove_nav_hook is not None:
@@ -860,7 +862,10 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event") 
     while not stop.is_set():
         if stop.is_set():
             return
-        await asyncio.sleep(0.5)
+        # R-6.48q：pending 轮询降频 0.5→1.5s——pending 是后端内存态（_LOGIN_GATE），
+        # 平时不存在、仅用户点「去登录」后短暂置位；1.5s 响应完全够（点击→导航
+        # 感知无差），减少空转 HTTP 轮询频率
+        await asyncio.sleep(1.5)
         # R-6.19：Tab1 被关闭后 keeper 即时重建——守卫重绑定新壳 page，重建即重置登录状态
         if await _rebind_if_closed(win, base):
             in_login = False

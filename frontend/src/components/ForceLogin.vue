@@ -38,6 +38,8 @@ function stopTimer() {
 //         （logged_in 且非 risk_verify）→ 关窗进工作台；仍风控/未登录 → 保持并提示。
 function startCheck() {
   stopTimer()
+  // R-6.48q：登录复查降频 1s→3s——扫码登录本身秒级，1s 波动无意义；3s 足够感知
+  // 登录成功回 APP，同时减少弹框期间高频请求
   timer = setInterval(async () => {
     try {
       const lg = await apiLoginStatus()
