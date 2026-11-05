@@ -95,6 +95,29 @@ async def recover_collect_window(account_id: str = "default") -> int:
     return await _cleanup_stale_xhs_pages(account_id)
 
 
+def _is_purgeable_xhs_page(url: str) -> bool:
+    """R-6.53：是否为可清理的旧 xhs 页（登录墙 / 验证码页保留）。"""
+    return (
+        "xiaohongshu.com" in url
+        and "/website-login" not in url
+        and "captcha" not in url
+    )
+
+
+async def _close_purgeable_pages(pages) -> int:
+    """逐页关闭可清理页并计数（关闭失败静默跳过）。"""
+    closed = 0
+    for p in pages:
+        if not _is_purgeable_xhs_page(p.url or ""):
+            continue
+        try:
+            await p.close()
+            closed += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return closed
+
+
 async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
     """R-6.53：采集前清理残留的小红书搜索/探索页（登录墙页保留）。
 
@@ -105,88 +128,89 @@ async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
     try:
         eng = await _engine(account_id)
         ctx = await eng.context()
-        closed = 0
-        for p in list(ctx.pages):
-            u = p.url or ""
-            if (
-                "xiaohongshu.com" in u
-                and "/website-login" not in u
-                and "captcha" not in u
-            ):
-                try:
-                    await p.close()
-                    closed += 1
-                except Exception:  # noqa: BLE001
-                    pass
+        closed = await _close_purgeable_pages(list(ctx.pages))
         if closed:
             log.info("采集前清理残留 xhs 页 %d 个", closed)
         return closed
     except Exception:  # noqa: BLE001
         return 0
 
-
-
-
-
-
 # ===========================================================================
 # 页面加载与提取
 # ===========================================================================
+async def _load_focus(page, show_front: bool, tag: str = "load") -> None:
+    """焦点处理（R-6.18）：前台可见 or 后台切回壳窗口 Tab1。失败非阻断。
+
+    R-6.53q：CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死直接
+    触发点），焦点切换非关键路径，故统一走 cdp_call 绝对超时 + skip。
+    """
+    try:
+        if show_front:
+            await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                           label=f"{tag}.bring_to_front", skip=True)
+        else:
+            await _switch_back_to_shell(page)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _load_open(page, url: str, wait_ms: int, show_front: bool,
+                     suffix: str = ""):
+    """单次尝试：导航 + 焦点 + 注入提取脚本 + 等待渲染。
+
+    R-6.53s：统一 CDP 超时保护——引擎假死时 Playwright 内部 timeout 不触发
+    （CDP 无响应），cdp_call 以绝对超时强制打断并打 WARNING 溯源。
+    suffix 用于区分首次与重试的日志标签（load.goto / load.goto_retry）。
+    """
+    await cdp_call(page.goto(url, wait_until="domcontentloaded", timeout=12000),
+                   timeout=CDP_NAV, label=f"load.goto{suffix}")
+    await _load_focus(page, show_front, tag=f"load{suffix}")
+    await injections.inject_once(page, "extract")
+    await asyncio.sleep(wait_ms / 1000)
+    return page
+
+
+async def _load_retry(page, url: str, wait_ms: int, show_front: bool,
+                      account_id: str, exc):
+    """R-6.53 崩溃重试：重开页面再试一次；仍失败则清理并抛第二次异常。
+
+    触发背景：CFT 156 macOS 概率性崩溃，Nov 5 采集取证「导航 search_result 即
+    Page crashed」——渲染进程崩溃后原 page 不可用，必须新开页面。
+    """
+    try:
+        await _close_page_safe(page, account_id)
+    except Exception:  # noqa: BLE001
+        pass
+    log.warning("页面加载遇崩溃（%s），重开页面重试: %s", str(exc)[:80], url[:80])
+    page2 = await _page(account_id)
+    try:
+        return await _load_open(page2, url, wait_ms, show_front, suffix="_retry")
+    except Exception as exc2:  # noqa: BLE001
+        try:
+            await _close_page_safe(page2, account_id)
+        except Exception:  # noqa: BLE001
+            pass
+        raise exc2 from exc
+
+
 async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
                 show_front: bool = True):
-    """打开页面并注入提取脚本。show_front=False（R-6.18）：采集后台完成——
-    不 bring_to_front 抢前台，采集 tab 留在壳窗口 Tab2（设置页开关控制是否显示）。
+    """打开页面并注入提取脚本（失败按 R-6.53 崩溃重试一次）。
+
+    show_front=False（R-6.18）：采集后台完成——不 bring_to_front 抢前台，
+    采集 tab 留在壳窗口 Tab2（设置页开关控制是否显示）。
     """
     page = await _page(account_id)
     try:
-        # R-6.53s：统一 CDP 超时保护——引擎假死时 Playwright 内部 timeout 不触发
-        # （CDP 无响应），cdp_call 以绝对超时强制打断并打 WARNING 溯源。
-        await cdp_call(page.goto(url, wait_until="domcontentloaded", timeout=12000),
-                       timeout=CDP_NAV, label="load.goto")
-        try:
-            if show_front:
-                await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
-                               label="load.bring_to_front", skip=True)
-            else:
-                # 后台采集：切回壳窗口 Tab1（前端/登录 tab），采集 tab 保持激活渲染
-                await _switch_back_to_shell(page)
-        except Exception:  # noqa: BLE001
-            pass
-        await injections.inject_once(page, "extract")
-        await asyncio.sleep(wait_ms / 1000)
-        return page
+        return await _load_open(page, url, wait_ms, show_front)
     except Exception as exc:  # noqa: BLE001
-        # R-6.53：渲染进程崩溃（Page crashed / Target closed）时重开页面重试一次
-        # （CFT 156 macOS 概率性崩溃，Nov 5 采集取证：导航 search_result 即 Page crashed）。
+        if _is_crash_error(exc):
+            return await _load_retry(page, url, wait_ms, show_front, account_id, exc)
         try:
             await _close_page_safe(page, account_id)
         except Exception:  # noqa: BLE001
             pass
-        if _is_crash_error(exc):
-            log.warning("页面加载遇崩溃（%s），重开页面重试: %s", str(exc)[:80], url[:80])
-            page2 = await _page(account_id)
-            try:
-                await cdp_call(page2.goto(url, wait_until="domcontentloaded", timeout=12000),
-                               timeout=CDP_NAV, label="load.goto_retry")
-                try:
-                    if show_front:
-                        await cdp_call(page2.bring_to_front(), timeout=CDP_QUICK,
-                                       label="load.bring_to_front_retry", skip=True)
-                    else:
-                        await _switch_back_to_shell(page2)
-                except Exception:  # noqa: BLE001
-                    pass
-                await injections.inject_once(page2, "extract")
-                await asyncio.sleep(wait_ms / 1000)
-                return page2
-            except Exception as exc2:  # noqa: BLE001
-                try:
-                    await _close_page_safe(page2, account_id)
-                except Exception:  # noqa: BLE001
-                    pass
-                raise exc2 from exc
         raise
-
 
 def _find_shell_tab(page, base: str):
     """R-6.37i 拆自 _switch_back_to_shell：定位壳窗口 Tab1（base 前缀、非当前页）。"""
