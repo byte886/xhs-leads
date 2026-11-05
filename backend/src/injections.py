@@ -237,6 +237,7 @@ _register(
 # 防漂移；拦截判定由 decide_block 纯函数 + pytest 兜底（test_injections_decision.py）。
 LOGIN_PANEL_SELECTORS = (".container", ".reds-modal", ".login-container")
 LOGIN_MASK_SELECTOR = ".reds-mask"
+LOGIN_EXTRA_HIDE_SELECTORS = ".out.right"  # R-6.48p：登录页杂项（活动推广区）净化专用
 LOGIN_CLICK_EVENTS = ("pointerdown", "mousedown", "mouseup", "click")
 LOGIN_ESC_EVENTS = ("keydown", "keyup")
 
@@ -332,6 +333,43 @@ _register(
     kind="evaluate",
     note="登录页弹窗恒居中+滚动条适配。add_init_script 注入，document 锚点 "
          "MutationObserver 事件驱动，无 setInterval、无守卫轮询补注（R-6.48k）。",
+)
+
+# ---- 9b. 登录页净化（R-6.48p：用户实测登录页背后露出活动推广区与按钮） ----
+# 小红书登录页整页模式下，登录面板之外存在 .container.out.right 等推广/活动杂项，
+# 页面自带 .reds-mask（z-index:-1 透明）盖不住 → 用户看到「活动和一个按钮」。
+# 净化：全屏不透明白底遮罩（z=2147483645）盖住面板背后一切 + 登录面板置顶
+# （z=2147483646）+ 隐藏已知杂项（.out.right）双保险。选择器复用
+# LOGIN_PANEL_SELECTORS 常量插值防漂移；杂项选择器独立（LOGIN_EXTRA_HIDE_SELECTORS，
+# 不并入判定常量避免破坏 decide_block）。
+_LOGIN_CLEAN_JS = (
+    "(function(){"
+    "if(window.__xhs_leads_login_clean)return;window.__xhs_leads_login_clean=true;"
+    "function ensure(){"
+    "if(document.body){"
+    "var bg=document.getElementById('xhs-leads-login-clean');"
+    "if(!bg){"
+    "bg=document.createElement('div');bg.id='xhs-leads-login-clean';"
+    "bg.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;"
+    "background:#fff;z-index:2147483645;';"
+    "document.body.appendChild(bg);"
+    "}"
+    "var pp=document.querySelectorAll('" + ",".join(LOGIN_PANEL_SELECTORS) + "');"
+    "for(var i=0;i<pp.length;i++){if(pp[i].offsetWidth>0||pp[i].getBoundingClientRect().width>0){"
+    "pp[i].style.zIndex='2147483646';}}"
+    "var extra=document.querySelectorAll('" + LOGIN_EXTRA_HIDE_SELECTORS + "');"
+    "for(var j=0;j<extra.length;j++){extra[j].style.display='none';}"
+    "}}"
+    "ensure();"
+    "new MutationObserver(ensure).observe(document,{childList:true,subtree:true});"
+    "})();"
+)
+_register(
+    "login_clean",
+    _LOGIN_CLEAN_JS,
+    kind="evaluate",
+    note="登录页净化：全屏白底遮罩+登录面板置顶+隐藏杂项。add_init_script 注入，"
+         "document 锚点 MutationObserver 事件驱动（R-6.48k 同款）。",
 )
 
 # ---------------------------------------------------------------------------

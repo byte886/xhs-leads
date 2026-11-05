@@ -82,6 +82,23 @@ class TestLoginFitSelectors:
         ), "LOGIN_PANEL_SELECTORS 顺序被改动（index 语义破坏）"
 
 
+class TestLoginCleanSelectors:
+    """login_clean 净化注入（R-6.48p）：全屏白底遮罩 + 面板置顶 + 隐藏杂项，常量防漂移。"""
+
+    def test_panel_selectors_embedded(self):
+        js = injections.get("login_clean")
+        for sel in injections.LOGIN_PANEL_SELECTORS:
+            assert sel in js, f"选择器 {sel} 未嵌入 login_clean JS"
+
+    def test_extra_hide_selector_embedded(self):
+        assert injections.LOGIN_EXTRA_HIDE_SELECTORS in injections.get("login_clean")
+
+    def test_clean_id_and_zindex_present(self):
+        js = injections.get("login_clean")
+        assert "xhs-leads-login-clean" in js
+        assert "2147483645" in js and "2147483646" in js
+
+
 class TestJsSyntax:
     """注入 JS 语法与 48j 坑回归。"""
 

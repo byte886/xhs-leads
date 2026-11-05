@@ -568,7 +568,7 @@ async def ensure_shell(base_url: str):
 # ---------- login_guard 拆分助手（R-6.36e：行为与原内联闭包逐字等价） ----------
 
 async def _ensure_login_injects(win: "ShellWindow") -> None:
-    """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配）：
+    """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配 + login_clean 净化）：
     page 级 add_init_script——浏览器在每个新 document（整页导航/SPA 重建）创建
     瞬间自动执行，JS 内部 MutationObserver 事件驱动；无守卫轮询补注
     （R-6.48k，用户拍板：循环守护不可取，直接注入行为）。
@@ -576,7 +576,7 @@ async def _ensure_login_injects(win: "ShellWindow") -> None:
     evaluate 失败（页面导航中/未就绪）不重试轮询——下一事件点（导航登录页/
     重绑定/拉回）自然补注，且新 document 由 init script 自动生效。
     """
-    for key in ("force_login", "login_fit"):
+    for key in ("force_login", "login_fit", "login_clean"):
         js = injections.get(key)
         flag = f"_login_{key}_installed"
         if not getattr(win.page, flag, False):
@@ -805,21 +805,21 @@ async def _guard_return_to_app(win: "ShellWindow", base: str) -> None:
 
 
 async def _guard_startup_status(base: str) -> None:
-    """启动时按 login_status 判定三态；未登录/被踢自动进入强制登录（R-6.48i：
-    用户拍板「主窗口应始终登录页」——启动不再停在 APP 前端等点击「去登录」，
-    直接下发 login_begin(force) 触发完整链路：收起调试窗→清 Cookie→导航登录页
-    →注入适配/拦截。已登录启动不受影响（守卫待命，仅响应登录引导 pending）。"""
+    """启动时按 login_status 判定三态。R-6.48p（用户最新拍板，覆盖 R-6.48i）：
+    启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面，前端
+    ForceLogin 登录提示框自动弹出（App.vue onMounted 检测），用户点「去登录」
+    才经 login_begin(pending)→守卫导航小红书登录页。已登录启动不受影响
+    （守卫待命，仅响应登录引导 pending）。"""
     ls = await _guard_get_json(base, "/api/login_status")
     kicked = bool(ls and ls.get("kicked"))
     if ls and ls.get("logged_in") and not kicked:
         print("[xhs-leads][guard] 启动已登录——守卫待命（仅响应登录引导 pending）", flush=True)
         return
     reason = "启动检测到登录已被平台踢出" if kicked else "启动未登录"
-    print(f"[xhs-leads][guard] {reason}——自动进入强制登录（直接导航登录页）", flush=True)
-    try:
-        await _guard_post_json(base, "/api/auth/login_begin", {"force": True})
-    except Exception as e:  # noqa: BLE001（下发失败不阻断：前端 ForceLogin 仍可手动触发）
-        print(f"[xhs-leads][guard] 自动登录引导下发失败（前端可手动触发）: {e!r}", flush=True)
+    print(
+        f"[xhs-leads][guard] {reason}——壳窗保持 APP 界面，"
+        "等待前端登录提示框「去登录」触发导航（不再自动跳转登录页）", flush=True,
+    )
 
 
 async def _guard_wait_pending(win: "ShellWindow", base: str, stop: "threading.Event") -> bool | None:
