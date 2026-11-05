@@ -1168,21 +1168,15 @@ async def _recover_collect_window(account_id: str) -> None:
 
 
 def _finalize_stopped(state: dict, req, account_id: str) -> None:
-    """框架级取消（用户点停止）收尾：抢救已采数据入库 + 状态标记。
+    """框架级取消（用户点停止）收尾：已处理入库的条数即最终结果。
 
-    R-6.53v：collect_stop → task.cancel() 中断 search/enrich 后二者均未正常返回，
-    已采 items 从 state["partial_items"]（search 逐批回调收集的引用，enrich 原地补全）
-    抢救，走与正常完成相同的 _persist_notes 排序入库路径；「停止」不再丢弃已采数据。
+    R-6.53z：流式流水线下数据逐条「补全→评分→入库」（state['saved'] 权威计数），
+    取消时无需再批量抢救——「采集多少、处理多少、进入列表多少」恒等（所见即所得）；
+    未处理的候选（含 search 已提取但未评分入库的）按用户口径不进入结果。
     """
-    items = state.get("partial_items") or []
-    try:
-        saved, total, top = _persist_notes(req.keyword, items, account_id)
-        if saved == 0 and items:
-            log.warning("停止收尾 persist 未写入：saved=%s items=%s", saved, len(items))
-    except Exception:  # noqa: BLE001 停止收尾尽力而为，不因入库失败吞掉停止结果
-        log.warning("停止收尾 persist 异常", exc_info=True)
+    processed = state.get("saved", 0)
     state["status"] = "stopped"
-    state["note"] = f"已停止：采集到 {len(items)} 条并完成排序" if items else "已停止（未采到结果）"
+    state["note"] = f"已停止：采集到 {processed} 条" if processed else "已停止（未采到结果）"
     state["phase"] = "done"
 
 
@@ -1222,7 +1216,7 @@ async def collect_start(req: SearchReq):
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
-        "collected": 0, "note": "", "stop_event": False,
+        "collected": 0, "saved": 0, "note": "", "stop_event": False,
         "account_id": account_id, "dedup_key": dedup_key, "started_ts": _now,
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "phase": "search",
@@ -1248,41 +1242,57 @@ async def collect_start(req: SearchReq):
                 },
                 account_id=account_id,
             )
-            items = res["items"]
-            state["collected"] = len(items)
-            state["partial_items"] = items  # 引用记录：enrich 原地补全，取消收尾直接可用
-            # 补全阶段：进度反馈走独立 enriched 字段 + note 实时文案，不覆盖 collected——
-            # R-6.53y：collected 恒为「已采集(提取)条数」，与停止收尾入库数一致；
-            # 旧实现 enrich 回调覆盖 collected 为补全进度（如 3/20），停止后入库 20 条
-            # 但状态显示 3 → 用户误以为停止没生效/结果莫名变多。
+            candidates = res["items"]
+            if not candidates:
+                if state["stop_event"] or res.get("stopped"):
+                    state["status"] = "stopped"
+                    state["note"] = "已停止（未采到结果）"
+                else:
+                    # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的
+                    # 「平台仅加载 0 条」——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
+                    state["status"] = "done"
+                    state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
+                state["phase"] = "done"
+                return
+            # R-6.53z 流式流水线：采一条 → 补全详情 → 本地评分 → 入库 → 前端实时展示。
+            # 「采集多少条、处理多少条、进入列表多少条」恒等——采满 limit 自动完成，
+            # 停止时结果=已处理入库条数（所见即所得）。不再出现「搜索已提取 20 条但
+            # 界面停留在补全、停止后结果与显示矛盾」的错位。
             state["phase"] = "enrich"
-            total_notes = len(items)
-
-            def _enrich_progress(n: int) -> None:
-                state["enriched"] = n
-                state["note"] = f"正在补全详情 第 {n}/{total_notes} 条"
-
-            items = await _enrich_notes(
-                items, fast=req.fast, account_id=account_id,
-                on_progress=_enrich_progress,
-                should_stop=lambda: state["stop_event"],
-            )
+            state["collected"] = 0
+            state["saved"] = 0
+            state["partial_items"] = []
+            cache: dict = {}
+            con = _db()  # collect_start 已 _reset_collection_data 清空旧批次，此处只追加
+            now = datetime.datetime.now().isoformat(timespec="seconds")
+            for item in candidates:
+                if state["stop_event"]:
+                    break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
+                try:
+                    if req.fast:
+                        await _enrich_fast(item, cache, account_id)
+                    else:
+                        item = await get_feed_detail(item, account_id)
+                        item = await get_user_profile(item, cache, account_id)
+                except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
+                    pass
+                if _rank_and_insert(con, item, req.keyword, now, account_id):
+                    con.commit()  # 逐条提交：停止/取消时已入库的立即可见（所见即所得）
+                    state["saved"] += 1
+                    state["collected"] = state["saved"]
+                    state["partial_items"].append(item)
+                    state["note"] = f"已采集 {state['saved']} 条"
+            con.commit()
             state["phase"] = "save"
-            saved, total, top = _persist_notes(req.keyword, items, account_id)
-            if res.get("stopped") or state["stop_event"]:
+            if state["stop_event"] or res.get("stopped"):
                 state["status"] = "stopped"
-                state["note"] = f"已停止：采集到 {len(items)} 条并完成排序" if len(items) else "已停止（未采到结果）"
-            elif len(items) >= req.limit:
+                state["note"] = f"已停止：采集到 {state['saved']} 条" if state["saved"] else "已停止（未采到结果）"
+            elif state["saved"] >= req.limit:
                 state["status"] = "done"
-                state["note"] = f"采集完成：{len(items)} 条已按评分排序"
-            elif len(items) == 0:
-                # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的
-                # 「平台仅加载 0 条」——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
+                state["note"] = f"采集完成：{state['saved']} 条已按评分排序"
+            elif state["saved"] > 0:
                 state["status"] = "done"
-                state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
-            else:
-                state["status"] = "done"
-                state["note"] = f"采集完成：平台仅加载 {len(items)} 条（不足 {req.limit}），已按评分排序"
+                state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
             state["phase"] = "done"
         except asyncio.CancelledError:
             # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await
@@ -1311,8 +1321,9 @@ async def status_now():
     running = [st for st in _COLLECT_TASKS.values() if st.get("status") == "running"]
     if running:
         st = running[0]
-        # R-6.15 阶段文案：搜索 → 正在采集；详情补全 → 正在补全（表达规范 + 阶段透明）
-        action = "正在采集" if st.get("phase", "search") == "search" else "正在补全详情"
+        # R-6.53z 流式流水线：采集=逐条提取+补全+评分+入库（phase=search/enrich 均在采集中），
+        # 动作统一「正在采集」，进度由 note（已采集 N 条）实时播报。
+        action = "正在采集"
         return {
             "action": action,
             "detail": st.get("note") or "",

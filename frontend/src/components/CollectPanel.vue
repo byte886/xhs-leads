@@ -137,8 +137,17 @@ async function doCollect() {
         const pr = await apiCollectProgress(collectTaskId)
         progressFailCount = 0  // 轮询成功即重置连续失败计数
         if (pr.status === 'running') {
-          // 进度由顶部全局状态条（StatusBar，/api/status_now）播报，此处仅保留操作提示避免重复
-          appState.searchNote = '正在采集…（可随时点「停止采集」）'
+          // R-6.53z 流式采集：进度文案走后端实时 note（已采集 N 条），并实时刷新
+          // 已入库列表——采一条进一条，用户看到列表随采集进度增长（所见即所得）
+          appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
+          try {
+            const live = await apiNotes('', 'score')
+            if (live.notes) {
+              appState.notes = live.notes
+              appState.total = live.total
+              appState.count = live.total
+            }
+          } catch { /* 轮询期间列表刷新偶发失败不阻断进度轮询 */ }
           return
         }
         // 完成 / 停止 / 失败：统一收尾

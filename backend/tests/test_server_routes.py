@@ -153,11 +153,19 @@ class TestCollect:
         async def fake_search(*a, **k):
             return result
 
-        async def fake_enrich(items, **k):
-            return items  # 纯逻辑测试：跳过真实浏览器详情补全（否则会调 CDP/网络挂起）
+        async def fake_enrich_fast(n, cache, account_id):
+            return None  # R-6.53z 流式：跳过真实浏览器详情补全
+
+        async def fake_detail(n, account_id):
+            return n  # 慢路径补全同跳过（测试不调 CDP）
+
+        async def fake_profile(n, cache, account_id):
+            return n  # 纯逻辑测试：跳过真实浏览器详情补全（否则会调 CDP/网络挂起）
 
         monkeypatch.setattr(server, "search_via_browser", fake_search)
-        monkeypatch.setattr(server, "_enrich_notes", fake_enrich)
+        monkeypatch.setattr(server, "_enrich_fast", fake_enrich_fast)
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        monkeypatch.setattr(server, "get_user_profile", fake_profile)
         r = client.post("/api/collect_start", json={"keyword": "k", "limit": 3})
         tid = r.json()["task_id"]
         pr = {"status": "running"}
@@ -203,11 +211,19 @@ class TestCollect:
             got["filters"] = k.get("filters")
             return {"items": [{"feed_id": "f1", "title": "t"}], "stopped": False}
 
-        async def fake_enrich(items, **k):
-            return items  # 跳过真实浏览器详情补全（同 _run_collect）
+        async def fake_enrich_fast(n, cache, account_id):
+            return None  # R-6.53z 流式：跳过真实浏览器详情补全
+
+        async def fake_detail(n, account_id):
+            return n  # 慢路径补全同跳过（测试不调 CDP）
+
+        async def fake_profile(n, cache, account_id):
+            return n  # 跳过真实浏览器详情补全（同 _run_collect）
 
         monkeypatch.setattr(server, "search_via_browser", fake_search)
-        monkeypatch.setattr(server, "_enrich_notes", fake_enrich)
+        monkeypatch.setattr(server, "_enrich_fast", fake_enrich_fast)
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        monkeypatch.setattr(server, "get_user_profile", fake_profile)
         r = client.post("/api/collect_start", json={
             "keyword": "翡翠", "limit": 3,
             "sort": "最新", "note_type": "视频", "time_range": "一年内",
@@ -237,11 +253,19 @@ class TestCollect:
             got["filters"] = k.get("filters")
             return {"items": [], "stopped": False}
 
-        async def fake_enrich(items, **k):
-            return items
+        async def fake_enrich_fast(n, cache, account_id):
+            return None  # R-6.53z 流式：跳过真实浏览器详情补全
+
+        async def fake_detail(n, account_id):
+            return n  # 慢路径补全同跳过（测试不调 CDP）
+
+        async def fake_profile(n, cache, account_id):
+            return n
 
         monkeypatch.setattr(server, "search_via_browser", fake_search)
-        monkeypatch.setattr(server, "_enrich_notes", fake_enrich)
+        monkeypatch.setattr(server, "_enrich_fast", fake_enrich_fast)
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        monkeypatch.setattr(server, "get_user_profile", fake_profile)
         r = client.post("/api/collect_start", json={
             "keyword": "k", "limit": 3,
             "sort": "综合", "note_type": "全部", "time_range": "",
