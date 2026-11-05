@@ -1251,11 +1251,20 @@ async def collect_start(req: SearchReq):
             items = res["items"]
             state["collected"] = len(items)
             state["partial_items"] = items  # 引用记录：enrich 原地补全，取消收尾直接可用
-            # 补全阶段：进度持续反馈（collected 更新为「已补全 x/N」），避免搜索采满后观感卡死
+            # 补全阶段：进度反馈走独立 enriched 字段 + note 实时文案，不覆盖 collected——
+            # R-6.53y：collected 恒为「已采集(提取)条数」，与停止收尾入库数一致；
+            # 旧实现 enrich 回调覆盖 collected 为补全进度（如 3/20），停止后入库 20 条
+            # 但状态显示 3 → 用户误以为停止没生效/结果莫名变多。
             state["phase"] = "enrich"
+            total_notes = len(items)
+
+            def _enrich_progress(n: int) -> None:
+                state["enriched"] = n
+                state["note"] = f"正在补全详情 第 {n}/{total_notes} 条"
+
             items = await _enrich_notes(
                 items, fast=req.fast, account_id=account_id,
-                on_progress=lambda n: state.__setitem__("collected", n),
+                on_progress=_enrich_progress,
                 should_stop=lambda: state["stop_event"],
             )
             state["phase"] = "save"
