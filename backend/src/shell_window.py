@@ -258,13 +258,20 @@ class WindowCoordinator:
         if self._stop is not None and self._stop.is_set():
             return
         eng = self._engine
+        account = None
         if eng is not None:
-            if eng.rebuild_age() < 60:
-                print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
-                return
-            if not eng.is_connected_now():
-                print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
-                return
+            try:
+                # attach_engine 传入 EnginePool 池对象 → 取账号引擎实例
+                account = await eng.get("default") if hasattr(eng, "get") else eng
+            except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
+                account = None
+            if account is not None:
+                if account.rebuild_age() < 60:
+                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
+                    return
+                if not account.is_connected_now():
+                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
+                    return
         if self._on_shell_closed is not None:
             print("[xhs-leads][keeper] 壳窗被关闭（引擎存活），触发应用退出", flush=True)
             self._on_shell_closed()
