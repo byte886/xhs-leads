@@ -1,6 +1,3 @@
 # CC baseline for quality-gates/tools/check_cc.sh
 # rows below are accepted debt; delete a row as soon as that function is split.
 # rule: new over-8 function, or a listed one getting worse, fails the gate.
-shell_window.login_guard 11
-shell_window._guard_hook_forced_nav 9
-shell_window._guard_monitor_loop 9

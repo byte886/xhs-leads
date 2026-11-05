@@ -787,6 +787,25 @@ async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
     return None
 
 
+def _guard_detect_escape(frame, stop, domain: str) -> str | None:
+    """判定主 frame 是否逃出登录页：返回需拉回的 URL，否则 None。
+
+    非主 frame / frame 已销毁 / 仍在小红书登录页 / 守卫已停止 → None。
+    仅拦小红书域（守卫自己 load_url 登录页属 /login 不触发；验证码 iframe 不触发）。
+    """
+    try:
+        if not frame.is_main_frame():
+            return None
+        url = frame.url or ""
+    except Exception:  # noqa: BLE001（frame 已销毁：忽略）
+        return None
+    if domain not in url or "/login" in url:
+        return None
+    if stop.is_set():
+        return None
+    return url
+
+
 def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
     """R-6.48h 强制登录导航拦截：主窗口主 frame 一旦离开 /login（小红书域内
     乱点/外链跳转），事件级立即拉回登录页——替代纯轮询（0.3s 间隙内白屏/
@@ -797,23 +816,17 @@ def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
     仅拦小红书域（守卫自己 load_url 登录页属 /login 不触发）。登录成功/监视
     退出时由调用方移除监听，避免循环。
     """
-    _XHS = "xiaohongshu.com"
+    _domain = "xiaohongshu.com"
 
     def _on_nav(frame) -> None:
-        try:
-            if not frame.is_main_frame():
-                return
-            url = frame.url or ""
-        except Exception:  # noqa: BLE001（frame 已销毁：忽略）
+        url = _guard_detect_escape(frame, stop, _domain)
+        if url is None:
             return
-        if _XHS in url and "/login" not in url:
-            if stop.is_set():
-                return
-            print(f"[xhs-leads][guard] 导航拦截：离开登录页（{url[:70]}），立即拉回", flush=True)
-            try:
-                asyncio.get_running_loop().create_task(win.load_url(XHS_LOGIN_URL))
-            except Exception:  # noqa: BLE001（loop 关闭中：轮询兜底）
-                pass
+        print(f"[xhs-leads][guard] 导航拦截：离开登录页（{url[:70]}），立即拉回", flush=True)
+        try:
+            asyncio.get_running_loop().create_task(win.load_url(XHS_LOGIN_URL))
+        except Exception:  # noqa: BLE001（loop 关闭中：轮询兜底）
+            pass
 
     try:
         win.page.on("framenavigated", _on_nav)
@@ -846,6 +859,31 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
     return None
 
 
+def _guard_safe_remove(remove_nav_hook) -> None:
+    """移除导航拦截监听（loop 关闭中异常忽略）。"""
+    if remove_nav_hook is None:
+        return
+    try:
+        remove_nav_hook()
+    except Exception:  # noqa: BLE001（loop 关闭中：忽略）
+        pass
+
+
+async def _guard_read_cookies(win):
+    """读当前 Cookie（读取失败按空列表：下一轮再试）。"""
+    try:
+        return await win.cookies()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def _guard_monitor_step(win, base: str, cur_force: bool, state: dict) -> bool | None:
+    """页内监视单步：返回 True=登录成功 / None=继续监视。"""
+    cs = await _guard_read_cookies(win)
+    step = _guard_monitor_voluntary if not cur_force else _guard_monitor_forced
+    return await step(win, base, cs, state)
+
+
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
     """小红书页内监视循环：强制=锁死拉回；主动=可关闭。返回 ok（登录成功回 APP）。"""
     state = {"import": 0.0}
@@ -855,12 +893,7 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
         while not stop.is_set():
             if await _rebind_if_closed(win, base):
                 continue
-            try:
-                cs = await win.cookies()
-            except Exception:  # noqa: BLE001
-                cs = []
-            step = _guard_monitor_voluntary if not cur_force else _guard_monitor_forced
-            result = await step(win, base, cs, state)
+            result = await _guard_monitor_step(win, base, cur_force, state)
             if result is not None:
                 return result
             # R-6.48q：登录成功检测降频 0.3→1s（扫码登录本身秒级，0.3s 精度无意义，
@@ -868,11 +901,7 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
             await asyncio.sleep(1.0)
         return False
     finally:
-        if remove_nav_hook is not None:
-            try:
-                remove_nav_hook()
-            except Exception:  # noqa: BLE001（loop 关闭中：忽略）
-                pass
+        _guard_safe_remove(remove_nav_hook)
 
 
 async def _guard_return_to_app(win: "ShellWindow", base: str) -> None:
@@ -921,6 +950,23 @@ async def _guard_wait_pending(win: "ShellWindow", base: str, stop: "threading.Ev
     return bool(st.get("force"))
 
 
+async def _guard_next_force(gate, win, base, stop) -> bool | None:
+    """等下一次「去登录」触发：事件驱动优先，gate 未注入时退化为 1.5s 轮询。
+
+    返回 force（True=强制登录 / False=主动重登），None 表示本轮无触发（继续外层）。
+    R-6.48q：pending 事件驱动——login_begin 置位 evt 才醒来（同进程同 loop）。
+    守卫无条件 clear 消费；pending 被 cancel 清掉（login_cancel）时不误导航。
+    """
+    if gate is not None and gate.get("evt") is not None:
+        await gate["evt"].wait()
+        gate["evt"].clear()
+        if not gate.get("pending"):
+            return None
+        return bool(gate.get("force"))
+    await asyncio.sleep(1.5)
+    return await _guard_wait_pending(win, base, stop)
+
+
 async def _guard_announce_and_navigate(win, base, force) -> None:
     """R-6.37i 拆自 login_guard：打印切换日志并导航到登录页（R-6.21e 只响应 pending）。"""
     print(
@@ -955,20 +1001,9 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
     while not stop.is_set():
         if stop.is_set():
             return
-        # R-6.48q：pending 事件驱动——login_begin 置位 evt 才醒来（同进程同 loop）。
-        # 守卫无条件 clear 消费；pending 被 cancel 清掉（login_cancel）时不误导航。
-        if gate is not None and gate.get("evt") is not None:
-            await gate["evt"].wait()
-            gate["evt"].clear()
-            if not gate.get("pending"):
-                continue  # 事件已消费但 pending 被清：不导航，回挂起
-            force = bool(gate.get("force"))
-        else:
-            # 退化路径（gate 未注入：测试/无壳直跑）保留低频轮询
-            await asyncio.sleep(1.5)
-            force = await _guard_wait_pending(win, base, stop)
-            if force is None:
-                continue
+        force = await _guard_next_force(gate, win, base, stop)
+        if force is None:
+            continue  # 事件已消费但 pending 被清：不导航，回挂起
         # R-6.19：Tab1 被关闭后 keeper 即时重建——守卫重绑定新壳 page，重建即重置登录状态
         if await _rebind_if_closed(win, base):
             in_login = False
