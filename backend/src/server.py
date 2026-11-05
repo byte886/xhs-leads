@@ -1194,9 +1194,127 @@ def _stop_running_collect_tasks() -> None:
                 task.cancel()
 
 
+def _collect_finalize_empty(state: dict, res: dict) -> None:
+    """search 阶段无候选的收尾：用户停止 vs 平台没加载出内容（0 条=功能未完成，用户口径）。"""
+    if state["stop_event"] or res.get("stopped"):
+        state["status"] = "stopped"
+        state["note"] = "已停止（未采到结果）"
+    else:
+        # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的「平台仅加载 0 条」
+        # ——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
+        state["status"] = "done"
+        state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
+    state["phase"] = "done"
+
+
+def _collect_finalize(state: dict, req, res: dict) -> None:
+    """流水线按序入库后的统一收尾：停止 / 采满 / 不足 / 候选全被拒收 四分支。
+
+    「采集多少条、评分多少条、进入列表多少条」恒等（用户口径：所见即所得）。
+    四个分支都必须落 status——漏设会让任务永远停在 running，而 running 是
+    mirror 切换、keeper tab2 治理、Tab2 关闭三处的唯一判据（状态泄漏会连锁污染壳层）。
+    """
+    if state["stop_event"] or res.get("stopped"):
+        state["status"] = "stopped"
+        state["note"] = (
+            f"已停止：采集到 {state['saved']} 条" if state["saved"] else "已停止（未采到结果）"
+        )
+    elif state["saved"] >= req.limit:
+        state["status"] = "done"
+        state["note"] = f"采集完成：{state['saved']} 条已按评分排序"
+    elif state["saved"] > 0:
+        state["status"] = "done"
+        state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
+    else:
+        # 候选非空但全部被 _rank_and_insert 拒绝（无 feed_id 的脏行，R-6.53x 起不入库）
+        state["status"] = "done"
+        state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
+    state["phase"] = "done"
+
+
+async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
+    """单条流水：补全详情 → 本地评分 → 入库 → 播报进度（一条一提交，停止即可见）。"""
+    try:
+        if ctx["req"].fast:
+            await _enrich_fast(item, ctx["cache"], ctx["account_id"])
+        else:
+            item = await get_feed_detail(item, ctx["account_id"])
+            item = await get_user_profile(item, ctx["cache"], ctx["account_id"])
+    except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
+        pass
+    if _rank_and_insert(ctx["con"], item, ctx["req"].keyword, ctx["now"], ctx["account_id"]):
+        ctx["con"].commit()  # 逐条提交：停止/取消时已入库的立即可见（所见即所得）
+        state["saved"] += 1
+        state["collected"] = state["saved"]
+        state["partial_items"].append(item)
+        state["note"] = f"已采集 {state['saved']} 条"
+
+
+async def _collect_worker(state: dict, req, account_id: str) -> None:
+    """采集 worker：search 提取 → 逐条「补全→评分→入库」→ 统一收尾。
+
+    R-6.53z 流式流水线：不再「先全部提取、再批量补全」（那种批次模型会让界面停在
+    补全阶段、停止后结果与显示矛盾）。采满 limit 自动完成，停止时结果=已入库条数。
+    R-6.53z1 从 collect_start 内嵌闭包抽为模块级函数：原 CC=19 超「≤8 逐函数硬门槛」，
+    且只有经 HTTP 才能间接测到；抽出后可单测直调、状态机逻辑集中在此。
+    """
+    con = None
+    try:
+        set_rhythm(req.interval)  # R-6.47：请求间隔真实生效（会话级节奏，默认 1000ms=1–1.8s）
+        state["phase"] = "search"
+        res = await search_via_browser(
+            req.keyword, req.limit,
+            # R-6.53v：回调携带 items 引用——任务级取消（collect_stop→task.cancel）时
+            # search/enrich 未正常返回，已采数据从该引用抢救，避免取消即丢失。
+            on_progress=lambda n, it=None: (
+                state.__setitem__("collected", n),
+                state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
+            ),
+            should_stop=lambda: state["stop_event"],
+            filters={
+                "sort": req.sort, "note_type": req.note_type,
+                "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
+            },
+            account_id=account_id,
+        )
+        candidates = res["items"]
+        if not candidates:
+            _collect_finalize_empty(state, res)
+            return
+        state["phase"] = "enrich"
+        state["collected"] = 0
+        state["saved"] = 0
+        state["partial_items"] = []
+        con = _db()  # collect_start 已 _reset_collection_data 清空旧批次，此处只追加
+        ctx = {
+            "req": req, "account_id": account_id, "con": con, "cache": {},
+            "now": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        for item in candidates:
+            if state["stop_event"]:
+                break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
+            await _collect_one(item, state, ctx)
+        con.commit()
+        state["phase"] = "save"
+        _collect_finalize(state, req, res)
+    except asyncio.CancelledError:
+        # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await（含 CDP 调用），
+        # 不再逐点插 should_stop 检查。此处立即收尾已入库数据（逐条 commit 已保证不丢）。
+        _finalize_stopped(state, req, account_id)
+        raise
+    except Exception as e:  # noqa: BLE001 任务不因单点异常悬挂在 running
+        state["status"] = "error"
+        state["note"] = f"采集失败：{str(e)[:100]}"
+        state["phase"] = "done"
+    finally:
+        if con is not None:
+            con.close()  # _db() 每次新建连接，结束即释放（原闭包版本未关闭）
+        _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
+
+
 @app.post("/api/collect_start")
 async def collect_start(req: SearchReq):
-    """启动采集任务：后台滚动平台搜索页逐批提取，直到满额/平台不增长/用户停止。
+    """启动采集任务：后台滚动平台搜索页逐条提取→逐条补全评分入库，直到满额/平台不增长/用户停止。
 
     account_id 指定使用哪个账号引擎（空 = default）；多账户下采集号/发布号分离。
     """
@@ -1210,108 +1328,18 @@ async def collect_start(req: SearchReq):
     # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
     # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
-    dedup_key = f"{req.keyword.strip()}|{account_id}"
-    _now = time.time()
     _stop_running_collect_tasks()
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
         "collected": 0, "saved": 0, "note": "", "stop_event": False,
-        "account_id": account_id, "dedup_key": dedup_key, "started_ts": _now,
+        "account_id": account_id, "dedup_key": f"{req.keyword.strip()}|{account_id}",
+        "started_ts": time.time(),
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "phase": "search",
     }
     _COLLECT_TASKS[tid] = state
-
-    async def worker():
-        try:
-            set_rhythm(req.interval)  # R-6.47：请求间隔真实生效（会话级节奏，默认 1000ms=1–1.8s 与历史一致）
-            state["phase"] = "search"
-            res = await search_via_browser(
-                req.keyword, req.limit,
-                # R-6.53v：回调携带 items 引用——任务级取消（collect_stop→task.cancel）
-                # 时 search/enrich 未正常返回，已采数据从该引用抢救，避免取消即丢失。
-                on_progress=lambda n, it=None: (
-                    state.__setitem__("collected", n),
-                    state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
-                ),
-                should_stop=lambda: state["stop_event"],
-                filters={
-                    "sort": req.sort, "note_type": req.note_type,
-                    "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
-                },
-                account_id=account_id,
-            )
-            candidates = res["items"]
-            if not candidates:
-                if state["stop_event"] or res.get("stopped"):
-                    state["status"] = "stopped"
-                    state["note"] = "已停止（未采到结果）"
-                else:
-                    # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的
-                    # 「平台仅加载 0 条」——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
-                    state["status"] = "done"
-                    state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
-                state["phase"] = "done"
-                return
-            # R-6.53z 流式流水线：采一条 → 补全详情 → 本地评分 → 入库 → 前端实时展示。
-            # 「采集多少条、处理多少条、进入列表多少条」恒等——采满 limit 自动完成，
-            # 停止时结果=已处理入库条数（所见即所得）。不再出现「搜索已提取 20 条但
-            # 界面停留在补全、停止后结果与显示矛盾」的错位。
-            state["phase"] = "enrich"
-            state["collected"] = 0
-            state["saved"] = 0
-            state["partial_items"] = []
-            cache: dict = {}
-            con = _db()  # collect_start 已 _reset_collection_data 清空旧批次，此处只追加
-            now = datetime.datetime.now().isoformat(timespec="seconds")
-            for item in candidates:
-                if state["stop_event"]:
-                    break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
-                try:
-                    if req.fast:
-                        await _enrich_fast(item, cache, account_id)
-                    else:
-                        item = await get_feed_detail(item, account_id)
-                        item = await get_user_profile(item, cache, account_id)
-                except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
-                    pass
-                if _rank_and_insert(con, item, req.keyword, now, account_id):
-                    con.commit()  # 逐条提交：停止/取消时已入库的立即可见（所见即所得）
-                    state["saved"] += 1
-                    state["collected"] = state["saved"]
-                    state["partial_items"].append(item)
-                    state["note"] = f"已采集 {state['saved']} 条"
-            con.commit()
-            state["phase"] = "save"
-            if state["stop_event"] or res.get("stopped"):
-                state["status"] = "stopped"
-                state["note"] = f"已停止：采集到 {state['saved']} 条" if state["saved"] else "已停止（未采到结果）"
-            elif state["saved"] >= req.limit:
-                state["status"] = "done"
-                state["note"] = f"采集完成：{state['saved']} 条已按评分排序"
-            elif state["saved"] > 0:
-                state["status"] = "done"
-                state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
-            else:
-                # 候选非空但全部被 _rank_and_insert 拒绝（无 feed_id 的脏行，R-6.53x 起不入库）：
-                # 没有这一支 status 会永远停在 running，前端一直转圈等一个不会来的结果。
-                state["status"] = "done"
-                state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
-            state["phase"] = "done"
-        except asyncio.CancelledError:
-            # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await
-            # （含 CDP 调用），不再逐点插 should_stop 检查。此处立即收尾已采数据
-            # （partial_items 引用，enrich 原地改），走与正常完成相同的排序入库路径。
-            _finalize_stopped(state, req, account_id)
-            raise
-        except Exception as e:
-            state["status"] = "error"
-            state["note"] = f"采集失败：{str(e)[:100]}"
-        finally:
-            _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
-
-    state["task"] = asyncio.create_task(worker())
+    state["task"] = asyncio.create_task(_collect_worker(state, req, account_id))
     return {"ok": True, "task_id": tid, "keyword": req.keyword, "limit": req.limit,
             "account_id": account_id}
 
