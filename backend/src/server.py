@@ -1145,11 +1145,50 @@ async def _fill_fans(n: dict, uid: str, cache: dict, account_id: str = "default"
     n["fans_count"] = cache[uid]
 
 
+async def _recover_collect_window(account_id: str) -> None:
+    """R-6.53v 停止后恢复采集窗口：清理残留小红书采集页（搜索/笔记/探索页）。
+
+    复用 browser_client 清理逻辑（登录墙页保留）——确保停止后引擎不再有
+    采集页在导航/滚动，CDP 行为完全停止；主应用窗口（8791）语义保持不变。
+    """
+    from src import browser_client
+    try:
+        await browser_client.recover_collect_window(account_id)
+    except Exception:  # noqa: BLE001 尽力而为
+        log.warning("停止后清理采集窗口失败", exc_info=True)
+
+
+def _finalize_stopped(state: dict, req, account_id: str) -> None:
+    """框架级取消（用户点停止）收尾：抢救已采数据入库 + 状态标记。
+
+    R-6.53v：collect_stop → task.cancel() 中断 search/enrich 后二者均未正常返回，
+    已采 items 从 state["partial_items"]（search 逐批回调收集的引用，enrich 原地补全）
+    抢救，走与正常完成相同的 _persist_notes 排序入库路径；「停止」不再丢弃已采数据。
+    """
+    items = state.get("partial_items") or []
+    try:
+        saved, total, top = _persist_notes(req.keyword, items, account_id)
+        if saved == 0 and items:
+            log.warning("停止收尾 persist 未写入：saved=%s items=%s", saved, len(items))
+    except Exception:  # noqa: BLE001 停止收尾尽力而为，不因入库失败吞掉停止结果
+        log.warning("停止收尾 persist 异常", exc_info=True)
+    state["status"] = "stopped"
+    state["note"] = f"已停止：采集到 {len(items)} 条并完成排序" if items else "已停止（未采到结果）"
+    state["phase"] = "done"
+
+
 def _stop_running_collect_tasks() -> None:
-    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。"""
+    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。
+
+    R-6.53v：同时 task.cancel() 框架级取消（旧任务的所有 await 点被中断，立即收尾），
+    与 collect_stop 行为一致——避免旧任务仍占用引擎做采集动作。
+    """
     for _tid, st in list(_COLLECT_TASKS.items()):
         if st.get("status") == "running":
             st["stop_event"] = True
+            task = st.get("task")
+            if task and not task.done():
+                task.cancel()
 
 
 @app.post("/api/collect_start")
@@ -1187,7 +1226,12 @@ async def collect_start(req: SearchReq):
             state["phase"] = "search"
             res = await search_via_browser(
                 req.keyword, req.limit,
-                on_progress=lambda n: state.__setitem__("collected", n),
+                # R-6.53v：回调携带 items 引用——任务级取消（collect_stop→task.cancel）
+                # 时 search/enrich 未正常返回，已采数据从该引用抢救，避免取消即丢失。
+                on_progress=lambda n, it=None: (
+                    state.__setitem__("collected", n),
+                    state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
+                ),
                 should_stop=lambda: state["stop_event"],
                 filters={
                     "sort": req.sort, "note_type": req.note_type,
@@ -1197,6 +1241,7 @@ async def collect_start(req: SearchReq):
             )
             items = res["items"]
             state["collected"] = len(items)
+            state["partial_items"] = items  # 引用记录：enrich 原地补全，取消收尾直接可用
             # 补全阶段：进度持续反馈（collected 更新为「已补全 x/N」），避免搜索采满后观感卡死
             state["phase"] = "enrich"
             items = await _enrich_notes(
@@ -1221,6 +1266,12 @@ async def collect_start(req: SearchReq):
                 state["status"] = "done"
                 state["note"] = f"采集完成：平台仅加载 {len(items)} 条（不足 {req.limit}），已按评分排序"
             state["phase"] = "done"
+        except asyncio.CancelledError:
+            # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await
+            # （含 CDP 调用），不再逐点插 should_stop 检查。此处立即收尾已采数据
+            # （partial_items 引用，enrich 原地改），走与正常完成相同的排序入库路径。
+            _finalize_stopped(state, req, account_id)
+            raise
         except Exception as e:
             state["status"] = "error"
             state["note"] = f"采集失败：{str(e)[:100]}"
@@ -1275,10 +1326,21 @@ class CollectStopReq(BaseModel):
 @app.post("/api/collect_stop")
 async def collect_stop(req: CollectStopReq):
     st = _COLLECT_TASKS.get(req.task_id)
-    if st and st.get("status") == "running":
-        st["stop_event"] = True
-        return {"ok": True, "note": "停止已请求，正在收尾…",
-                "account_id": st.get("account_id", "default")}
+    if not st or st.get("status") != "running":
+        return {"ok": False, "detail": "没有进行中的采集",
+                "account_id": (st or {}).get("account_id", "default")}
+    st["stop_event"] = True  # 轮询防线（search/_enrich 既有检查点兜底，双保险）
+    task = st.get("task")
+    if task and not task.done():
+        # R-6.53v 框架级停止：取消整个采集任务——中断所有进行中 await
+        # （CDP 导航/提取/滚动/补全等），worker 捕获 CancelledError 收尾已采数据。
+        # 相比逐点插 should_stop 检查（旧式散点补丁），任务级取消一处生效、无遗漏窗口。
+        task.cancel()
+    # 采集窗口 CDP 行为恢复由独立任务执行（不依赖被取消的 worker）：关闭残留
+    # 搜索/笔记/探索页，停止后引擎不再有采集页在导航/滚动。
+    account_id = st.get("account_id", "default")
+    asyncio.create_task(_recover_collect_window(account_id))
+    return {"ok": True, "note": "停止已请求，正在收尾…", "account_id": account_id}
     return {"ok": False, "note": "任务不存在或已结束"}
 
 

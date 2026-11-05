@@ -89,6 +89,12 @@ def _is_crash_error(e: BaseException) -> bool:
     )
 
 
+async def recover_collect_window(account_id: str = "default") -> int:
+    """R-6.53v：停止后恢复采集窗口——清理残留采集页（搜索/笔记/探索页），
+    引擎不再有采集页在导航/滚动（CDP 行为完全停止）。登录墙页保留。"""
+    return await _cleanup_stale_xhs_pages(account_id)
+
+
 async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
     """R-6.53：采集前清理残留的小红书搜索/探索页（登录墙页保留）。
 
@@ -479,6 +485,8 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     检测登录墙/风控验证：Cookie 在但页面要求登录或验证时，立即抛
     BrowserLoginRequiredError（不空等、不空跑），由采集链路中止任务并提示人工处理。
     **登录墙页面保留不关闭**：用户需要在这个页面上扫码/验证恢复。
+    R-6.53v：停止由框架级 task.cancel() 中断所有 await 点（含本函数内的等待/重载），
+    不再在各循环点插 should_stop 检查（避免散点补丁）。
     """
     url = _XHS + "/search_result?keyword=" + _urlencode(keyword) + "&source=web_search_result_notes"
     page = await _load(url, 2500, account_id,
@@ -615,7 +623,9 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
                     continue
                 break
             if on_progress:
-                on_progress(len(items))
+                # R-6.53v：回调携带 items 引用——任务级取消收尾时，worker 据此
+                # 抢救已采数据（搜索阶段未返回即被 cancel，items 是唯一数据源）
+                on_progress(len(items), items)
             done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
             if done:
                 break
