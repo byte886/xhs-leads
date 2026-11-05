@@ -263,3 +263,20 @@ def test_engine_login_state_fake_death_timeout():
         raise AssertionError("CDP 假死应触发 wait_for 超时上抛")
     except asyncio.TimeoutError:
         pass
+
+
+def test_scan_signals_single_page():
+    """R-6.53j：被踢/风控信号为平台全局渲染，只扫第一个小红书页（keeper 30s 轮询减负）。"""
+    from src import server
+    from tests.fake_playwright import FakeContext, FakePage
+
+    ctx = FakeContext()
+    p1 = FakePage("https://www.xiaohongshu.com/explore")
+    p1.content_text = "首页内容"
+    p2 = FakePage("https://www.xiaohongshu.com/discovery/item/abc")
+    p2.content_text = "登录超限，请重新登录"
+    ctx.pages = [p1, p2]
+
+    page, body, redirect = asyncio.run(server._scan_xhs_pages_for_signals(ctx))
+    assert page is p1            # 首个小红书页
+    assert "登录超限" not in body  # 只扫第一页（全局信号单页足够）

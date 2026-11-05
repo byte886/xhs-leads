@@ -288,7 +288,10 @@ class AccountEngine:
             headless=headless,
             viewport={"width": _geo_w, "height": _geo_h},
             args=[
-                "--no-first-run", "--no-default-browser-check",
+                # R-6.53j：移除 --no-first-run——Chromium 150+ 带该 flag 有 CHECK/SIGTRAP
+                # 崩溃报告（Debian #1141618，chromedriver 默认加它导致会话全部失败）；
+                # CFT 为自动化专用 build 无 first-run 向导，移除无副作用。
+                "--no-default-browser-check",
                 "--disable-blink-features=AutomationControlled",
                 f"--remote-debugging-port={eng_port}",
             ],

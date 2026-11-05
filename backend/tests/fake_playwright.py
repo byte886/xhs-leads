@@ -36,6 +36,10 @@ class FakePage:
     async def title(self) -> str:
         return self._title
 
+    async def inner_text(self, selector: str = "body") -> str:
+        """R-6.53j：供 _scan_one_xhs_page 单页扫描测试使用（返回注入的 content_text）。"""
+        return self.content_text
+
     def is_closed(self) -> bool:
         return self.closed
 

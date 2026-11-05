@@ -265,17 +265,25 @@ async def _scan_one_xhs_page(p, page):
 
 
 async def _scan_xhs_pages_for_signals(ctx):
-    """R-6.36e 拆自 _engine_login_state：扫描所有小红书页（body 拼接 + 首个匹配页 + 登录重定向信号）。"""
+    """R-6.36e 拆自 _engine_login_state：扫描小红书页（body + 首个匹配页 + 登录重定向信号）。
+
+    R-6.53j：**只扫第一个小红书页**，不再遍历全部——被踢/风控信号为平台**全局渲染**
+    （任一打开的小红书画页都会出现对应弹窗/登录墙），单页足够；keeper 每 30s 轮询的
+    CDP 压力从「N 页 body」降至「1 页 body」（引擎通常仅 1 个 xhs 页时行为不变）。
+    """
     if ctx is None:
         return None, "", False
     bodies: list[str] = []
     page = None
     login_redirect = False
     for p in ctx.pages:
-        page, body_txt, is_login = await _scan_one_xhs_page(p, page)
+        if p.is_closed() or "xiaohongshu" not in (p.url or ""):
+            continue
+        page, body_txt, is_login = await _scan_one_xhs_page(p, None)
         if body_txt is not None:
             bodies.append(body_txt)
             login_redirect = login_redirect or is_login
+        break  # R-6.53j：单页足够（全局信号），不再遍历全部页面
     return page, "\n".join(bodies), login_redirect
 
 
