@@ -425,16 +425,18 @@ async def login_status():
         return result
 
 
-# ============ 采集调试窗未登录提示页（R-6.28）============
+# ============ 采集调试窗登录提示页（R-6.28 / R-6.50）============
 # 未登录时 Tab2（采集/调试窗口）不再显示小红书登录墙，改为本提示页：
 # 与 ForceLogin 弹框同一视觉语言（品牌红 #ff2442、Phosphor sign-in 图标、
-# 圆角 16、卡片式、禁 emoji）。登录成功后由 keep_shell_tab / import_cookies 导航回 explore。
+# 圆角 16、卡片式、禁 emoji）。R-6.50：支持已登录态——已登录显示「已登录·开始采集」，
+# 点按钮直接进入采集页 explore；未登录保持「去登录」引导。登录成功后右窗由 keeper
+# 保持 explore/login-hint（不再导航 APP 首页，避免登录后右窗出现 APP 主界面回归）。
 _LOGIN_HINT_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>尚未登录小红书</title>
+<title>登录小红书</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { height:100%; }
@@ -467,29 +469,50 @@ _LOGIN_HINT_HTML = """<!doctype html>
         <path d="M141.66,133.66l-40,40a8,8,0,0,1-11.32-11.32L116.69,136H24a8,8,0,0,1,0-16h92.69L90.34,93.66a8,8,0,0,1,11.32-11.32l40,40A8,8,0,0,1,141.66,133.66ZM200,32H136a8,8,0,0,0,0,16h56V208H136a8,8,0,0,0,0,16h64a8,8,0,0,0,8-8V40A8,8,0,0,0,200,32Z"/>
       </svg>
     </span>
-    <h1>尚未登录小红书</h1>
-    <p class="desc">登录后才能开始采集。请在左侧 APP 窗口点击「去登录」，<br>扫码或手机号登录均可。</p>
+    <h1 id="h1t">尚未登录小红书</h1>
+    <p class="desc" id="desc">登录后才能开始采集。请在左侧 APP 窗口点击「去登录」，<br>扫码或手机号登录均可。</p>
     <button class="btn" id="go-login" type="button">去登录</button>
-    <p class="foot">登录成功后，本窗口将自动进入采集页</p>
+    <p class="foot" id="foot">登录成功后，本窗口将自动进入采集页</p>
   </div>
 <script>
   // R-6.48h：调试窗口可操作——「去登录」直接触发强制登录引导（左侧 APP 窗口
   // 导航到小红书登录页），不再要求用户必须先去左侧窗口点按钮。
-  document.getElementById('go-login').addEventListener('click', async function () {
-    var btn = this;
-    btn.disabled = true;
-    btn.textContent = '已打开登录窗口，请扫码…';
+  // R-6.50：已登录态感知——已登录时按钮变「开始采集」直进 explore，避免误导。
+  (async function () {
+    var btn = document.getElementById('go-login');
+    var h1 = document.getElementById('h1t');
+    var desc = document.getElementById('desc');
+    var foot = document.getElementById('foot');
     try {
-      await fetch('/api/auth/login_begin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force: true })
-      });
-    } catch (e) {
-      btn.disabled = false;
-      btn.textContent = '去登录';
-    }
-  });
+      var r = await fetch('/api/login_status');
+      var j = await r.json();
+      if (j && j.logged_in) {
+        h1.textContent = '已登录小红书';
+        desc.textContent = '登录态有效，可直接开始采集。';
+        btn.textContent = '开始采集';
+        foot.textContent = '将打开小红书采集页（explore）';
+        btn.addEventListener('click', function () {
+          location.href = 'https://www.xiaohongshu.com/explore';
+        });
+        return;
+      }
+    } catch (e) { /* 接口失败按未登录展示 */ }
+    btn.addEventListener('click', async function () {
+      var b = btn;
+      b.disabled = true;
+      b.textContent = '已打开登录窗口，请扫码…';
+      try {
+        await fetch('/api/auth/login_begin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: true })
+        });
+      } catch (e) {
+        b.disabled = false;
+        b.textContent = '去登录';
+      }
+    });
+  })();
 </script>
 </body>
 </html>"""

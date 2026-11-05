@@ -1029,16 +1029,10 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
 
 async def _keeper_tab2_target_url(config, engine_pool):
     """Tab2 目标 URL（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
-    未登录 → /login-hint；已登录 → APP 首页。永不返回 None/explore——explore 仅由采集
-    engine_pool.new_page→open_tab2_window(url=explore) 打开。只读 id_token，不调 login_status。"""
+    无论登录态，Tab2 兜底 /login-hint（已登录时页面内动态显示「已登录·开始采集」）。
+    永不返回 APP 首页/explore——APP 首页是壳窗内容（登录后右窗出现 APP 主界面=R-6.50
+    回归），explore 仅由采集 open_tab2_window 或 login-hint 页内「开始采集」触发。"""
     base = f"http://127.0.0.1:{config.front_port()}"
-    try:
-        eng = await engine_pool.pool.get("default")
-        mem = await eng.read_cookies()
-        if has_id_token(mem):
-            return base + "/"
-    except Exception:  # noqa: BLE001（引擎未就绪：按未登录处理）
-        pass
     return base + "/login-hint"
 
 
