@@ -7,6 +7,7 @@
 > - S3 补两条 saved=0 收尾分支（候选全被拒收 / 搜索页空壳）
 > - B1 由「待修复」改为「已修复（`e2ec0cc`），2026-11-06 核实 `mark_hard` 已无调用方」；新增 B6-B8
 > - 新增 §八「R-6.53z 系列变更与质量门禁」、§六 TS8-TS10
+> - v1.1 补记（同日）：CC 基线 14→0 清零，`backend/src` 全函数 CC≤8；新增登录守卫单测 15 例（`test_shell_guard_unit.py`），§8.4/§8.5 已按实测改写
 > 与「多专家角色迭代开发工作流.md」的关系：本文是**领域操作 SOP**（采集/登录的具体操作流程与判定口径）；工作流 SOP 是**迭代过程元 SOP**（如何多角色协作开发）。两者互补——工作流 SOP §七.4 已引用本文作为验收口径，本文反向引用工作流 SOP 作为迭代流程依据。
 > 用途：把「点开始采集 → 采集执行 → 遇到登录/风控 → 引导登录 → 恢复 → 重新采集」的完整操作流程细化到每一步，作为测试、改码、验收的统一口径。
 > 约定：本文是「需求文档 × 代码现状」的对齐产物；凡代码行为与用户拍板冲突处，在「五、已知差距」中列明并推进修复。
@@ -228,8 +229,8 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 | 判据 | 跑 crapper → `awk 'NF>=3 && $3+0>8'` 取超标行 → 与 `quality-gates/cc-baseline.txt` 比对 | 新超标/存量恶化 → exit 1；基线内 → `KNOWN(debt)` 放行；基线拆空（只剩注释）→ 自动升级全量硬拦 |
 | 退出码 | 0=PASS/已知债，1=新增或恶化，2=crapper 不可用（SKIP） | 训练/CI 均可直接当门用 |
 | 存量基线 | 首次登记 14 行（`server.login_status`、`engine_pool` ×3、`browser_client` ×4、`shell_window` ×6） | 只许减不许增 |
-| 当前进度 | 14 → **8 行**（已拆 6 个函数：`login_status` 10→4；`engine_pool.context` 10→4、`_launch_context` 9→4、`_clear_session_restore` 14→2；`browser_client._load` 10→3、`_cleanup_stale_xhs_pages` 9→3） | 每批：编译 → pytest 全绿 → crapper 复核 → 删基线行 → 门禁复跑 → commit |
-| 剩余 8 项 | `browser_client.search` 20、`_prepare_search_page` 14；`shell_window._keeper_poll_pass` 20、`login_guard` 11、`_guard_hook_forced_nav` 9、`_guard_monitor_loop` 9、`WindowCoordinator.watch` 15、`_closed_verify` 11 | 逐批同法推进 |
+| 当前进度 | 14 → **0 行（清零）**，`backend/src` 全部函数 CC≤8，门禁输出 `CC gate PASS: all functions <= 8` | 每批：编译 → pytest 全绿 → crapper 复核 → 删基线行 → 门禁复跑 → commit |
+| 已拆 14 个 | `server.login_status` 10→4 / `collect_start` 19→3（R-6.53z1 批）；`engine_pool._clear_session_restore` 14→2、`context` 10→4、`_launch_context` 9→4；`browser_client._load` 10→3、`_cleanup_stale_xhs_pages` 9→3、`search` 20→5、`_prepare_search_page` 14→4；`shell_window._keeper_poll_pass` 20→4、`WindowCoordinator.watch` 15→2、`_shell_closed_verify` 11→3、`login_guard` 11→5、`_guard_hook_forced_nav` 9→3、`_guard_monitor_loop` 9→3 | 基线清空后任何新增函数超标都会被直接拦下，无存量可躲 |
 
 > 人类标准仍是 ≤4（Bob 大叔口径）；本仓先按「≤8 硬门槛 + 存量只减不增」收敛，避免一开门就红灯被人绕过。
 
@@ -237,7 +238,7 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 
 | 资产 | 覆盖 | 判据 |
 |---|---|---|
-| `backend/tests/`（pytest，当前 380 用例） | `_collect_worker` 状态机、`_collect_one` 逐条提交、`_collect_finalize` 四分支、`_rank_and_insert` 拒收、`_load` 崩溃重试、`_stop_running_collect_tasks` 双动作 | 全绿（`cd backend && .venv/bin/python -m pytest tests -q -p no:warnings`） |
+| `backend/tests/`（pytest，全绿） | 采集状态机 13 例（`test_collect_state_machine.py`）、搜索/准备页 13 例（`test_browser_search_flow.py`）、keeper 与关窗校验 16 例（`test_shell_keeper_pass.py`）、登录守卫 15 例（`test_shell_guard_unit.py`）、引擎池与 browser_client 既有用例 | 全绿（`cd backend && .venv/bin/python -m pytest tests -q -p no:warnings`）。注意点阵输出没有 "N passed" 字样，**只认 EXIT=0** |
 | `scripts/ui_tests/c02_ui_collect_pipeline.py` | 真实 UI 双场景：`--mode stop` / `--mode auto` | 硬判据「UI 卡片数 == DB 行数」；返回码 0 通过 / 1 判定失败 / 2 环境异常 |
 | 变异测试 | `mutator --root . -s backend/src --lines …`（**禁止 `--mutate-all`**） | 存活变异体=0；等价变异体登记 `EQUIVALENT-MUTANTS.md` 后 `--equiv-ok` |
 
