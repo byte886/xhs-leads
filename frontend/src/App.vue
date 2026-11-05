@@ -136,6 +136,8 @@ onMounted(async () => {
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
   // R-6.26 运行时登录守护：低频轮询，发现失效（未登录/被踢/风控需验证）即弹 ForceLogin
+  // R-6.53t：30s→60s 降频（login_status 每次可能触发引擎页面扫描/注入，与用户手动
+  // 浏览叠加会加重小红书风控判定「自动化特征」——用户实测「明明登录却要求登录」）
   const loginGuardTimer = window.setInterval(async () => {
     if (forceOpen.value) return  // 弹框已打开（ForceLogin 内部自行复查），不再重复触发
     try {
@@ -148,7 +150,7 @@ onMounted(async () => {
         forceOpen.value = true
       }
     } catch { /* 后端未就绪/瞬时失败：静默，下轮再查 */ }
-  }, 30000)
+  }, 60000)
   onUnmounted(() => window.clearInterval(loginGuardTimer))
   // 显式 ?stage=pick 调试入口：仅 dev 构建可用（生产 build 不加载历史笔记）；
   // 不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）

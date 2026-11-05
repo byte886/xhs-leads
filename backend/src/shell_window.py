@@ -1102,21 +1102,29 @@ async def _keeper_tab2_target_url(config, engine_pool):
     return base + "/login-hint"
 
 
-async def _keeper_sweep_blank(ctx, shell):
+async def _keeper_sweep_blank(ctx, shell) -> int:
     """清理空白/残留 tab（壳窗引用跳过）。
 
     R-6.48o：扩展 chrome://newtab 清理——引擎崩溃后 Chrome 会话恢复会把崩溃前
     的标签全部还原，新上下文首个默认页 chrome://newtab 也在此列；此前只清
     ""/about:blank 导致崩溃恢复后残留空标签（用户实测：崩溃重启后多出空白窗口）。
+    R-6.53t：返回关闭数并打日志（用户手动新标签 5s 内被关=「自动化操作」取证）；
+    调用侧已降频到 30s，避免高频清理与手动浏览打架。
     """
+    closed = 0
     for p in list(ctx.pages):
         if p is shell or p.is_closed():
             continue
         u = (p.url or "").strip()
         if u in ("", "about:blank", "chrome://newtab", "chrome://newtab/"):
             await _safe_close(p)
+            closed += 1
+            print(f"[xhs-leads][keeper] 清理空白/新标签页 url={u!r}", flush=True)
         elif "xiaohongshu.com" in u and "/login" in u:
             await _safe_close(p)
+            closed += 1
+            print(f"[xhs-leads][keeper] 清理残留登录页 url={u!r}", flush=True)
+    return closed
 
 
 async def _keeper_recovery_cleanup(ctx, shell) -> int:
@@ -1230,6 +1238,10 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
     await _keeper_sweep_blank(ctx, coord.shell())
 
 
+# R-6.53t：空白清理 30s 节流状态（跨 keeper 轮询保持）
+_KEEPER_SWEEP_LAST = [0.0]
+
+
 async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
     """Tab2 登录态联动（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
     未登录 → 拉回 login-hint（含采集残留页）；已登录 → 采集页（xiaohongshu.com）保持、
@@ -1249,8 +1261,9 @@ async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
             return  # 小红书域页（采集搜索页/explore/登录墙页）：保持，不拉回 login-hint
         if u != _url and u.rstrip("/") != _url.rstrip("/"):
             await t2.goto(_url, wait_until="domcontentloaded", timeout=8000)
-        if _url:
-            await coord.close_orphan_explore(ctx)
+        # R-6.53t：不再每轮 close_orphan_explore——R-6.28 起 login_status 已不 new_page
+        # 开 explore 判定页，此调用只剩每 5s 误关用户手动打开的第二个 explore 标签的副作用
+        # （用户实测「右侧窗口似乎有一些自动化操作」根因之一）。
     except Exception:  # noqa: BLE001（导航失败不阻断监护，下轮再试）
         pass
 
@@ -1321,7 +1334,16 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
             t2 = await _keeper_find_tab2(ctx, coord.shell(), coord)
             if t2 is not None:
                 await _keeper_link_tab2(t2, coord, ctx, config, engine_pool)
-            await _keeper_sweep_blank(ctx, coord.shell())
+            # R-6.53t：空白清理降频 5s→30s（高频清理与用户手动浏览打架，
+            # 用户实测「右侧窗口似乎有一些自动化操作」根因之一）。
+            if time.monotonic() - _KEEPER_SWEEP_LAST[0] >= 30.0:
+                _KEEPER_SWEEP_LAST[0] = time.monotonic()
+                try:
+                    n = await _keeper_sweep_blank(ctx, coord.shell())
+                    if n:
+                        print(f"[xhs-leads][keeper] 空白清理关闭 {n} 个页面", flush=True)
+                except Exception:  # noqa: BLE001（清理失败不阻断监护，下轮再试）
+                    pass
     except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）
         pass
     return "continue"
