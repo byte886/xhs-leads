@@ -188,8 +188,16 @@ class AccountEngine:
         self._context = None
         self._lock = asyncio.Lock()
         self._task_page = None  # 该账号唯一任务 tab（复用，减少反复开关 tab）
+        self._rebuild_ts = 0.0  # R-6.53b：最近一次引擎重建时间戳（0=从未重建）
 
     # ---------------- 生命周期 ----------------
+
+    def rebuild_age(self) -> float:
+        """距最近一次引擎重建的秒数（未重建过返回极大值，供 keeper 区分「引擎
+        崩溃重建后壳窗缺失」与「用户主动关闭主窗」）。"""
+        if self._rebuild_ts <= 0:
+            return 1e18
+        return time.monotonic() - self._rebuild_ts
 
     async def context(self):
         """取（或懒启动）该账号的 persistent context。自愈：断开自动重建。"""
@@ -206,6 +214,7 @@ class AccountEngine:
                 except Exception:  # noqa: BLE001
                     pass
                 self._context = None
+                self._rebuild_ts = time.monotonic()
                 log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
 
             now = time.monotonic()
