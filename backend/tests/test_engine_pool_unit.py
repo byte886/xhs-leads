@@ -1,4 +1,6 @@
 """engine_pool 纯函数特征测试（R-6.36b：屏幕探测/窗口几何现行行为固化）。"""
+import json
+
 from src import server  # noqa: F401（先导入 server 打破循环）
 from src import engine_pool
 
@@ -59,3 +61,27 @@ class TestClearSessionRestore:
 
     def test_missing_dirs_no_error(self, tmp_path):
         engine_pool._clear_session_restore(str(tmp_path / "nope"))  # 不抛错
+
+    def test_fixes_crashed_exit_type_in_preferences(self, tmp_path):
+        """R-6.49b：Preferences.exit_type=Crashed → Normal（根除「要恢复页面吗？」横幅）。"""
+        default = tmp_path / "Default"
+        default.mkdir(parents=True)
+        (default / "Preferences").write_text(
+            json.dumps({"exit_type": "Crashed", "profile": {"exit_type": "Crashed"}})
+        )
+        engine_pool._clear_session_restore(str(tmp_path))
+        prefs = json.loads((default / "Preferences").read_text())
+        assert prefs["exit_type"] == "Normal"
+        assert prefs["profile"]["exit_type"] == "Normal"
+
+    def test_normal_exit_type_untouched(self, tmp_path):
+        """R-6.49b：已是 Normal 的 Preferences 保持原样（不无谓写盘）。"""
+        default = tmp_path / "Default"
+        default.mkdir(parents=True)
+        (default / "Preferences").write_text(
+            json.dumps({"exit_type": "Normal", "profile": {"exit_type": "Normal"}})
+        )
+        engine_pool._clear_session_restore(str(tmp_path))
+        assert (default / "Preferences").read_text() == json.dumps(
+            {"exit_type": "Normal", "profile": {"exit_type": "Normal"}}
+        )

@@ -129,11 +129,13 @@ _SESSION_RESTORE_FILES = ("Current Session", "Current Tabs")
 
 
 def _clear_session_restore(user_data_dir: str) -> None:
-    """R-6.48s：启动前清理 Chrome 会话恢复文件——上次异常退出（exit_type=Crashed，
+    """R-6.48s：启动前清理 Chrome 会话恢复——上次异常退出（exit_type=Crashed，
     如 pkill 停实例）时 Chrome 默认恢复上次全部 tab（可能停在 xiaohongshu.com
-    登录页/首页），导致启动先闪现小红书页再被导航到 APP（用户反馈「启动看到
-    小红书一闪而过」）。
-    只删会话恢复文件（Default/Sessions/*、Current Session、Current Tabs），
+    登录页/首页）并弹「要恢复页面吗？Chromium未正确关闭」横幅，导致启动先闪现
+    小红书页再被导航到 APP（用户反馈「启动看到小红书一闪而过」）。
+    删会话恢复文件（Default/Sessions/*、Current Session、Current Tabs），并把
+    Preferences.exit_type 修正为 Normal（R-6.49b：根除恢复横幅，防止用户点
+    「恢复」把上次会话页面（含 explore）拉回）。
     不动 Cookies/DB——登录态由 _replay_saved_cookies 以 cookies.json 为权威源
     回注，跨重启保留不受影响（R-6.6 机制）。"""
     default_dir = os.path.join(user_data_dir, "Default")
@@ -154,6 +156,25 @@ def _clear_session_restore(user_data_dir: str) -> None:
                 os.remove(p)
         except OSError:
             pass
+    # R-6.49b：exit_type=Crashed → Normal（防「要恢复页面吗？Chromium未正确关闭」横幅）
+    try:
+        prefs_path = os.path.join(default_dir, "Preferences")
+        if os.path.isfile(prefs_path):
+            with open(prefs_path, "r", encoding="utf-8") as f:
+                prefs = json.load(f)
+            changed = False
+            if prefs.get("exit_type") not in (None, "Normal"):
+                prefs["exit_type"] = "Normal"
+                changed = True
+            prof = prefs.get("profile")
+            if isinstance(prof, dict) and prof.get("exit_type") not in (None, "Normal"):
+                prof["exit_type"] = "Normal"
+                changed = True
+            if changed:
+                with open(prefs_path, "w", encoding="utf-8") as f:
+                    json.dump(prefs, f, ensure_ascii=False)
+    except (OSError, ValueError):
+        pass
 
 
 class AccountEngine:
