@@ -189,6 +189,7 @@ class AccountEngine:
         self._lock = asyncio.Lock()
         self._task_page = None  # 该账号唯一任务 tab（复用，减少反复开关 tab）
         self._rebuild_ts = 0.0  # R-6.53b：最近一次引擎重建时间戳（0=从未重建）
+        self._fake_dead = False  # R-6.53l：CDP 假死标记（保持级：标记不立即释放）
 
     # ---------------- 生命周期 ----------------
 
@@ -207,26 +208,105 @@ class AccountEngine:
         except Exception:  # noqa: BLE001（连接检测异常视同断开）
             return False
 
-    async def force_release(self) -> None:
-        """CDP 假死强制释放：无条件关闭当前 context 并置空，下次 context() 调用自动重建。
+    def mark_fake_dead(self) -> None:
+        """R-6.53l：CDP 假死标记（保持级，用户拍板分级策略）——只标记不释放。
 
-        R-6.53i：假死（进程存活、WS 未断、协议无响应）时 is_connected() 仍可能返回 True，
-        自愈重建不会触发；由 login_status 超时捕获后调用本方法主动释放。
+        假死（进程存活、协议无响应）可能自愈：立即释放会误杀可恢复实例并引入
+        重建成本。保持引用，待下次真实动作（context() 调用）先恢复管理
+        （_try_recover_cdp），无法恢复才优雅→强杀重建。"""
+        self._fake_dead = True
+
+    async def _try_recover_cdp(self) -> bool:
+        """R-6.53l：假死恢复管理——快速探测 CDP 是否恢复（3s 阈值，远小于正常量级）。
+
+        恢复成功（CDP 会话可用）→ 复用当前引擎，避免无谓重建；失败 → 由调用方
+        走 _release_locked（优雅 close → 强杀残留）。调用方须已持有 _lock。"""
+        c = self._context
+        if c is None:
+            return False
+        try:
+            p = c.pages[0] if c.pages else None
+            if p is None:
+                return False
+            cdp = await asyncio.wait_for(c.new_cdp_session(p), timeout=3.0)
+            await asyncio.wait_for(cdp.send("Target.getTargets"), timeout=3.0)
+            return True
+        except Exception:  # noqa: BLE001（探测超时/失败：判定无法恢复）
+            return False
+
+    async def force_release(self) -> None:
+        """CDP 假死强制释放（对外入口）：无条件关闭当前 context 并置空，下次 context() 重建。
+
+        R-6.53l（用户拍板分级）：假死 → 保持（mark_fake_dead）→ 新动作先恢复管理
+        （_try_recover_cdp）→ 无法恢复才释放（本方法）。login_status 超时只标记保持，
+        由下次 context() 先尝试恢复，失败才走 _release_locked。
+        R-6.53k：假死时 close() 挂起/失败（CDP 无响应）——5s 超时，失败后强杀残留进程
+        （此前 close 异常忽略 → 实例残留，每轮假死积累实例+页面，renderer 膨胀内存消干）。
         """
         async with self._lock:
-            c = self._context
-            self._context = None
-            self._rebuild_ts = time.monotonic()
-            if c is not None:
-                try:
-                    await c.close()
-                except Exception:  # noqa: BLE001（假死 close 可能失败，忽略）
-                    pass
-            log.warning("账号 %s 引擎 CDP 假死，已强制释放（下次调用自动重建）", self.account_id)
+            self._fake_dead = False
+            await self._release_locked(reason="假死无法恢复")
+
+    async def _release_locked(self, reason: str) -> None:
+        """R-6.53l 拆自 force_release：释放当前 context（调用方须已持有 _lock）。
+
+        优雅 close（5s 超时，落盘登录态）→ 失败/超时强杀该 profile 残留进程；
+        全程日志 + audit 提示（用户要求「所有这种情况需要给到提示」）。"""
+        c = self._context
+        self._context = None
+        self._rebuild_ts = time.monotonic()
+        if c is not None:
+            try:
+                await asyncio.wait_for(c.close(), timeout=5.0)
+            except Exception:  # noqa: BLE001（假死 close 挂起/失败：超时后强杀）
+                pass
+        self._kill_stale_processes()
+        log.warning("账号 %s 引擎 %s，已强制释放并清理残留进程（下次调用自动重建）", self.account_id, reason)
+        xlog.audit(self.account_id, action="engine_force_release", ok=True, detail=reason)
+
+    def _kill_stale_processes(self) -> None:
+        """R-6.53k：强杀本账号 profile 的残留 Chromium 进程（close 失败/假死兜底）。
+
+        按 user_data_dir 精确匹配命令行，不影响其他账号与其他 Chrome。先 TERM 给
+        优雅退出窗口（2s，能落盘登录态），残留再 KILL。仅在旧 context 已释放后调用
+        （force_release / 断开重建 / 启动前），不会误杀新实例。同步阻塞 ~2s 可接受
+        （内存回收优先于登录判定瞬时延迟）。
+        """
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", str(self.user_data_dir)],
+                capture_output=True, text=True, timeout=5,
+            )
+            pids = [p.strip() for p in out.stdout.split() if p.strip().isdigit()]
+        except Exception:  # noqa: BLE001（pgrep 失败：跳过清理，交由启动失败路径暴露）
+            return
+        if not pids:
+            return
+        for pid in pids:
+            try:
+                os.kill(int(pid), 15)  # SIGTERM：优雅退出
+            except ProcessLookupError:
+                pass
+        time.sleep(2.0)
+        for pid in pids:
+            try:
+                os.kill(int(pid), 9)  # SIGKILL：残留兜底
+            except ProcessLookupError:
+                pass
 
     async def context(self):
         """取（或懒启动）该账号的 persistent context。自愈：断开自动重建。"""
         async with self._lock:
+            # R-6.53l（用户拍板分级）：假死保持级 → 新动作时先恢复管理（3s 探测），
+            # 恢复成功复用当前引擎（避免无谓重建）；失败才释放（优雅→强杀）重建。
+            if self._fake_dead and self._context is not None:
+                if await self._try_recover_cdp():
+                    self._fake_dead = False
+                    log.warning("账号 %s 引擎 CDP 假死恢复，继续复用当前引擎", self.account_id)
+                    return self._context
+                log.warning("账号 %s 引擎 CDP 假死无法恢复，进入强制释放重建", self.account_id)
+                await self._release_locked(reason="假死无法恢复")
+                self._fake_dead = False
             if self._context is not None:
                 try:
                     if self._context.browser is not None and self._context.browser.is_connected():
@@ -235,11 +315,12 @@ class AccountEngine:
                     pass
                 # 连接已断开 → 释放旧引用，重建
                 try:
-                    await self._context.close()
-                except Exception:  # noqa: BLE001
+                    await asyncio.wait_for(self._context.close(), timeout=5.0)
+                except Exception:  # noqa: BLE001（close 失败/超时：强杀残留，防实例堆积）
                     pass
                 self._context = None
                 self._rebuild_ts = time.monotonic()
+                self._kill_stale_processes()  # R-6.53k：断开重建前清残留
                 log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
 
             now = time.monotonic()
@@ -263,6 +344,9 @@ class AccountEngine:
     async def _launch_context(self, pw):
         """R-6.36e 拆自 context()：构建并 launch_persistent_context（含 Cookie 回注/stealth）。"""
         os.makedirs(self.user_data_dir, exist_ok=True)
+        # R-6.53k：启动前清该 profile 残留进程（任意路径漏网的实例都会在此收敛——
+        # 残留实例占 profile 锁导致 Failed to launch，且多实例页面堆积耗内存）。
+        self._kill_stale_processes()
         # R-6.48s：启动前清会话恢复文件——上次异常退出（exit_type=Crashed）Chrome
         # 恢复旧 tab（小红书页）→ 启动闪现小红书再被导航 APP；清后启动仅默认空白 tab。
         _clear_session_restore(self.user_data_dir)

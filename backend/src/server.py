@@ -313,7 +313,8 @@ async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, b
       不依赖 xhsIsLoggedIn（空白页无这些文本 → 不误判），任一分支出现该信号 → 判失效。
     - **R-6.53i 假死防御**：CDP 假死（进程存活、WS 未断、协议无响应）时 Playwright 内部
       timeout 依赖 CDP 响应不触发、任务无限挂起（keeper 轮询链被卡死）；外层 wait_for
-      超时兜底，超时抛 asyncio.TimeoutError 由调用方处置（login_status → force_release 强制重建）。
+      超时兜底，超时抛 asyncio.TimeoutError 由调用方处置（login_status → mark_fake_dead
+      保持，下次动作 context() 先恢复管理，无法恢复才 force_release 重建）。
     """
     async def _impl() -> tuple[bool, bool, bool, bool]:
         from src import browser_client
@@ -433,17 +434,24 @@ async def login_status():
         try:
             has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
         except asyncio.TimeoutError:
-            # R-6.53i：CDP 假死（进程活、协议无响应）超时 → 强制释放引擎触发下次重建，
-            # 返回 unknown（keeper 轮询链不再被卡死；下次轮询走新引擎真实判定）。
-            await eng.force_release()
+            # R-6.53l（用户拍板分级）：CDP 假死 → 保持级：只标记不立即释放（可能自愈，
+            # 立即释放会误杀可恢复实例）；下次真实动作 context() 先恢复管理（3s 探测），
+            # 无法恢复才优雅→强杀重建。提示：raw 文案返回前端状态条。
+            eng.mark_fake_dead()
             return {
                 "status": "unknown", "logged_in": False, "nickname": "",
-                "raw": "引擎 CDP 假死，已触发强制重建",
+                "raw": "引擎 CDP 假死，已保持待恢复；下次操作将尝试恢复，无法恢复则强制重建",
             }
         result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
         if not kicked and not risk_verify:
             _LOGIN_CACHE["t"] = now
             _LOGIN_CACHE["data"] = result
+            # R-6.53m：登录态有效（真实验证路径）→ 把含 web_session 的完整 Cookie 落回
+            # cookies.json 权威源。此前该文件 10-30 后从未更新（扫码新会话只存引擎内存，
+            # 短生命周期启动即退出时磁盘落盘失败）→ 重启回注缺 web_session → 登录态丢失。
+            # 节流：距上次落盘 >5 分钟才写（login_status 轮询约 30s 一次，避免频繁写盘）。
+            if result.get("logged_in"):
+                await _persist_session_cookies_if_stale(eng)
         return result
     except Exception as e:  # noqa: BLE001
         result = {"status": "unknown", "logged_in": False, "nickname": "", "raw": f"引擎判定失败: {str(e)[:80]}"}
@@ -1864,6 +1872,32 @@ def _save_cookies_file(cookies: list[dict]):
         {"cookies": cookies, "imported_at": datetime.datetime.now().isoformat(timespec="seconds")},
         ensure_ascii=False, indent=2,
     ))
+
+
+async def _persist_session_cookies_if_stale(eng, stale_seconds: float = 300.0) -> None:
+    """R-6.53m：登录态有效时把引擎内存完整 Cookie（含 web_session）落回 cookies.json。
+
+    仅在文件「距上次落盘超 stale_seconds」且内存含 web_session 时写盘（幂等、节流）。
+    失败不阻塞 login_status（落盘是尽力而为的持久化加固，不影响登录判定）。
+    """
+    try:
+        p = DATA_DIR / "cookies.json"
+        if p.exists():
+            try:
+                old = json.loads(p.read_text())
+                imported_at = old.get("imported_at", "")
+                if imported_at:
+                    dt = datetime.datetime.fromisoformat(imported_at)
+                    if (datetime.datetime.now() - dt).total_seconds() < stale_seconds:
+                        return
+            except Exception:  # noqa: BLE001（旧文件解析失败：视为需重写）
+                pass
+        mem = await eng.read_cookies(timeout=8.0)
+        if any(c.get("name") == "web_session" for c in mem):
+            _save_cookies_file(mem)
+            log.info("R-6.53m 登录态有效，已落盘 cookies.json（含 web_session，%d 条）", len(mem))
+    except Exception:  # noqa: BLE001（落盘失败不影响登录判定）
+        pass
 
 
 @app.post("/api/refresh_cookie_from_chrome")
