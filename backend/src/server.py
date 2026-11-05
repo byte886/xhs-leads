@@ -1212,6 +1212,11 @@ async def collect_start(req: SearchReq):
             elif len(items) >= req.limit:
                 state["status"] = "done"
                 state["note"] = f"采集完成：{len(items)} 条已按评分排序"
+            elif len(items) == 0:
+                # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的
+                # 「平台仅加载 0 条」——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
+                state["status"] = "done"
+                state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
             else:
                 state["status"] = "done"
                 state["note"] = f"采集完成：平台仅加载 {len(items)} 条（不足 {req.limit}），已按评分排序"

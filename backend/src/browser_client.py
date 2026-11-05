@@ -488,6 +488,24 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
         _handle_login_wall(account_id, wall)  # 软→引导扫码恢复；硬→熔断
         raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
     if not appeared:
+        # R-6.53u：空壳重载重试——小红书搜索接口偶发空响应（连续搜索限流/接口延迟），
+        # 页面停在空壳（导航+页脚、无 note-item）；UI 实测手动 reload 后 5s 内恢复
+        # 42 卡片。先页面内 reload 最多 2 次，比关页重开成本低且保留会话。
+        for _reload_round in (1, 2):
+            if page.is_closed():
+                break
+            try:
+                await cdp_call(page.reload(timeout=20000),
+                               timeout=CDP_NAV, label="search_reload_retry")
+            except Exception:  # noqa: BLE001
+                break
+            appeared, wall = await _wait_note_cards(page, timeout_s=15)
+            if wall:
+                _handle_login_wall(account_id, wall)
+                raise BrowserLoginRequiredError(wall)
+            if appeared:
+                break
+    if not appeared:
         await _close_page_safe(page, account_id)
         page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500, account_id,
                            show_front=config.get_config().get("collect_tab_visible", False))
@@ -530,6 +548,9 @@ def _should_stop_collect(count: int, limit: int, stale: int, added: int, should_
         return True, stale
     if added == 0:
         stale += 1
+        # 保持原设计：count=0 不提前停（单测 test_no_results_no_stop 断言）——
+        # 首屏慢加载场景继续滚动给机会；空壳场景由 _prepare_search_page 的
+        # R-6.53u reload 重试兜底，真 0 条由调用方提示「未采集到数据」。
         if stale >= 2 and count > 0:
             return True, stale
     else:
