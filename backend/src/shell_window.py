@@ -280,11 +280,17 @@ class WindowCoordinator:
             except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
                 account = None
             if account is not None:
-                if account.rebuild_age() < 60:
-                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
-                    return
-                if not account.is_connected_now():
-                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
+                try:
+                    # R-6.53h：对象类型防御——校验异常时保守不退出，交给 keeper 轮询兜底，
+                    # 避免「崩溃恢复被误判用户关窗退出应用」（历史：误传模块导致 AttributeError）
+                    if account.rebuild_age() < 60:
+                        print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
+                        return
+                    if not account.is_connected_now():
+                        print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
+                        return
+                except Exception:  # noqa: BLE001（对象无校验方法/异常：无法确认引擎状态，保守不退出）
+                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎状态校验异常，保守跳过退出", flush=True)
                     return
         if self._on_shell_closed is not None:
             print("[xhs-leads][keeper] 壳窗被关闭（引擎存活），触发应用退出", flush=True)
@@ -1297,7 +1303,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
     base = base_url.rstrip("/")
     coord = get_coordinator()
     coord.bind(stop, on_shell_closed)
-    coord.attach_engine(engine_pool)  # R-6.53c：close 事件校验引擎连接状态
+    coord.attach_engine(engine_pool.pool)  # R-6.53h：传 EnginePool 单例实例（此前误传模块导致 _shell_closed_verify AttributeError）
     last = [frozenset()]  # R-6.28：页面集变化才打印快照
 
     # 初始：确保 Tab1 存在并挂监听；Tab2 按开关初始创建一次
