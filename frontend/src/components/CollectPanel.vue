@@ -98,6 +98,9 @@ function buildTaskLabel(): string {
 
 let collectTaskId = ''
 let collectTimer: ReturnType<typeof setInterval> | null = null
+// R-6.53x：进度轮询连续失败计数——失败不复位采集状态（任务可能仍在跑），
+// 连续 >5 次才放弃复位，避免「按钮变开始采集但调试窗口还在采集」的状态错位
+let progressFailCount = 0
 
 // 任务式采集：开始采集 → 后台逐批提取（进度轮询）→ 采满/平台不增长/用户停止后统一评分排序展示
 async function doCollect() {
@@ -113,6 +116,11 @@ async function doCollect() {
   appState.collecting = true
   appState.status = '正在采集'
   appState.selected = {}
+  // R-6.53w：开始新采集先清空旧列表——采集窗口干净进入「正在采集」，
+  // 不再挂着上一次的卡片（旧列表要等采集完成才刷新，期间观感像没开始）
+  appState.notes = []
+  appState.total = 0
+  appState.count = 0
   appState.taskLabel = buildTaskLabel()
   appState.searchNote = ''
   appState.elapsed = 0
@@ -127,6 +135,7 @@ async function doCollect() {
     collectTimer = setInterval(async () => {
       try {
         const pr = await apiCollectProgress(collectTaskId)
+        progressFailCount = 0  // 轮询成功即重置连续失败计数
         if (pr.status === 'running') {
           // 进度由顶部全局状态条（StatusBar，/api/status_now）播报，此处仅保留操作提示避免重复
           appState.searchNote = '正在采集…（可随时点「停止采集」）'
@@ -156,10 +165,18 @@ async function doCollect() {
         appState.status = '展示中'
         setStage('pick')
       } catch (e2) {
-        if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
-        if (timer) { clearInterval(timer); timer = null }
-        appState.collecting = false
-        toast(`查询进度失败：${(e2 as Error).message}`, 'error')
+        // R-6.53x：进度查询偶发失败（如列表接口 500）不复位采集状态、不销毁轮询——
+        // 任务可能仍在跑，复位会让按钮变「开始采集」而调试窗口还在采集（状态错位）。
+        // 保留 collecting 与 timer，下一轮继续；连续失败有上限，避免死循环轰炸。
+        progressFailCount += 1
+        if (progressFailCount > 5) {
+          if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
+          appState.collecting = false
+          appState.searchNote = '进度查询失败，请点「开始采集」重试或重启应用'
+          toast(`进度查询连续失败：${(e2 as Error).message}`, 'error')
+          return
+        }
+        if (progressFailCount === 1) toast(`查询进度失败，自动重试：${(e2 as Error).message}`, 'error')
       }
     }, 1000)
   } catch (e) {

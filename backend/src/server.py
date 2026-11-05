@@ -154,8 +154,12 @@ VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _img_name(feed_id: str, suffix: str = "cover") -> str:
-    """本地图片文件名：feed_id 含 #（XHS 原特征），# 在 URL 里是 fragment 会被截断 → 替换为 _。"""
-    return f"{feed_id.replace('#', '_')}_{suffix}.jpg"
+    """本地图片文件名：feed_id 含 #（XHS 原特征），# 在 URL 里是 fragment 会被截断 → 替换为 _。
+
+    R-6.53x：feed_id 空值兜底——入库层已过滤无 feed_id 行，此处再防御防接口 500
+    （feed_id None → AttributeError → apiNotes 500 → 前端误判任务结束复位按钮）。
+    """
+    return f"{(feed_id or '').replace('#', '_')}_{suffix}.jpg"
 
 
 def _db() -> sqlite3.Connection:
@@ -993,6 +997,11 @@ _COLLECT_TASKS: dict = {}
 
 def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default") -> bool:
     """单条笔记评分 + 落库（带账号维度）。返回是否成功。"""
+    # R-6.53x：提取不完整/抢救中断的行无 feed_id 一律不入库——脏行会导致
+    # apiNotes 图片名生成 500，前端收尾拉列表失败误判任务结束复位按钮
+    # （「没点停止按钮却变开始采集，调试窗口还在采集」的状态错位）。
+    if not n.get("feed_id"):
+        return False
     try:
         n["keyword"] = keyword
         n["local_cover"] = ""
