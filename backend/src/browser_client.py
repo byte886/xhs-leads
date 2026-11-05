@@ -502,6 +502,50 @@ def _handle_login_wall(account_id: str, wall: str) -> None:
     risk.mark_manual(account_id, reason=wall)
 
 
+def _check_login_wall(account_id: str, wall: str) -> None:
+    """登录墙/风控验证命中即中止：软风控标记 + 抛错（页面保留供扫码）。"""
+    if not wall:
+        return
+    _handle_login_wall(account_id, wall)  # 统一软风控 → 引导扫码恢复（R-6.22i）
+    raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
+
+
+async def _reload_until_appeared(page, account_id: str) -> bool:
+    """R-6.53u 空壳重载：页内 reload 最多 2 次；命中登录墙照样中止。
+
+    小红书搜索接口偶发空响应（连续搜索限流/接口延迟），页面停在空壳
+    （导航+页脚、无 note-item）；UI 实测手动 reload 后 5s 内恢复 42 卡片。
+    页内 reload 比关页重开成本低且保留会话。
+    """
+    for _round in (1, 2):
+        if page.is_closed():
+            return False
+        try:
+            await cdp_call(page.reload(timeout=20000),
+                           timeout=CDP_NAV, label="search_reload_retry")
+        except Exception:  # noqa: BLE001
+            return False
+        appeared, wall = await _wait_note_cards(page, timeout_s=15)
+        _check_login_wall(account_id, wall)
+        if appeared:
+            return True
+    return False
+
+
+async def _open_old_search_page(keyword: str, account_id: str):
+    """回退旧版搜索 URL（新版 AI 搜索页无 note-item 的空壳场景）。
+
+    返回 (page, appeared)：appeared=False 时上层照常收尾（0 条由调用方提示
+    「未采集到数据」），不在此处重试。
+    """
+    page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500,
+                       account_id,
+                       show_front=config.get_config().get("collect_tab_visible", False))
+    appeared, wall = await _wait_note_cards(page, timeout_s=20)
+    _check_login_wall(account_id, wall)
+    return page, appeared
+
+
 async def _prepare_search_page(keyword: str, filters: dict | None = None,
                                account_id: str = "default"):
     """打开搜索页并等卡片渲染；新版 AI 搜索页（无 note-item）回退旧版 URL。返回可用 page。
@@ -516,44 +560,18 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     page = await _load(url, 2500, account_id,
                        show_front=config.get_config().get("collect_tab_visible", False))
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
-    if wall:
-        _handle_login_wall(account_id, wall)  # 统一软风控 → 引导扫码恢复（R-6.22i）
-        raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
+    _check_login_wall(account_id, wall)
     if not appeared:
-        # R-6.53u：空壳重载重试——小红书搜索接口偶发空响应（连续搜索限流/接口延迟），
-        # 页面停在空壳（导航+页脚、无 note-item）；UI 实测手动 reload 后 5s 内恢复
-        # 42 卡片。先页面内 reload 最多 2 次，比关页重开成本低且保留会话。
-        for _reload_round in (1, 2):
-            if page.is_closed():
-                break
-            try:
-                await cdp_call(page.reload(timeout=20000),
-                               timeout=CDP_NAV, label="search_reload_retry")
-            except Exception:  # noqa: BLE001
-                break
-            appeared, wall = await _wait_note_cards(page, timeout_s=15)
-            if wall:
-                _handle_login_wall(account_id, wall)
-                raise BrowserLoginRequiredError(wall)
-            if appeared:
-                break
+        appeared = await _reload_until_appeared(page, account_id)
     if not appeared:
         await _close_page_safe(page, account_id)
-        page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500, account_id,
-                           show_front=config.get_config().get("collect_tab_visible", False))
-        appeared, wall = await _wait_note_cards(page, timeout_s=20)
-        if wall:
-            _handle_login_wall(account_id, wall)
-            raise BrowserLoginRequiredError(wall)
+        page, appeared = await _open_old_search_page(keyword, account_id)
     if appeared:
         await _apply_filters(page, filters or {})
         if filters:
             _, wall = await _wait_note_cards(page, timeout_s=20)
-            if wall:
-                _handle_login_wall(account_id, wall)
-                raise BrowserLoginRequiredError(wall)
+            _check_login_wall(account_id, wall)
     return page
-
 
 async def _drain_page(page, items: list, seen: set) -> int:
     """提取当前页可见卡片并入 items（广告卡过滤 + 去重）。返回新增条数。"""
