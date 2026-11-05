@@ -1232,16 +1232,18 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
             # 非重建场景（用户真关主窗且 close 事件丢失）维持原退出语义。
             eng = await engine_pool.pool.get("default")
             if eng.rebuild_age() < 60:
+                # R-6.53d：引擎重建需要数秒，壳窗重开可能在引擎就绪前调用——
+                # 失败不退出，下轮重试；60s 重建窗口过后自然走下方退出分支收敛。
                 try:
                     shell = await _keeper_rebuild_shell(ctx, base, coord, engine_pool)
-                except Exception:  # noqa: BLE001（重建失败：维持退出兜底）
+                except Exception as e:  # noqa: BLE001（重建未就绪：下轮重试）
+                    print(f"[xhs-leads][keeper] 引擎重建期壳窗重开暂未就绪（下轮重试）: {e!r}", flush=True)
                     shell = None
                 if shell is not None:
                     print("[xhs-leads][keeper] 引擎重建，壳窗已重开，应用继续", flush=True)
-                elif on_shell_closed is not None:
-                    print("[xhs-leads][keeper] 引擎重建后壳窗重开失败，触发应用退出", flush=True)
-                    on_shell_closed()
-                    return "exit"
+                else:
+                    print("[xhs-leads][keeper] 引擎重建期壳窗未就绪，下轮轮询重试（不退出）", flush=True)
+                    return "continue"
             elif on_shell_closed is not None:
                 print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
                 on_shell_closed()
