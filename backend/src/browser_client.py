@@ -137,7 +137,7 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
             page.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
         try:
             if show_front:
-                await page.bring_to_front()
+                await asyncio.wait_for(page.bring_to_front(), timeout=3)
             else:
                 # 后台采集：切回壳窗口 Tab1（前端/登录 tab），采集 tab 保持激活渲染
                 await _switch_back_to_shell(page)
@@ -161,7 +161,7 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
                     page2.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
                 try:
                     if show_front:
-                        await page2.bring_to_front()
+                        await asyncio.wait_for(page2.bring_to_front(), timeout=3)
                     else:
                         await _switch_back_to_shell(page2)
                 except Exception:  # noqa: BLE001
@@ -196,7 +196,10 @@ async def _switch_back_to_shell(page) -> None:
         base = (os.environ.get("XHS_SHELL_URL") or "").rstrip("/")
         shell = _find_shell_tab(page, base)
         if shell is not None:
-            await shell.bring_to_front()
+            # R-6.53q：CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死
+            # 直接触发点，Nov 5 DIAG 取证 goto 0.5s 后卡死）——3s 超时保护，超时跳过
+            # （焦点切换非关键路径，采集不依赖其成功）。
+            await asyncio.wait_for(shell.bring_to_front(), timeout=3)
     except Exception:  # noqa: BLE001
         pass
 

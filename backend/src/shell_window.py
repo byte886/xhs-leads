@@ -1182,7 +1182,10 @@ async def _keeper_setup_tab2(ctx, eng, coord, engine_pool, config):
                 # 「采集调试窗口变了、出现地址栏、不是 app 形态」）。
                 from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
                 _cfts = builtin_cft_candidates()
-                _exec = _cfts[0] if _cfts else None
+                # R-6.53p：builtin_cft_candidates() 返回 str（单个路径）而非列表——
+                # 旧写法 _cfts[0] 取到首字符 '/'，Popen 用 '/' 当引擎路径 →
+                # PermissionError(13) → 初始 Tab2（login-hint 窗）创建 3 次全失败。
+                _exec = _cfts if _cfts else None
                 page = await open_tab2_window(
                     ctx,
                     coord.shell(),
@@ -1222,14 +1225,20 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
 async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
     """Tab2 登录态联动（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
     未登录 → 拉回 login-hint（含采集残留页）；已登录 → 采集页（xiaohongshu.com）保持、
-    其余本地页校准到 APP 首页。explore 不再由 keeper 主动打开——仅采集 open_tab2_window 触发。"""
+    其余本地页校准到 APP 首页。explore 不再由 keeper 主动打开——仅采集 open_tab2_window 触发。
+
+    R-6.53n 修复：_keeper_tab2_target_url 自 R-6.49 起恒返回 /login-hint（"无论登录态兜底"），
+    原保持条件 `"xiaohongshu.com" in u and "login-hint" not in _url` 中后项恒 False → 死代码，
+    采集中的 search_result/explore 页每轮被 goto 拉回 login-hint → 采集器解析提示页无卡片 → 0 条
+    （notes 自 R-6.49 起从未落库，与 21:32/21:38 两次采集 0 条取证一致）。
+    改为：小红书域页（采集搜索页/explore/登录墙页）一律保持，不拉回。"""
     coord.register_tab2(t2)
     coord.watch(t2, is_shell=False)
     try:
         _url = await _keeper_tab2_target_url(config, engine_pool)
         u = t2.url or ""
-        if "xiaohongshu.com" in u and "login-hint" not in _url:
-            return  # 已登录 + 采集页：保持（合法采集目标）
+        if "xiaohongshu.com" in u:
+            return  # 小红书域页（采集搜索页/explore/登录墙页）：保持，不拉回 login-hint
         if u != _url and u.rstrip("/") != _url.rstrip("/"):
             await t2.goto(_url, wait_until="domcontentloaded", timeout=8000)
         if _url:
@@ -1238,21 +1247,38 @@ async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
         pass
 
 
+def _server_has_running_collect() -> bool:
+    """R-6.53o：采集执行期间 keeper 暂停 tab2 治理/崩溃清理，避免与采集器 CDP
+    并发触发引擎假死、且崩溃恢复清理误关采集中的搜索页。延迟导入规避循环依赖。"""
+    try:
+        from src import server as _server  # noqa: PLC0415（运行时 server 已加载，取任务注册表）
+        return any(st.get("status") == "running" for st in _server._COLLECT_TASKS.values())
+    except Exception:  # noqa: BLE001（状态源不可用视为不采集，keeper 正常治理）
+        return False
+
+
 async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_pool, last) -> str:
     """兜底轮询单轮：壳窗缺失（close 事件丢失）→ 触发应用退出；Tab2 登录态联动。返回 'exit'|'continue'。"""
     try:
         eng = await engine_pool.pool.get("default")
         ctx = await eng.context()
-        _keeper_log_snapshot(ctx, coord, last)
+        collecting = _server_has_running_collect()
+        if collecting:
+            print("[xhs-leads][keeper] 采集执行中：暂停 tab2 治理/清理（避免 CDP 并发与误关采集页）", flush=True)
+        else:
+            _keeper_log_snapshot(ctx, coord, last)
         # R-6.48o：崩溃恢复检测——壳窗引用失效（引擎崩溃/会话重建）后扫描重新
         # 找到 → 判定为崩溃恢复，关闭所有非主窗口残留（is_closed 判活盲区见
         # _keeper_shell_effective：引用不在当前页面集即视为失效）。
         was_dead = _keeper_shell_effective(coord, ctx) is None
         shell = await _keeper_find_shell(ctx, base, coord)
         if was_dead and shell is not None:
-            n = await _keeper_recovery_cleanup(ctx, shell)
-            if n:
-                print(f"[xhs-leads][keeper] 崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口", flush=True)
+            if collecting:
+                print("[xhs-leads][keeper] 采集执行中：跳过崩溃恢复清理（保留采集页）", flush=True)
+            else:
+                n = await _keeper_recovery_cleanup(ctx, shell)
+                if n:
+                    print(f"[xhs-leads][keeper] 崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口", flush=True)
         if shell is not None:
             coord.register_shell(shell)
             coord.watch(shell, is_shell=True)
@@ -1283,10 +1309,11 @@ async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_p
                 print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
                 on_shell_closed()
                 return "exit"
-        t2 = await _keeper_find_tab2(ctx, coord.shell(), coord)
-        if t2 is not None:
-            await _keeper_link_tab2(t2, coord, ctx, config, engine_pool)
-        await _keeper_sweep_blank(ctx, coord.shell())
+        if not collecting:
+            t2 = await _keeper_find_tab2(ctx, coord.shell(), coord)
+            if t2 is not None:
+                await _keeper_link_tab2(t2, coord, ctx, config, engine_pool)
+            await _keeper_sweep_blank(ctx, coord.shell())
     except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）
         pass
     return "continue"

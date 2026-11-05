@@ -18,6 +18,7 @@ NameError 被 try 吞掉静默降级）。本模块统一登记所有注入来�
 集合防重复；add_init_script 类（stealth / collect_debug_title）因注入机制为
 「每次新文档自动执行」，不走页面标记助手，但其 JS 来源同样在本注册表登记。
 """
+import asyncio
 import pathlib
 import sys
 
@@ -390,23 +391,29 @@ async def inject_once(page, name: str) -> bool:
     """
     js = get(name)
     try:
-        done = await page.evaluate(
-            "(n) => Array.isArray(window." + _MARKER + ") && window." + _MARKER + ".includes(n)",
-            name,
+        done = await asyncio.wait_for(
+            page.evaluate(
+                "(n) => Array.isArray(window." + _MARKER + ") && window." + _MARKER + ".includes(n)",
+                name,
+            ),
+            timeout=3,
         )
     except Exception:  # noqa: BLE001（页面未就绪：调用方下轮补注）
         return False
     if done:
         return True
     try:
-        await page.evaluate(js)
+        await asyncio.wait_for(page.evaluate(js), timeout=3)
     except Exception:  # noqa: BLE001
         return False
     try:
-        await page.evaluate(
-            "(n) => { if (!Array.isArray(window." + _MARKER + ")) window." + _MARKER + " = [];"
-            " if (!window." + _MARKER + ".includes(n)) window." + _MARKER + ".push(n); }",
-            name,
+        await asyncio.wait_for(
+            page.evaluate(
+                "(n) => { if (!Array.isArray(window." + _MARKER + ")) window." + _MARKER + " = [];"
+                " if (!window." + _MARKER + ".includes(n)) window." + _MARKER + ".push(n); }",
+                name,
+            ),
+            timeout=3,
         )
     except Exception:  # noqa: BLE001（标记登记失败不阻断：JS 已注入，多数注入自带内部防重）
         pass

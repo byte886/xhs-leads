@@ -522,9 +522,11 @@ class AccountEngine:
             p = await ctx.new_page()
             self._task_page = p
             return p
-        p = await self._open_task_page_window(ctx)
-        if p is not None:
-            return p
+        # R-6.53r：采集工作页改普通 tab（新 tab 前台激活、渲染完整、CDP 会话稳定）。
+        # 转交窗（--app Popen 单实例路由）在 CFT 158 上实测两问题（Nov 5 取证）：
+        # ① 后台化渲染节流——wait_cards n=0（同 URL probe 为 22 卡片）；
+        # ② CDP 会话不稳——wait_cards 第二轮 evaluate 挂起触发假死强杀。
+        # 独立采集调试窗（keeper Tab2）保留为展示窗，采集执行页与之解耦。
         p = await ctx.new_page()
         # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
         try:

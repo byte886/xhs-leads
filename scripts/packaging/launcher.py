@@ -84,6 +84,15 @@ def _migrate_legacy_data(target: pathlib.Path) -> None:
 
 
 def _data_dir() -> pathlib.Path:
+    # R-6.53q 配置化（借鉴 Syncthing --config/--data + typedconf cli>env>default 优先级）：
+    #   CLI --data-dir <path> / --data-dir=<path>  >  环境变量 XHS_LEADS_DATA  >  打包默认  >  开发默认
+    # 源码态验证采集：--data-dir 指向打包数据目录即可复用登录态（无需重打包）。
+    _argv = sys.argv[1:]
+    for _i, _a in enumerate(_argv):
+        if _a == "--data-dir" and _i + 1 < len(_argv):
+            return pathlib.Path(_argv[_i + 1]).expanduser()
+        if _a.startswith("--data-dir="):
+            return pathlib.Path(_a.split("=", 1)[1]).expanduser()
     if os.environ.get("XHS_LEADS_DATA"):
         return pathlib.Path(os.environ["XHS_LEADS_DATA"]).expanduser()
     if getattr(sys, "_MEIPASS", None):  # PyInstaller 打包态
