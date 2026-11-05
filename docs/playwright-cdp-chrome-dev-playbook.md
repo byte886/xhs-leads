@@ -134,6 +134,15 @@ print(repr(out[i+len('DYLD_LIBRARY_PATH='):j].strip() if j>i else out[i:i+200]))
 5. **崩溃判定**：新 .ips 与旧栈按 1.2 五要素对比 → 同 CHECK 则回退（restore 备份 + 复核版本）
 6. **Playwright 兼容**：升级前确认本机 playwright 版本支持（`pip show playwright` / 官方 release notes）
 
+### 3.3 版本评估（158 实测结论，2026-11-05）
+
+| 项 | 结论 |
+|---|---|
+| 版本格局 | Chrome 158 stable 于 2026-11-04 发布（CFT 158.0.8127.18）；157 为 beta 已实测同 CHECK 回退；159 在 dev |
+| 等价实验 | 同一协议（真实 profile 副本 + search_result 导航 + 注入 + 轮询卡片 + drain）：**157 必崩**（产同栈 .ips，现存 1 份），**158 两轮零崩溃**（crash_delta 0）→ 原崩溃位置在 158 不再触发 |
+| 上游情报 | Chrome 152 起 Chromium 主动做 DCHECK→CHECK 转换（每版最多 5000，持续至 159+）——本项目 CHECK 崩溃属该加固产物；ChromeDriver 侧持续修 CDP 稳定性（含避免无限阻塞类） |
+| 结论 | **值得升级 158**（原崩溃位置不再崩 = 上游已修复）；升级前按 3.2 SOP 备份 156 并复核版本 |
+
 ---
 
 ## 4. 守护与自愈架构最佳实践
@@ -159,7 +168,9 @@ print(repr(out[i+len('DYLD_LIBRARY_PATH='):j].strip() if j>i else out[i:i+200]))
 
 | 坑 | 现象 | 对策 |
 |---|---|---|
-| CDP 假死 | Playwright 内部 timeout 依赖 CDP 响应 → 任务永久挂起 | `asyncio.wait_for` 外层超时兜底 |
+| CDP 假死 | Playwright 内部 timeout 依赖 CDP 响应 → 任务永久挂起 | `asyncio.wait_for` 外层超时兜底（R-6.53i：read_cookies 10s / login_state 15s）+ `force_release()` 无条件释放 context → 下次调用自动重建 → login_status 捕获 TimeoutError 返回 `{"status":"unknown"}`。**真机验证：3 次假死全部自动恢复，对比旧 dist 无限挂起** |
+| 登录链轮询过重 | keeper 30s 轮询遍历全部 xhs 页，持续 CDP 压力（假死诱因之一） | 被踢/风控信号平台全局渲染，**单页化**只扫首个 xhs 页（R-6.53j） |
+| `--no-first-run` 移不干净 | 自己加的删了，ps 里仍出现 → Playwright driver 默认 args 也带 | `launch_kwargs["ignore_default_args"] = ["--no-first-run"]`（R-6.53j follow） |
 | compositor 白屏 | 窗口级死锁，CDP 侧 DOM/截图正常 | 走窗口级恢复，不做页面内修复 |
 | init script 注入失效 | 箭头函数只定义不执行；`//` 注释吞尾段；observer 锚点早 null | 用 IIFE；注释用 `/* */`；锚点用 `document` |
 | 全新 profile headless 被风控 | 小红书安全限制 300012 | 非 headless 有窗口启动 |
@@ -186,8 +197,8 @@ print(repr(out[i+len('DYLD_LIBRARY_PATH='):j].strip() if j>i else out[i:i+200]))
 ## 6. 本项目事实基线（截至 2026-11-05）
 
 > **状态口径（责任边界）：本项目责任内的崩溃已全解决；剩余崩溃为引擎上游 bug，不在本项目可修范围。**
-> - **我们的 bug/使用问题**（自愈链缺陷：崩溃恢复误判退 App、`attach_engine` 误传模块致 AttributeError、壳窗不重开；启动参数/env 疑点逐一排查排除）→ **已全修复并验证**（R-6.53b~h，commit `7f84543`）
-> - **引擎上游确定性 CHECK**（24 份同栈、156/157 跨版本复现）→ 代码层不可消除，触发与真实 profile 状态相关（使用必然积累，无法规避）；macOS 弹窗为系统级无法屏蔽
+> - **我们的 bug/使用问题**（自愈链缺陷：崩溃恢复误判退 App、`attach_engine` 误传模块致 AttributeError、壳窗不重开；启动参数/env 疑点逐一排查排除；**CDP 假死挂起（R-6.53i）与登录链轮询过重/`--no-first-run` 残留（R-6.53j）**）→ **已全修复并真机验证**（R-6.53b~h commit `7f84543`；R-6.53i/j commit `464c3ee`/`ffe2c1e`/`b115a65`）
+> - **引擎上游确定性 CHECK**（24 份同栈、156/157 跨版本复现；**158 等价实验两轮零崩溃 → 上游已修复，值得升级**）→ 代码层不可消除，按用户拍板不打包上报；macOS 弹窗为系统级无法屏蔽
 
 | 事实 | 结论 |
 |---|---|
@@ -196,5 +207,6 @@ print(repr(out[i+len('DYLD_LIBRARY_PATH='):j].strip() if j>i else out[i:i+200]))
 | macOS 弹窗 | 无法屏蔽（系统级）；打包态前台崩溃必弹，源码态后台崩溃静默——**弹窗不是崩溃判据** |
 | 触发相关变量 | 真实积累 profile（`data/profile`）比干净开发 profile 更易触发；采集负载后数分钟出现 |
 | 自愈链 | R-6.53b~h 全修复并真机验证（崩→自动重建→App 不误退→登录态保持→采集继续）；commit `7f84543` 已 push |
-| 引擎版本 | 当前 156.0.8078.80（157.0.8103.38 已验证同 CHECK 未修复，已回退）；156 备份在 `engine-chrome156-backup/` |
-| 后续方向（待决策） | 维持自愈兜底（现状可用）/ 打包 24 份同栈 .ips 上报 crbug / 等 CFT 158 再试 |
+| CDP 假死防御 | R-6.53i/j 已落地：超时兜底 + force_release 强制重建 + 单页化扫描 + 移除 `--no-first-run`；**真机 3 次假死触发全部自动恢复**，崩溃基线未增（ips 24 / AttributeError 24）；commits `464c3ee`/`ffe2c1e`/`b115a65` 已 push |
+| 引擎版本 | 当前 156.0.8078.80（157 已验证同 CHECK 回退）；**158.0.8127.18 等价实验两轮零崩溃 → 上游已修复，值得升级**；156 备份在 `engine-chrome156-backup/` |
+| 后续方向（已拍板 2026-11-05） | ① 采集失败仅提示用户，不加自动补采；② 不打包上报 crbug，只沉淀本手册；③ 升级 CFT 标准=新版"更容易找解决办法 + 有人修复"，两者满足才升级（158 已满足 → 待用户确认执行升级） |
