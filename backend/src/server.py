@@ -1293,6 +1293,11 @@ async def collect_start(req: SearchReq):
             elif state["saved"] > 0:
                 state["status"] = "done"
                 state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
+            else:
+                # 候选非空但全部被 _rank_and_insert 拒绝（无 feed_id 的脏行，R-6.53x 起不入库）：
+                # 没有这一支 status 会永远停在 running，前端一直转圈等一个不会来的结果。
+                state["status"] = "done"
+                state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
             state["phase"] = "done"
         except asyncio.CancelledError:
             # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await

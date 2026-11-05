@@ -149,7 +149,7 @@ class TestSearch:
 
 
 class TestCollect:
-    def _run_collect(self, client, monkeypatch, result):
+    def _run_collect(self, client, monkeypatch, result, limit=3):
         async def fake_search(*a, **k):
             return result
 
@@ -166,7 +166,7 @@ class TestCollect:
         monkeypatch.setattr(server, "_enrich_fast", fake_enrich_fast)
         monkeypatch.setattr(server, "get_feed_detail", fake_detail)
         monkeypatch.setattr(server, "get_user_profile", fake_profile)
-        r = client.post("/api/collect_start", json={"keyword": "k", "limit": 3})
+        r = client.post("/api/collect_start", json={"keyword": "k", "limit": limit})
         tid = r.json()["task_id"]
         pr = {"status": "running"}
         for _ in range(100):
@@ -299,6 +299,161 @@ class TestCollect:
     def test_collect_stop_idle(self, client):
         r = client.post("/api/collect_stop", json={"task_id": "t2"})
         assert r.json()["ok"] is False
+
+    # ==== R-6.53z 流水线语义补强（gauntlet merge 门：杀掉存活变异体）====
+    # 背景：原有用例只断言 status，不查条数与文案，导致「saved 计数反向、采满却报不足、
+    # 0 条报成完成」等变异体逃逸。以下用例锁死「采集多少条 = 入库多少条 = 列表可见多少条」
+    # 与完成/停止文案（用户口径：所见即所得）。
+
+    def test_collect_account_id_passthrough(self, client, monkeypatch):
+        """非 default 账号必须原样透传（仅空值回落 default）。
+
+        杀掉 `(req.account_id or "default")` → `and`：后者会把任何真实账号改写成 default，
+        多账户采集号/发布号分离失效却无测试察觉。
+        """
+        got = {}
+
+        async def fake_search(*a, **k):
+            got["account_id"] = k.get("account_id")
+            return {"items": [], "stopped": False}
+
+        monkeypatch.setattr(server, "search_via_browser", fake_search)
+        r = client.post("/api/collect_start", json={"keyword": "k", "limit": 1, "account_id": "acc2"})
+        assert r.json()["account_id"] == "acc2"
+        tid = r.json()["task_id"]
+        for _ in range(100):
+            pr = client.get(f"/api/collect_progress?task_id={tid}").json()
+            if pr["status"] != "running":
+                break
+            time.sleep(0.02)
+        assert got["account_id"] == "acc2"
+
+    def test_collect_initial_state_zero_and_stop_false(self, client, monkeypatch):
+        """任务刚建立：collected/saved 必须为 0，stop_event 必须为 False。
+
+        杀掉初始化里的 0→1（首屏即显示已采 1 条）与 False→True
+        （search 首次 should_stop() 就返回真 → 立即停、永远采不到数据）。
+        """
+        seen = {}
+
+        async def fake_search(*a, **k):
+            seen["stop_first"] = k["should_stop"]()
+            await asyncio.sleep(0.6)  # 挂住 worker，让主线程读到尚未推进的初始 state
+            return {"items": [], "stopped": True}
+
+        monkeypatch.setattr(server, "search_via_browser", fake_search)
+        r = client.post("/api/collect_start", json={"keyword": "k", "limit": 3})
+        tid = r.json()["task_id"]
+        for _ in range(100):
+            if "stop_first" in seen:
+                break
+            time.sleep(0.01)
+        st = server._COLLECT_TASKS[tid]
+        assert st["collected"] == 0 and st["saved"] == 0
+        assert seen["stop_first"] is False
+        for _ in range(200):
+            pr = client.get(f"/api/collect_progress?task_id={tid}").json()
+            if pr["status"] != "running":
+                break
+            time.sleep(0.01)
+        assert pr["status"] == "stopped"
+
+    def test_collect_full_limit_counts_and_note(self, client, monkeypatch):
+        """采满 limit：入库 1 条、collected=1、文案为「采集完成」而非「不足」。
+
+        杀掉 saved=0→1（多算一条）、saved+=1→-=1（计数反向）、>=→>
+        （恰好采满时误落「平台仅加载 N 条不足」分支）。
+        """
+        _, pr = self._run_collect(
+            client, monkeypatch,
+            {"items": [{"feed_id": "f1", "title": "t", "liked_count": "5"}], "stopped": False},
+            limit=1,
+        )
+        assert pr["status"] == "done"
+        assert pr["collected"] == 1
+        assert pr["note"] == "采集完成：1 条已按评分排序"
+        assert server._db().execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 1
+
+    def test_collect_partial_note(self, client, monkeypatch):
+        """不足 limit：note 必须明示「平台仅加载 1 条（不足 3）」。
+
+        杀掉 `saved > 0` → `saved > 1`：只采到 1 条时 note 停在循环内的进度文案。
+        """
+        _, pr = self._run_collect(
+            client, monkeypatch,
+            {"items": [{"feed_id": "f2", "title": "t"}], "stopped": False},
+        )
+        assert pr["status"] == "done" and pr["collected"] == 1
+        assert pr["note"] == "采集完成：平台仅加载 1 条（不足 3），已按评分排序"
+
+    def test_collect_stopped_with_partial_results(self, client, monkeypatch):
+        """非空候选但 search 侧标记 stopped：状态 stopped、文案「已停止：采集到 1 条」。
+
+        杀掉收尾判断 `stop_event or res.stopped` → `and`：只有两者同时为真才判停止，
+        用户点停止（stop_event）或 search 内部 halted（res.stopped）任一情况都会被误报成完成。
+        """
+        _, pr = self._run_collect(
+            client, monkeypatch,
+            {"items": [{"feed_id": "f3", "title": "t"}], "stopped": True},
+            limit=3,
+        )
+        assert pr["status"] == "stopped"
+        assert pr["collected"] == 1
+        assert pr["note"] == "已停止：采集到 1 条"
+
+    def test_collect_start_ok_flag(self, client, monkeypatch):
+        """collect_start 必须回 ok=True（前端据此进入轮询；杀掉 True→False）。"""
+
+        async def fake_search(*a, **k):
+            return {"items": [], "stopped": True}
+
+        monkeypatch.setattr(server, "search_via_browser", fake_search)
+        r = client.post("/api/collect_start", json={"keyword": "k", "limit": 1})
+        assert r.json()["ok"] is True
+
+    def test_collect_zero_saved_not_reported_as_completed(self, client, monkeypatch):
+        """候选全是无 feed_id 的脏行（R-6.53x 不入库）→ saved=0，不得写成「仅加载 0 条」完成文案。
+
+        杀掉 `saved > 0` → `saved >= 0`：后者在 0 条时也命中「不足」分支，把失败伪装成完成。
+        """
+        _, pr = self._run_collect(
+            client, monkeypatch,
+            {"items": [{"title": "无id1"}, {"title": "无id2"}], "stopped": False},
+        )
+        assert pr["status"] == "done"
+        assert pr["collected"] == 0
+        assert pr["note"] == "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
+        assert server._db().execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 0
+
+
+class TestStatusNow:
+    """R-6.53z：状态条统一「正在采集」+ 进度走 note 的接口契约。"""
+
+    def teardown_method(self, _m):
+        server._COLLECT_TASKS.clear()
+
+    def test_status_now_ignores_non_running(self, client):
+        """done/stopped 任务不算采集进行中（杀掉 `== "running"` → `!= "running"`）。"""
+        server._COLLECT_TASKS.clear()
+        server._COLLECT_TASKS["t_done"] = {"status": "done", "keyword": "k", "limit": 5,
+                                          "collected": 5, "note": "完成"}
+        r = client.get("/api/status_now").json()
+        assert r["collecting"] is False and r["action"] == "空闲"
+
+    def test_status_now_running_fields(self, client):
+        """单任务：动作/文案/进度逐字段精确。
+
+        杀掉 running[0]→[1]（越界 500）、`note or ""`→`and`（detail 恒空）、
+        `"collecting": True`→False（运行中谎报空闲）。
+        """
+        server._COLLECT_TASKS.clear()
+        server._COLLECT_TASKS["t_run"] = {"status": "running", "keyword": "翡翠", "limit": 20,
+                                         "collected": 3, "note": "已采集 3 条"}
+        r = client.get("/api/status_now").json()
+        assert r["collecting"] is True
+        assert r["action"] == "正在采集"
+        assert r["detail"] == "已采集 3 条"
+        assert r["collected"] == 3 and r["limit"] == 20 and r["keyword"] == "翡翠"
 
 
 class TestNotes:

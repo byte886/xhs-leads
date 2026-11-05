@@ -62,6 +62,19 @@
 
 集成层说明：以上由 UI 自动化冒烟验证覆盖（search/clone/clients 三链路已实测通过），单测 mock Playwright 成本高于收益，按 gauntlet「人工冒烟验证」口径登记。
 
+## server.py · R-6.53z 流式流水线三函数（2026-11-06 核验）
+
+> 范围：`_finalize_stopped` / `collect_start` / `status_now`，19 去重行 / 23 站点。
+> 结果：20 killed / 3 survived；以下 3 条均为「不可达默认值」，核验依据同一事实——
+> `_COLLECT_TASKS` 生产侧只有一个构造点（`collect_start` 内 `state = {...}`），该字典初始化即写入
+> `collected=0`、`saved=0`、`limit=req.limit`、`stop_event=False`；测试注入的 state（`t1`/`t2`/`t_done`/`t_run`）亦全部显式带这几个键。
+
+| 位置 | 变异 | 核验结论 |
+|---|---|---|
+| `_finalize_stopped` 1177 行 `state.get("saved", 0)` | `0 -> 1` | state 必含 `saved`（唯一构造点写入），默认值不可达；停止收尾始终读到真实计数（`test_collect_stopped_with_partial_results` 断言 note 为「已停止：采集到 1 条」） |
+| `status_now` 1335 行 `st.get("collected", 0)` | `0 -> 1` | 同上，默认值不可达；`test_status_now_running_fields` 断言 collected==3 逐字精确 |
+| `status_now` 1336 行 `st.get("limit", 0)` | `0 -> 1` | 同上，默认值不可达；同一用例断言 limit==20 |
+
 ## collect_pipeline.py
 
 （无存活变异 — 11/11 全部击杀）
