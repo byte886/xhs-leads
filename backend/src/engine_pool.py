@@ -129,17 +129,8 @@ async def _any_blocked_page(ctx) -> bool:
 _SESSION_RESTORE_FILES = ("Current Session", "Current Tabs")
 
 
-def _clear_session_restore(user_data_dir: str) -> None:
-    """R-6.48s：启动前清理 Chrome 会话恢复——上次异常退出（exit_type=Crashed，
-    如 pkill 停实例）时 Chrome 默认恢复上次全部 tab（可能停在 xiaohongshu.com
-    登录页/首页）并弹「要恢复页面吗？Chromium未正确关闭」横幅，导致启动先闪现
-    小红书页再被导航到 APP（用户反馈「启动看到小红书一闪而过」）。
-    删会话恢复文件（Default/Sessions/*、Current Session、Current Tabs），并把
-    Preferences.exit_type 修正为 Normal（R-6.49b：根除恢复横幅，防止用户点
-    「恢复」把上次会话页面（含 explore）拉回）。
-    不动 Cookies/DB——登录态由 _replay_saved_cookies 以 cookies.json 为权威源
-    回注，跨重启保留不受影响（R-6.6 机制）。"""
-    default_dir = os.path.join(user_data_dir, "Default")
+def _purge_sessions_dir(default_dir: str) -> None:
+    """删 Default/Sessions/* 下的会话恢复文件（不存在或删除失败均静默）。"""
     sessions_dir = os.path.join(default_dir, "Sessions")
     try:
         if os.path.isdir(sessions_dir):
@@ -150,6 +141,10 @@ def _clear_session_restore(user_data_dir: str) -> None:
                     pass
     except OSError:
         pass
+
+
+def _purge_current_session_files(default_dir: str) -> None:
+    """删 Current Session / Current Tabs（Chrome 记录「上次会话」的两个指针文件）。"""
     for name in _SESSION_RESTORE_FILES:
         try:
             p = os.path.join(default_dir, name)
@@ -157,25 +152,50 @@ def _clear_session_restore(user_data_dir: str) -> None:
                 os.remove(p)
         except OSError:
             pass
-    # R-6.49b：exit_type=Crashed → Normal（防「要恢复页面吗？Chromium未正确关闭」横幅）
+
+
+def _fix_exit_type(prefs):
+    """exit_type 非 Normal 时修正为 Normal；返回是否有改动。R-6.49b。"""
+    changed = False
+    if prefs.get("exit_type") not in (None, "Normal"):
+        prefs["exit_type"] = "Normal"
+        changed = True
+    prof = prefs.get("profile")
+    if isinstance(prof, dict) and prof.get("exit_type") not in (None, "Normal"):
+        prof["exit_type"] = "Normal"
+        changed = True
+    return changed
+
+
+def _normalize_exit_type(default_dir: str) -> None:
+    """把 Default/Preferences 的 exit_type（顶层 + profile 内）修正为 Normal。"""
+    prefs_path = os.path.join(default_dir, "Preferences")
     try:
-        prefs_path = os.path.join(default_dir, "Preferences")
-        if os.path.isfile(prefs_path):
-            with open(prefs_path, "r", encoding="utf-8") as f:
-                prefs = json.load(f)
-            changed = False
-            if prefs.get("exit_type") not in (None, "Normal"):
-                prefs["exit_type"] = "Normal"
-                changed = True
-            prof = prefs.get("profile")
-            if isinstance(prof, dict) and prof.get("exit_type") not in (None, "Normal"):
-                prof["exit_type"] = "Normal"
-                changed = True
-            if changed:
-                with open(prefs_path, "w", encoding="utf-8") as f:
-                    json.dump(prefs, f, ensure_ascii=False)
+        if not os.path.isfile(prefs_path):
+            return
+        with open(prefs_path, "r", encoding="utf-8") as f:
+            prefs = json.load(f)
+        if not _fix_exit_type(prefs):
+            return
+        with open(prefs_path, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, ensure_ascii=False)
     except (OSError, ValueError):
         pass
+
+
+def _clear_session_restore(user_data_dir: str) -> None:
+    """启动前清理 Chrome 会话恢复（R-6.48s / R-6.49b）。
+
+    上次异常退出（exit_type=Crashed，如 pkill 停实例）时 Chrome 默认恢复上次全部
+    tab（可能停在 xiaohongshu.com 登录页/首页）并弹「要恢复页面吗？Chromium未正确
+    关闭」横幅 → 用户反馈「启动看到小红书一闪而过」。故启动前一次性清掉会话恢复
+    三件套，并把 exit_type 修正为 Normal。不动 Cookies/DB——登录态由
+    _replay_saved_cookies 以 cookies.json 为权威源回注，跨重启保留不受影响（R-6.6）。
+    """
+    default_dir = os.path.join(user_data_dir, "Default")
+    _purge_sessions_dir(default_dir)
+    _purge_current_session_files(default_dir)
+    _normalize_exit_type(default_dir)
 
 
 class AccountEngine:
@@ -300,136 +320,134 @@ class AccountEngine:
             except ProcessLookupError:
                 pass
 
+    async def _context_fake_dead_step(self):
+        """R-6.53l 假死保持级处置。
+
+        返回 'reuse'（已恢复，可复用当前引擎）/'rebuild'（无法恢复，已强制释放）/
+        'skip'（无假死）。保持级语义：只标记不立即释放（可能自愈），下次真实动作
+        先尝试恢复管理（3s 探测），避免误杀可恢复实例。
+        """
+        if not (self._fake_dead and self._context is not None):
+            return "skip"
+        if await self._try_recover_cdp():
+            self._fake_dead = False
+            log.warning("账号 %s 引擎 CDP 假死恢复，继续复用当前引擎", self.account_id)
+            return "reuse"
+        log.warning("账号 %s 引擎 CDP 假死无法恢复，进入强制释放重建", self.account_id)
+        await self._release_locked(reason="假死无法恢复")
+        self._fake_dead = False
+        return "rebuild"
+
+
+    async def _context_reuse_if_alive(self) -> bool:
+        """当前 context 仍连接可用 → True（直接复用）。
+
+        已断开则释放旧引用（close 失败/超时即强杀残留，防实例堆积，R-6.53k），
+        并更新重建时间戳，返回 False 供调用方重新启动。
+        """
+        if self._context is None:
+            return False
+        try:
+            if self._context.browser is not None and self._context.browser.is_connected():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await cdp_call(self._context.close(), timeout=5.0,
+                           label="pool.context_close", skip=True)
+        except Exception:  # noqa: BLE001（close 失败/超时：强杀残留，防实例堆积）
+            pass
+        self._context = None
+        self._rebuild_ts = time.monotonic()
+        self._kill_stale_processes()  # R-6.53k：断开重建前清残留
+        log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
+        return False
+
+
+    async def _context_start(self, pw):
+        """启动引擎并审计。失败直接抛 RuntimeError 由上层处置（R-6.22j 无冷却）。"""
+        try:
+            self._context = await self._launch_context(pw)
+            xlog.audit(self.account_id, action="engine_start", ok=True,
+                       detail=f"dir={config.home_relative(self.user_data_dir)}")
+            return self._context
+        except Exception as e:  # noqa: BLE001
+            xlog.audit(self.account_id, action="engine_start", ok=False,
+                       detail=f"启动失败: {str(e)[:200]}")
+            raise RuntimeError(f"账号 {self.account_id} 引擎启动失败: {e}") from e
+
+
     async def context(self):
-        """取（或懒启动）该账号的 persistent context。自愈：断开自动重建。"""
+        """取（或懒启动）该账号的 persistent context。自愈：假死恢复、断开自动重建。"""
         async with self._lock:
-            # R-6.53l（用户拍板分级）：假死保持级 → 新动作时先恢复管理（3s 探测），
-            # 恢复成功复用当前引擎（避免无谓重建）；失败才释放（优雅→强杀）重建。
-            if self._fake_dead and self._context is not None:
-                if await self._try_recover_cdp():
-                    self._fake_dead = False
-                    log.warning("账号 %s 引擎 CDP 假死恢复，继续复用当前引擎", self.account_id)
-                    return self._context
-                log.warning("账号 %s 引擎 CDP 假死无法恢复，进入强制释放重建", self.account_id)
-                await self._release_locked(reason="假死无法恢复")
-                self._fake_dead = False
-            if self._context is not None:
-                try:
-                    if self._context.browser is not None and self._context.browser.is_connected():
-                        return self._context
-                except Exception:  # noqa: BLE001
-                    pass
-                # 连接已断开 → 释放旧引用，重建
-                try:
-                    await cdp_call(self._context.close(), timeout=5.0,
-                                   label="pool.context_close", skip=True)
-                except Exception:  # noqa: BLE001（close 失败/超时：强杀残留，防实例堆积）
-                    pass
-                self._context = None
-                self._rebuild_ts = time.monotonic()
-                self._kill_stale_processes()  # R-6.53k：断开重建前清残留
-                log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
-
-            now = time.monotonic()
-            # R-6.22j（用户拍板）：移除「引擎启动失败 20s 冷却」——该防抖本意是
-            # 避免启动失败后反复重试；但用户实测（重登录场景多、封号从未出现）
-            # 认为无必要，且调试/重启时该冷却会造成「启动冷却中」误拦截与空白窗口
-            # 观感。启动失败直接抛错，由上层（任务 error / 用户重试）处置。
-
-            pw = await _get_pw()
-            try:
-                self._context = await self._launch_context(pw)
-                xlog.audit(self.account_id, action="engine_start", ok=True,
-                           detail=f"dir={config.home_relative(self.user_data_dir)}")
+            if await self._context_fake_dead_step() == "reuse":
                 return self._context
-            except Exception as e:  # noqa: BLE001
-                # R-6.22j：移除启动失败 20s 冷却（用户拍板，见 context() 入口注释）
-                xlog.audit(self.account_id, action="engine_start", ok=False,
-                           detail=f"启动失败: {str(e)[:200]}")
-                raise RuntimeError(f"账号 {self.account_id} 引擎启动失败: {e}") from e
+            if await self._context_reuse_if_alive():
+                return self._context
+            # R-6.22j（用户拍板）：无「启动失败 20s 冷却」——失败直接抛错，
+            # 由上层（任务 error / 用户重试）处置，避免误拦截与空白窗口观感。
+            pw = await _get_pw()
+            return await self._context_start(pw)
 
-    async def _launch_context(self, pw):
-        """R-6.36e 拆自 context()：构建并 launch_persistent_context（含 Cookie 回注/stealth）。"""
-        os.makedirs(self.user_data_dir, exist_ok=True)
-        # R-6.53k：启动前清该 profile 残留进程（任意路径漏网的实例都会在此收敛——
-        # 残留实例占 profile 锁导致 Failed to launch，且多实例页面堆积耗内存）。
-        self._kill_stale_processes()
-        # R-6.48s：启动前清会话恢复文件——上次异常退出（exit_type=Crashed）Chrome
-        # 恢复旧 tab（小红书页）→ 启动闪现小红书再被导航 APP；清后启动仅默认空白 tab。
-        _clear_session_restore(self.user_data_dir)
-        # 关键：launch_persistent_context（内部 stdio 管道，无 TCP 调试端口，
-        # 从机制上不触发「允许远程调试」授权流程；解密在浏览器进程内部，免钥匙串）
-        # R 批 v1.4：headless 无头化（外部零 Chrome 窗口）+ stealth 强化
-        #  - viewport 1280x800：桌面宽屏布局（小红书桌面版），登录小窗/调试镜像同尺寸
-        #  - user_agent：无头时覆盖 HeadlessChrome 特征（风控指纹）
-        #  - AutomationControlled：关掉 CDP 来源的 webdriver 标记（与 init script 双保险）
-        #  - headless=False 兜底档：风控敏感环节可临时切后台可见窗口（config.headless）
-        cfg = config.get_config()
-        headless = bool(cfg.get("headless", True))
-        # R 批 v1.5：引擎带固定 CDP 调试端口（config.engine_port()，默认 9223）供
-        # e1/t 系列 UI 测试 connect_over_cdp 连接（同一实例=同一登录态 profile）；
-        # 旧「9223 外部可见 Chrome」测试路径退役。Playwright 经 stdio 管道控制不受影响。
-        eng_port = config.engine_port()
-        # R-6.27：viewport 与窗口几何对齐——非无头（壳窗口）时页面布局宽度
-        # 必须等于窗口宽度，否则窗口（主屏半宽，如 960）显示 1280 宽的布局，
-        # 右侧内容被裁（用户反馈「尺寸没对齐」）。无头引擎保持 1280 采集布局。
-        _geo_w, _geo_h = shell_window_geometry()[:2] if not headless else (1280, 800)
-        launch_kwargs = dict(
+
+    def _launch_kwargs_base(self, headless: bool, eng_port: int) -> dict:
+        """构造 launch_persistent_context 基础参数（channel/viewport/args）。
+
+        R-6.27：非无头（壳窗口）时 viewport 必须与窗口几何对齐，否则 960 宽窗口
+        显示 1280 布局、右侧内容被裁；无头引擎固定 1280x800 采集布局。
+        R 批 v1.5：引擎带固定 CDP 端口（config.engine_port，默认 9223）供 UI 测试
+        connect_over_cdp 复用同一实例（同一登录态 profile）。
+        """
+        geo = shell_window_geometry()[:2] if not headless else (1280, 800)
+        return dict(
             channel="chrome",
             headless=headless,
-            viewport={"width": _geo_w, "height": _geo_h},
+            viewport={"width": geo[0], "height": geo[1]},
             args=[
-                # R-6.53j：移除 --no-first-run——Chromium 150+ 带该 flag 有 CHECK/SIGTRAP
-                # 崩溃报告（Debian #1141618，chromedriver 默认加它导致会话全部失败）；
-                # CFT 为自动化专用 build 无 first-run 向导，移除无副作用。
+                # R-6.53j：移除 --no-first-run——Chromium 150+ 带该 flag 有
+                # CHECK/SIGTRAP 崩溃（Debian #1141618）；CFT 无 first-run 向导，移除无副作用。
                 "--no-default-browser-check",
                 "--disable-blink-features=AutomationControlled",
                 f"--remote-debugging-port={eng_port}",
             ],
         )
-        # 调试实时窗口（R-6.15 用户需求）：headless=False 时引擎出窗口，
-        # 实时可见采集/登录操作过程（替代「截图映射」）。
-        # R-6.17 曾用 --app 应用模式（无菜单栏/标签栏/地址栏）；R-6.18 用户拍板
-        # 「壳窗口内两个固定 Tab」故移除；R-6.21 用户拍板还原「双窗口」并恢复
-        # 壳窗口应用模式：窗口一=APP/登录（--app 壳窗口：无地址栏/无标签条，
-        # 标签条上的 +/×/pinned 全部不再出现；keep_shell_tab 监护固定不可关），
-        # 窗口二=采集（独立普通窗口，设置开关 collect_tab_visible 控制开/关，
-        # shell_window.open_tab2_window 以 window.open 从壳窗口弹出——app 模式
-        # 下 window.open 新 target 落到普通独立窗口，与双窗口语义一致）。
-        # 注：XHS_SHELL_URL 由 launcher 注入（供 ensure_shell/监护/--app 使用）；
-        # 未注入时（直接跑 server 调试）按 front_port 兜底拼。
-        if not headless:
-            shell_url = os.environ.get("XHS_SHELL_URL") or (
-                f"http://127.0.0.1:{config.front_port()}/"
-            )
-            # R-6.22c：launch_persistent_context 的 --app 实测不生效（窗口仍为
-            # 普通 Chrome 形态，带菜单栏/标签栏）。壳窗口应用模式改由
-            # shell_window.ensure_shell 走 --app 命令行路由（_launch_app_window）
-            # 弹出；此处保留 --window-size/--window-position 让启动初始普通窗口
-            # R-6.49d：初始普通窗口移出屏幕（负坐标）——消除「普通→应用提升」时
-            # 初始窗口在左半屏闪现两次的观感（CDP 取证：启动期两个 8791/ target，
-            # 先普通后 --app，<1s 切换）。应用窗仍由 ensure_shell --app 路由弹主屏
-            # 左半（--window-position=0,0 语义不变），初始窗屏幕外自生自灭。
-            win_w, win_h, _, _ = shell_window_geometry()
-            launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
-            launch_kwargs["args"].append("--window-position=-4000,0")
-        # R-6.53：引擎崩溃 CHECK 文案捕获——--log-file 让 Chromium base::logging
-        # 崩溃前 FATAL 落盘。此前无 stderr 捕获 + 我方 --disable-breakpad 关闭
-        # Crashpad → 17 份 .ips 拿不到确切 CHECK 文案（atos 无 dSYM 死路）。
-        # 崩溃恢复验证（Nov 5）：主进程确定性 SIGTRAP（Chrome_IOThread、前 8 帧
-        # 偏移全批次一致）→ CHECK 点固定；落盘后下次崩溃即可读到 FATAL 文案定位。
+
+
+    def _launch_apply_shell_window(self, launch_kwargs: dict) -> None:
+        """非无头时的窗口几何（R-6.21 双窗口 + R-6.49d 初始窗移出屏幕）。
+
+        壳窗口应用模式由 shell_window.ensure_shell 走 --app 路由弹出；此处保留
+        --window-size/--window-position 让启动初始普通窗口自生自灭：负坐标消除
+        「普通→应用提升」时左半屏闪现（CDP 取证：启动期两个 8791 target，先普通后 --app）。
+        """
+        win_w, win_h, _, _ = shell_window_geometry()
+        launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
+        launch_kwargs["args"].append("--window-position=-4000,0")
+
+
+    def _launch_apply_chrome_log(self, launch_kwargs: dict) -> None:
+        """R-6.53：--log-file 让 Chromium base::logging 崩溃前 FATAL 落盘。
+
+        此前无 stderr 捕获 + --disable-breakpad 关闭 Crashpad → .ips 拿不到 CHECK
+        文案（atos 无 dSYM 死路）；每次启动截断文件，崩溃点即崩溃前最后内容。
+        """
         try:
-            _chrome_log = config.DATA_DIR / "logs" / "chrome-engine.log"
-            _chrome_log.parent.mkdir(parents=True, exist_ok=True)
-            _chrome_log.write_text("")  # 每次引擎启动截断（崩溃点即崩溃前最后内容）
+            chrome_log = config.DATA_DIR / "logs" / "chrome-engine.log"
+            chrome_log.parent.mkdir(parents=True, exist_ok=True)
+            chrome_log.write_text("")
             launch_kwargs["args"].append("--enable-logging=stderr")
-            launch_kwargs["args"].append(f"--log-file={_chrome_log}")
+            launch_kwargs["args"].append(f"--log-file={chrome_log}")
         except Exception:  # noqa: BLE001
             log.warning("引擎 CHECK 日志落盘配置失败（非阻断）")
-        # R-6.11：内置 CFT（Chrome for Testing）优先——独立应用身份
-        # （com.google.chrome.for.testing），引擎运行不再占用用户日常 Chrome 的
-        # LaunchServices 单实例 → 根除「APP 开着时日常 Chrome 无法新建窗口」；
-        # CFT 缺失时回退 channel="chrome"（系统 Google Chrome 兜底）。
+
+
+    def _launch_apply_binary(self, launch_kwargs: dict, headless: bool) -> None:
+        """选二进制（R-6.11 内置 CFT 优先）并处理 UA / Playwright 默认参数。
+
+        CFT 独立应用身份（com.google.chrome.for.testing）→ 不再占用用户日常 Chrome
+        的 LaunchServices 单实例（根除「APP 开着时日常 Chrome 无法新建窗口」）；
+        缺失时回退 channel=chrome。CFT 为自动化专用 build，无 first-run 向导。
+        """
         cft = builtin_cft_candidates()
         if cft:
             launch_kwargs["executable_path"] = cft
@@ -437,20 +455,39 @@ class AccountEngine:
         log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
         if headless:
             launch_kwargs["user_agent"] = _HEADLESS_UA
-        # R-6.53j：ignore_default_args 滤掉 Playwright 默认的 --no-first-run——
-        # Chromium 150+ 带该 flag 有 CHECK/SIGTRAP 崩溃报告（Debian #1141618）；
-        # 只移除我们追加的那行不够，Playwright driver 默认 args 也含它，须显式忽略。
+        # R-6.53j：Playwright driver 默认 args 也含 --no-first-run，须显式忽略
         launch_kwargs["ignore_default_args"] = ["--no-first-run"]
-        self._context = await pw.chromium.launch_persistent_context(
-            self.user_data_dir, **launch_kwargs
-        )
-        # stealth：隐藏自动化特征（webdriver 等），降低被风控识别概率
+
+
+    async def _launch_after_start(self) -> None:
+        """启动后注入 stealth（R 批 v1.4 降低风控识别）并回注持久化 Cookie。"""
         try:
             await self._context.add_init_script(injections.get("stealth"))
         except Exception as se:  # noqa: BLE001
             log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
         await self._replay_saved_cookies()
+
+
+    async def _launch_context(self, pw):
+        """构建并 launch_persistent_context（含 Cookie 回注/stealth），只做编排。"""
+        os.makedirs(self.user_data_dir, exist_ok=True)
+        # R-6.53k：启动前清该 profile 残留进程 —— 残留实例占 profile 锁导致
+        # Failed to launch，且多实例页面堆积耗内存。
+        self._kill_stale_processes()
+        # R-6.48s：启动前清会话恢复文件，避免「启动先闪现小红书页再导航 APP」。
+        _clear_session_restore(self.user_data_dir)
+        headless = bool(config.get_config().get("headless", True))
+        launch_kwargs = self._launch_kwargs_base(headless, config.engine_port())
+        if not headless:
+            self._launch_apply_shell_window(launch_kwargs)
+        self._launch_apply_chrome_log(launch_kwargs)
+        self._launch_apply_binary(launch_kwargs, headless)
+        self._context = await pw.chromium.launch_persistent_context(
+            self.user_data_dir, **launch_kwargs
+        )
+        await self._launch_after_start()
         return self._context
+
 
     async def _replay_saved_cookies(self) -> None:
         """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。"""
