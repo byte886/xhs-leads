@@ -22,6 +22,8 @@ import asyncio
 import pathlib
 import sys
 
+from src.cdp_timeouts import CDP_QUICK, cdp_call
+
 # 项目根定位（与 browser_client 原逻辑一致：打包态 _MEIPASS 旁 Resources）
 if getattr(sys, "_MEIPASS", None):
     # 打包态（PyInstaller macOS）：资源随包进 Contents/Resources
@@ -391,29 +393,28 @@ async def inject_once(page, name: str) -> bool:
     """
     js = get(name)
     try:
-        done = await asyncio.wait_for(
+        done = await cdp_call(
             page.evaluate(
                 "(n) => Array.isArray(window." + _MARKER + ") && window." + _MARKER + ".includes(n)",
                 name,
             ),
-            timeout=3,
-        )
+            timeout=CDP_QUICK, label="inject.check", skip=True)
     except Exception:  # noqa: BLE001（页面未就绪：调用方下轮补注）
         return False
     if done:
         return True
     try:
-        await asyncio.wait_for(page.evaluate(js), timeout=3)
+        await cdp_call(page.evaluate(js), timeout=CDP_QUICK, label="inject.run", skip=True)
     except Exception:  # noqa: BLE001
         return False
     try:
-        await asyncio.wait_for(
+        await cdp_call(
             page.evaluate(
                 "(n) => { if (!Array.isArray(window." + _MARKER + ")) window." + _MARKER + " = [];"
                 " if (!window." + _MARKER + ".includes(n)) window." + _MARKER + ".push(n); }",
                 name,
             ),
-            timeout=3,
+            timeout=CDP_QUICK, label="inject.mark", skip=True,
         )
     except Exception:  # noqa: BLE001（标记登记失败不阻断：JS 已注入，多数注入自带内部防重）
         pass

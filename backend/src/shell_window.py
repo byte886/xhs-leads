@@ -28,6 +28,7 @@ import json as _json_mod
 # JS 注入脚本统一注册表（R-6.30a）：本模块历史上 5 个 JS 常量 + login_guard 内 2 个
 # 局部 JS 已全部上提至 src/injections.py（单一事实源，防「悬空引用」类历史 bug 重现）。
 from src import injections  # noqa: E402
+from src.cdp_timeouts import CDP_QUICK, cdp_call
 
 
 def _json_body(url: str, timeout: float):
@@ -97,7 +98,8 @@ async def open_tab2_window(
     win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
     await _calibrate_window(page, win_left, 0, win_w, win_h)
     try:
-        await page.bring_to_front()
+        await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                       label="shell.bring_to_front", skip=True)
     except Exception:  # noqa: BLE001
         pass
     return page
@@ -113,13 +115,15 @@ async def _ensure_shell_title(page) -> None:
     _title_js = injections.get("shell_title")
     if getattr(page, "_shell_title_installed", False):
         try:
-            await page.evaluate(_title_js)
+            await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
+                           label="shell.title_evaluate", skip=True)
         except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
             pass
         return
     try:
         await page.add_init_script(_title_js)
-        await page.evaluate(_title_js)
+        await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
+                       label="shell.title_init_evaluate", skip=True)
         page._shell_title_installed = True
     except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
         pass
@@ -139,13 +143,15 @@ async def _ensure_debug_title(page) -> None:
     _title_js = injections.get("collect_debug_title")
     if getattr(page, "_debug_title_installed", False):
         try:
-            await page.evaluate(_title_js)
+            await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
+                           label="shell.title_evaluate", skip=True)
         except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
             pass
         return
     try:
         await page.add_init_script(_title_js)
-        await page.evaluate(_title_js)
+        await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
+                       label="shell.title_init_evaluate", skip=True)
         page._debug_title_installed = True
     except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
         pass
@@ -616,7 +622,8 @@ async def ensure_shell(base_url: str):
     else:
         await _calibrate_window(page, 0, 0, win_w, win_h)
     try:
-        await page.bring_to_front()
+        await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                       label="shell.bring_to_front", skip=True)
     except Exception:  # noqa: BLE001
         pass
     await _ensure_shell_title(page)
@@ -1075,7 +1082,8 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
                 pass
             raise
     try:
-        await page.bring_to_front()
+        await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                       label="shell.bring_to_front", skip=True)
     except Exception:  # noqa: BLE001
         pass
     await _calibrate_window(page, 0, 0, win_w, win_h)

@@ -65,6 +65,7 @@ from src.collect_pipeline import (  # noqa: E402
 from src import browser_client  # noqa: E402（快速档 _enrich_notes 直连详情/主页）
 from src import injections  # noqa: E402（R-6.30a：注入脚本集中注册表）
 from src import config, risk  # noqa: E402（架构改造 P1：配置中心 + 每账号风控）
+from src.cdp_timeouts import CDP_QUICK, cdp_call  # noqa: E402（R-6.53s：统一 CDP 超时保护）
 from src import license as lic  # noqa: E402（授权薄层：free 恒放行，业务入口统一过闸）
 
 app = FastAPI(title="XHS Leads · 小红书获客助手")
@@ -2394,7 +2395,8 @@ async def _ensure_tab2_skeleton(eng) -> None:
             # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
             _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
             await shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
-            await page.bring_to_front()
+            await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                           label="server.tab2_bring_to_front", skip=True)
             log.info("app_config：已创建 Tab2 采集骨架（开关开）")
         except Exception:  # noqa: BLE001
             log.warning("app_config：Tab2 骨架创建失败（keeper 兜底轮询接管）")

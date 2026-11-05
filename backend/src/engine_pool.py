@@ -25,6 +25,7 @@ import time
 from playwright.async_api import async_playwright
 
 from src import config, injections, logger as xlog, risk
+from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src.engine_types import builtin_cft_candidates
 
 # 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
@@ -228,8 +229,13 @@ class AccountEngine:
             p = c.pages[0] if c.pages else None
             if p is None:
                 return False
-            cdp = await asyncio.wait_for(c.new_cdp_session(p), timeout=3.0)
-            await asyncio.wait_for(cdp.send("Target.getTargets"), timeout=3.0)
+            cdp = await cdp_call(c.new_cdp_session(p), timeout=CDP_QUICK,
+                                 label="probe.new_cdp_session", skip=True)
+            if cdp is None:
+                return False
+            if await cdp_call(cdp.send("Target.getTargets"), timeout=CDP_QUICK,
+                              label="probe.get_targets", skip=True) is None:
+                return False
             return True
         except Exception:  # noqa: BLE001（探测超时/失败：判定无法恢复）
             return False
@@ -257,7 +263,7 @@ class AccountEngine:
         self._rebuild_ts = time.monotonic()
         if c is not None:
             try:
-                await asyncio.wait_for(c.close(), timeout=5.0)
+                await cdp_call(c.close(), timeout=5.0, label="pool.close", skip=True)
             except Exception:  # noqa: BLE001（假死 close 挂起/失败：超时后强杀）
                 pass
         self._kill_stale_processes()
@@ -315,7 +321,8 @@ class AccountEngine:
                     pass
                 # 连接已断开 → 释放旧引用，重建
                 try:
-                    await asyncio.wait_for(self._context.close(), timeout=5.0)
+                    await cdp_call(self._context.close(), timeout=5.0,
+                                   label="pool.context_close", skip=True)
                 except Exception:  # noqa: BLE001（close 失败/超时：强杀残留，防实例堆积）
                     pass
                 self._context = None

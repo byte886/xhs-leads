@@ -19,6 +19,8 @@ import sys
 import time
 
 from src import config, engine_pool, injections, logger as xlog, risk
+from src.cdp_timeouts import (CdpTimeoutError, CDP_DRAIN, CDP_EVAL, CDP_NAV,
+                              CDP_PREP, CDP_QUICK, cdp_call)
 from src.engine_pool import pool
 
 log = xlog.get("browser")
@@ -131,13 +133,14 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
     """
     page = await _page(account_id)
     try:
-        # R-6.52：asyncio.wait_for 外层兜底——引擎 CDP 假死时 Playwright 内部
-        # timeout 依赖 CDP 响应、不会触发，goto 会永久挂起；wait_for 强制 15s 打断。
-        await asyncio.wait_for(
-            page.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
+        # R-6.53s：统一 CDP 超时保护——引擎假死时 Playwright 内部 timeout 不触发
+        # （CDP 无响应），cdp_call 以绝对超时强制打断并打 WARNING 溯源。
+        await cdp_call(page.goto(url, wait_until="domcontentloaded", timeout=12000),
+                       timeout=CDP_NAV, label="load.goto")
         try:
             if show_front:
-                await asyncio.wait_for(page.bring_to_front(), timeout=3)
+                await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                               label="load.bring_to_front", skip=True)
             else:
                 # 后台采集：切回壳窗口 Tab1（前端/登录 tab），采集 tab 保持激活渲染
                 await _switch_back_to_shell(page)
@@ -157,11 +160,12 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
             log.warning("页面加载遇崩溃（%s），重开页面重试: %s", str(exc)[:80], url[:80])
             page2 = await _page(account_id)
             try:
-                await asyncio.wait_for(
-                    page2.goto(url, wait_until="domcontentloaded", timeout=12000), timeout=15)
+                await cdp_call(page2.goto(url, wait_until="domcontentloaded", timeout=12000),
+                               timeout=CDP_NAV, label="load.goto_retry")
                 try:
                     if show_front:
-                        await asyncio.wait_for(page2.bring_to_front(), timeout=3)
+                        await cdp_call(page2.bring_to_front(), timeout=CDP_QUICK,
+                                       label="load.bring_to_front_retry", skip=True)
                     else:
                         await _switch_back_to_shell(page2)
                 except Exception:  # noqa: BLE001
@@ -197,9 +201,10 @@ async def _switch_back_to_shell(page) -> None:
         shell = _find_shell_tab(page, base)
         if shell is not None:
             # R-6.53q：CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死
-            # 直接触发点，Nov 5 DIAG 取证 goto 0.5s 后卡死）——3s 超时保护，超时跳过
-            # （焦点切换非关键路径，采集不依赖其成功）。
-            await asyncio.wait_for(shell.bring_to_front(), timeout=3)
+            # 直接触发点，Nov 5 DIAG 取证 goto 0.5s 后卡死）——cdp_call 绝对超时保护，
+            # 焦点切换非关键路径，超时跳过。
+            await cdp_call(shell.bring_to_front(), timeout=CDP_QUICK,
+                           label="switch_back_to_shell", skip=True)
     except Exception:  # noqa: BLE001
         pass
 
@@ -382,9 +387,10 @@ async def _detect_login_wall(page) -> str:
     try:
         if "/login" in page.url:
             return "页面已跳转登录（小红书会话失效，请重新扫码或导入 Cookie）"
-        text = await asyncio.wait_for(
+        text = await cdp_call(
             page.evaluate("() => document.body ? document.body.innerText.slice(0, 1500) : ''"),
-            timeout=6)  # R-6.52：引擎卡死时 6s 超时，不阻塞登录墙检测
+            timeout=CDP_EVAL, label="login_wall.text", skip=True)  # R-6.53s：引擎卡死不阻塞登录墙检测
+        text = text or ""
     except Exception:  # noqa: BLE001
         return ""
     for kw in ("扫码登录", "登录后查看", "请先登录", "完成验证", "安全验证", "验证码"):
@@ -401,9 +407,10 @@ async def _wait_note_cards(page, timeout_s: float = 45) -> tuple[bool, str]:
         if wall:
             return False, wall
         try:
-            n = await asyncio.wait_for(
+            n = await cdp_call(
                 page.evaluate("() => document.querySelectorAll('section.note-item').length"),
-                timeout=6)
+                timeout=CDP_EVAL, label="wait_cards.evaluate", skip=True)
+            n = n or 0
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001 引擎卡死时 6s 超时，不空等
             n = 0
         if n > 0:
@@ -549,9 +556,10 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     except Exception:  # noqa: BLE001
         pass
     try:
-        page = await asyncio.wait_for(_prepare_search_page(keyword, filters, account_id), timeout=25)
-    except asyncio.TimeoutError:
-        # R-6.52：引擎 CDP 假死（search_result 页拖死）时 35s 强制打断——否则 worker
+        page = await cdp_call(_prepare_search_page(keyword, filters, account_id),
+                              timeout=CDP_PREP, label="prepare_search_page")
+    except CdpTimeoutError:
+        # R-6.53s：引擎 CDP 假死（search_result 页拖死）时绝对超时强制打断——否则 worker
         # 卡在准备阶段永不返回，用户点停止迟迟不停。返回空结果收尾，状态由调用方判定。
         return {"keyword": keyword, "count": 0, "items": [], "stopped": bool(should_stop and should_stop())}
     items: list = []
@@ -561,9 +569,10 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     try:
         while time.time() < deadline:
             try:
-                added = await asyncio.wait_for(_drain_page(page, items, seen), timeout=8)
-            except asyncio.TimeoutError:
-                # R-6.52：引擎卡死（CDP 无响应）时 8s 超时打断收尾——否则 worker
+                added = await cdp_call(_drain_page(page, items, seen),
+                                       timeout=CDP_DRAIN, label="drain_page")
+            except CdpTimeoutError:
+                # R-6.53s：引擎卡死（CDP 无响应）时绝对超时打断收尾——否则 worker
                 # 卡在无响应的 evaluate 上，用户点停止迟迟不停、任务永不退出。
                 break
             except Exception as exc:  # noqa: BLE001
@@ -577,8 +586,9 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        page = await asyncio.wait_for(
-                            _prepare_search_page(keyword, filters, account_id), timeout=25)
+                        page = await cdp_call(
+                            _prepare_search_page(keyword, filters, account_id),
+                            timeout=CDP_PREP, label="prepare_search_page_retry")
                     except Exception:  # noqa: BLE001
                         break  # 重开失败，收尾返回已采
                     continue
@@ -589,9 +599,9 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
             if done:
                 break
             try:
-                await asyncio.wait_for(
-                    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"), timeout=8)
-            except asyncio.TimeoutError:
+                await cdp_call(page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"),
+                               timeout=CDP_DRAIN, label="scroll_more")
+            except CdpTimeoutError:
                 break
             except Exception as exc:  # noqa: BLE001
                 if _is_crash_error(exc) and crash_tries < max_crash_tries:
@@ -603,8 +613,9 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
                     except Exception:  # noqa: BLE001
                         pass
                     try:
-                        page = await asyncio.wait_for(
-                            _prepare_search_page(keyword, filters, account_id), timeout=25)
+                        page = await cdp_call(
+                            _prepare_search_page(keyword, filters, account_id),
+                            timeout=CDP_PREP, label="prepare_search_page_retry")
                     except Exception:  # noqa: BLE001
                         break
                     continue
