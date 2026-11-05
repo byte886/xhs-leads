@@ -199,6 +199,14 @@ class AccountEngine:
             return 1e18
         return time.monotonic() - self._rebuild_ts
 
+    def is_connected_now(self) -> bool:
+        """同步判断当前 context 的浏览器连接是否存活（close 事件回调中同步调用）。"""
+        c = self._context
+        try:
+            return c is not None and c.browser is not None and c.browser.is_connected()
+        except Exception:  # noqa: BLE001（连接检测异常视同断开）
+            return False
+
     async def context(self):
         """取（或懒启动）该账号的 persistent context。自愈：断开自动重建。"""
         async with self._lock:

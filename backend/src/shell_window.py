@@ -240,11 +240,34 @@ class WindowCoordinator:
         self._watched: set = set()  # 已挂 close 监听的 page（对象引用去重，幂等）
         self._stop = None
         self._on_shell_closed = None
+        self._engine = None  # R-6.53c：引擎实例（close 事件校验「用户关窗 vs 引擎崩溃」）
 
     # ---------------- 回调绑定（keeper 启动时一次） ----------------
     def bind(self, stop, on_shell_closed) -> None:
         self._stop = stop
         self._on_shell_closed = on_shell_closed
+
+    def attach_engine(self, engine) -> None:
+        """R-6.53c：绑定账号引擎实例，供壳窗 close 事件校验引擎连接状态。"""
+        self._engine = engine
+
+    async def _shell_closed_verify(self) -> None:
+        """R-6.53c：壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
+        进程死亡的副作用（非用户行为），跳过退出交给 keeper 重建；引擎存活且
+        非重建期才是用户真关主窗，维持「关主窗=退出应用」语义。"""
+        if self._stop is not None and self._stop.is_set():
+            return
+        eng = self._engine
+        if eng is not None:
+            if eng.rebuild_age() < 60:
+                print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
+                return
+            if not eng.is_connected_now():
+                print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
+                return
+        if self._on_shell_closed is not None:
+            print("[xhs-leads][keeper] 壳窗被关闭（引擎存活），触发应用退出", flush=True)
+            self._on_shell_closed()
 
     # ---------------- 判活引用 ----------------
     @staticmethod
@@ -281,10 +304,15 @@ class WindowCoordinator:
                 if self._stop is not None and self._stop.is_set():
                     return
                 if is_shell:
-                    # R-6.22p：主窗被关 = 用户关闭应用 → 整体退出（不重建）
-                    if self._on_shell_closed is not None:
-                        print("[xhs-leads][keeper] 壳窗被关闭，触发应用退出", flush=True)
-                        self._on_shell_closed()
+                    # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能
+                    # 立即退出——延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
+                    print("[xhs-leads][keeper] 壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）", flush=True)
+                    try:
+                        loop = asyncio.get_event_loop()
+                        loop.call_later(3.0, lambda: asyncio.ensure_future(
+                            self._shell_closed_verify()))
+                    except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
+                        pass
                 else:
                     print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
             except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
@@ -1238,6 +1266,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
     base = base_url.rstrip("/")
     coord = get_coordinator()
     coord.bind(stop, on_shell_closed)
+    coord.attach_engine(engine_pool)  # R-6.53c：close 事件校验引擎连接状态
     last = [frozenset()]  # R-6.28：页面集变化才打印快照
 
     # 初始：确保 Tab1 存在并挂监听；Tab2 按开关初始创建一次
