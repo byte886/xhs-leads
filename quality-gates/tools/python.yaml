@@ -1,7 +1,8 @@
 # 工具映射表 — Python（codex-zhuke 裁剪版）
 # 运行约定：仓库根执行 bash <skill>/tooling/bin/quality-check.sh --stage commit
-# <GAUNTLET_DIR> = skill 仓库根；vendor 真实目录=/private/tmp/gauntlet/vendor
-# （skill tooling/vendor 为指向它的 symlink，vendor 不进本仓库）。
+# <GAUNTLET_DIR> = skill 仓库根；vendor 真实目录=<GAUNTLET_DIR>/tooling/vendor
+# （R-6.53z1 修正：2026-11-05 起 vendor 改为技能目录内真实目录；此前是指向
+#  /private/tmp/gauntlet/vendor 的 symlink，/tmp 被系统清理后 7 个工具集体缺失。vendor 不进本仓库。）
 
 language: python
 
