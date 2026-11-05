@@ -4,4 +4,3 @@
 shell_window.login_guard 11
 shell_window._guard_hook_forced_nav 9
 shell_window._guard_monitor_loop 9
-shell_window.WindowCoordinator._shell_closed_verify 11

@@ -210,3 +210,65 @@ class TestWatchCallbacks:
 
         _run(scenario())
         assert len(calls) == 1  # 只壳窗崩溃触发恢复清理；采集窗崩溃不触发
+
+
+class _PoolLike:
+    """attach_engine 传入的池对象（有 .get）。"""
+
+    def __init__(self, account=None, raise_exc=None):
+        self._acc = account
+        self._raise = raise_exc
+
+    async def get(self, name):
+        if self._raise:
+            raise self._raise
+        return self._acc
+
+
+class TestShellClosedVerify:
+    """关主窗校验：只有「引擎确认存活」才退出（R-6.53c/6.53h）。"""
+
+    def _coord(self, engine):
+        import threading
+
+        coord = sw.WindowCoordinator()
+        coord.bind(threading.Event(), lambda: coord.__dict__.setdefault("exited", True))
+        coord.attach_engine(engine)
+        return coord
+
+    def test_engine_alive_triggers_exit(self):
+        coord = self._coord(_PoolLike(_FakeEng(rebuild_age=999, connected=True)))
+        _run(coord._shell_closed_verify())
+        assert coord.exited is True
+
+    def test_rebuild_within_60s_skips_exit(self):
+        coord = self._coord(_PoolLike(_FakeEng(rebuild_age=30)))
+        _run(coord._shell_closed_verify())
+        assert not hasattr(coord, "exited")
+
+    def test_disconnected_engine_skips_exit(self):
+        coord = self._coord(_PoolLike(_FakeEng(rebuild_age=999, connected=False)))
+        _run(coord._shell_closed_verify())
+        assert not hasattr(coord, "exited")
+
+    def test_pool_error_falls_back_to_exit(self):
+        # 引擎未就绪时按存活处理 → 走退出兜底（原语义）
+        coord = self._coord(_PoolLike(raise_exc=RuntimeError("not ready")))
+        _run(coord._shell_closed_verify())
+        assert coord.exited is True
+
+    def test_broken_account_object_skips_exit(self):
+        # R-6.53h：对象类型异常（历史误传模块）保守不退出
+        coord = self._coord(_PoolLike(object()))
+        _run(coord._shell_closed_verify())
+        assert not hasattr(coord, "exited")
+
+    def test_stopped_coordinator_skips_everything(self):
+        import threading
+
+        stop = threading.Event()
+        stop.set()
+        coord = sw.WindowCoordinator()
+        coord.bind(stop, lambda: coord.__dict__.setdefault("exited", True))
+        _run(coord._shell_closed_verify())
+        assert not hasattr(coord, "exited")

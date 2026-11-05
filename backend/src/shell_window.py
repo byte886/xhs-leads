@@ -271,33 +271,44 @@ class WindowCoordinator:
             return 1e18
         return time.monotonic() - self._shell_close_ts
 
+    async def _engine_alive_after_close(self) -> bool:
+        """壳窗 close 后判定「引擎是否仍健康」：重建期/断连/校验异常一律 False。
+
+        False 的语义是**跳过退出**（崩溃恢复交给 keeper 重建），只在引擎确认
+        存活时返回 True。R-6.53c / R-6.53h 的判定集中在此，便于单测覆盖。
+        """
+        eng = self._engine
+        if eng is None:
+            return True
+        try:
+            # attach_engine 传入 EnginePool 池对象 → 取账号引擎实例
+            account = await eng.get("default") if hasattr(eng, "get") else eng
+        except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
+            return True
+        if account is None:
+            return True
+        try:
+            # R-6.53h：对象类型防御——校验异常时保守不退出，交给 keeper 轮询兜底，
+            # 避免「崩溃恢复被误判用户关窗退出应用」（历史：误传模块导致 AttributeError）
+            if account.rebuild_age() < 60:
+                print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
+                return False
+            if not account.is_connected_now():
+                print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
+                return False
+        except Exception:  # noqa: BLE001（对象无校验方法/异常：无法确认引擎状态，保守不退出）
+            print("[xhs-leads][keeper] 壳窗 close 校验：引擎状态校验异常，保守跳过退出", flush=True)
+            return False
+        return True
+
     async def _shell_closed_verify(self) -> None:
         """R-6.53c：壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
         进程死亡的副作用（非用户行为），跳过退出交给 keeper 重建；引擎存活且
         非重建期才是用户真关主窗，维持「关主窗=退出应用」语义。"""
         if self._stop is not None and self._stop.is_set():
             return
-        eng = self._engine
-        account = None
-        if eng is not None:
-            try:
-                # attach_engine 传入 EnginePool 池对象 → 取账号引擎实例
-                account = await eng.get("default") if hasattr(eng, "get") else eng
-            except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
-                account = None
-            if account is not None:
-                try:
-                    # R-6.53h：对象类型防御——校验异常时保守不退出，交给 keeper 轮询兜底，
-                    # 避免「崩溃恢复被误判用户关窗退出应用」（历史：误传模块导致 AttributeError）
-                    if account.rebuild_age() < 60:
-                        print("[xhs-leads][keeper] 壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出", flush=True)
-                        return
-                    if not account.is_connected_now():
-                        print("[xhs-leads][keeper] 壳窗 close 校验：引擎连接已断开（崩溃），跳过退出", flush=True)
-                        return
-                except Exception:  # noqa: BLE001（对象无校验方法/异常：无法确认引擎状态，保守不退出）
-                    print("[xhs-leads][keeper] 壳窗 close 校验：引擎状态校验异常，保守跳过退出", flush=True)
-                    return
+        if not await self._engine_alive_after_close():
+            return
         if self._on_shell_closed is not None:
             print("[xhs-leads][keeper] 壳窗被关闭（引擎存活），触发应用退出", flush=True)
             self._on_shell_closed()
