@@ -493,10 +493,10 @@ async def _apply_filters(page, filters: dict):
 def _handle_login_wall(account_id: str, wall: str) -> None:
     """登录墙处置（R-6.22i：统一走软风控，不锁账号）。
 
-    R-6.15 拍板移除拟人频率保护/风控熔断/人工锁定后，24h 硬熔断（mark_hard→cooldown）
-    仍残留于登录墙处置路径：非软风控词集 → mark_hard → 后续 _require_login 403
-    「请 X 小时后再试」，账号被锁——拍板未全量落地（老问题重现根因）。
-    现统一走 mark_manual：任务中止但账号不熔断，页面保留供扫码/验证；
+    历史背景（已修复 `e2ec0cc`，2026-11-06 复核本函数只调 mark_manual）：R-6.15
+    拍板移除风控熔断后，曾有 24h 硬熔断（mark_hard→cooldown）残留在登录墙路径，
+    导致 _require_login 403「请 X 小时后再试」把账号锁死。
+    现统一 mark_manual：任务中止但账号不熔断，页面保留供扫码/验证；
     登录成功后 login_status 自动 resolve，下个任务直接继续。
     """
     risk.mark_manual(account_id, reason=wall)
@@ -517,7 +517,7 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
                        show_front=config.get_config().get("collect_tab_visible", False))
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
     if wall:
-        _handle_login_wall(account_id, wall)  # 软→引导扫码恢复；硬→熔断
+        _handle_login_wall(account_id, wall)  # 统一软风控 → 引导扫码恢复（R-6.22i）
         raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
     if not appeared:
         # R-6.53u：空壳重载重试——小红书搜索接口偶发空响应（连续搜索限流/接口延迟），
