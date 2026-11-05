@@ -242,11 +242,17 @@ class WindowCoordinator:
         self._on_shell_closed = None
         self._engine = None  # R-6.53c：引擎实例（close 事件校验「用户关窗 vs 引擎崩溃」）
         self._shell_close_ts = 0.0  # R-6.53f：壳窗 close 事件时间戳（0=无记录）
+        self._loop = None  # R-6.53g：keeper 事件循环（bind 时捕获，close 回调在
+        # playwright 驱动线程，get_event_loop/get_running_loop 均不可靠）
 
     # ---------------- 回调绑定（keeper 启动时一次） ----------------
     def bind(self, stop, on_shell_closed) -> None:
         self._stop = stop
         self._on_shell_closed = on_shell_closed
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
     def attach_engine(self, engine) -> None:
         """R-6.53c：绑定账号引擎实例，供壳窗 close 事件校验引擎连接状态。"""
@@ -324,12 +330,11 @@ class WindowCoordinator:
                     self._shell_close_ts = time.monotonic()  # R-6.53f：供轮询兜底
                     print("[xhs-leads][keeper] 壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）", flush=True)
                     try:
-                        try:
-                            loop = asyncio.get_running_loop()
-                        except RuntimeError:
-                            loop = asyncio.get_event_loop()
-                        loop.call_later(3.0, lambda: asyncio.ensure_future(
-                            self._shell_closed_verify()))
+                        # R-6.53g：close 回调在 playwright 驱动线程，必须用 bind 时
+                        # 捕获的 keeper loop 调度；无 loop 时仅靠轮询 shell_close_age 兜底。
+                        if self._loop is not None:
+                            self._loop.call_later(3.0, lambda: asyncio.ensure_future(
+                                self._shell_closed_verify()))
                     except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
                         pass
                 else:
