@@ -590,97 +590,131 @@ def _should_stop_collect(count: int, limit: int, stale: int, added: int, should_
     return False, stale
 
 
-async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=None,
-                 filters: dict | None = None, account_id: str = "default") -> dict:
-    """任务式采集：滚动平台搜索页逐批提取，支持去重合并、进度回调与中途停止。
+async def _open_search_page(keyword: str, filters, account_id: str,
+                            label: str = "prepare_search_page"):
+    """准备搜索页：cdp_call 绝对超时保护（R-6.53s，引擎假死时内部 timeout 不触发）。"""
+    return await cdp_call(_prepare_search_page(keyword, filters, account_id),
+                          timeout=CDP_PREP, label=label)
 
-    - on_progress(n)：每批提取后回调已采集数量
-    - should_stop()：返回 True 时提前收尾（用户点「停止采集」）
-    - filters：搜索筛选（排序/笔记类型/发布时间/搜索范围/位置距离）
-    - account_id：使用哪个账号引擎采集（默认 default）
-    - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
-    - R-6.53：渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
-      最多 2 次；已采 items 保留。崩溃吸收见 _is_crash_error。
-    """
-    crash_tries = 0
-    max_crash_tries = 2
+
+async def _search_prepare(keyword: str, filters, account_id: str):
+    """清残留页 + 打开搜索页；CDP 假死超时返回 None（调用方按空结果收尾）。"""
     try:
         await _cleanup_stale_xhs_pages(account_id)
     except Exception:  # noqa: BLE001
         pass
     try:
-        page = await cdp_call(_prepare_search_page(keyword, filters, account_id),
-                              timeout=CDP_PREP, label="prepare_search_page")
+        return await _open_search_page(keyword, filters, account_id)
     except CdpTimeoutError:
-        # R-6.53s：引擎 CDP 假死（search_result 页拖死）时绝对超时强制打断——否则 worker
-        # 卡在准备阶段永不返回，用户点停止迟迟不停。返回空结果收尾，状态由调用方判定。
-        return {"keyword": keyword, "count": 0, "items": [], "stopped": bool(should_stop and should_stop())}
+        # 引擎 CDP 假死（search_result 页拖死）时绝对超时强制打断——否则 worker
+        # 卡在准备阶段永不返回，用户点停止迟迟不停。返回 None 由调用方收尾。
+        return None
+
+
+async def _search_recover(page, keyword: str, filters, account_id: str,
+                          exc, kind: str, tries: int, max_tries: int):
+    """R-6.53 采集页崩溃恢复：重开搜索页返回新 page；非崩溃/超限/重开失败返回 None。
+
+    tries 为已用重开次数（调用方负责递增），语义与原 crash_tries 上限一致。
+    """
+    if not (_is_crash_error(exc) and tries < max_tries):
+        return None
+    log.warning("%s崩溃（%s），重开搜索页继续（第 %d/%d 次）",
+                kind, str(exc)[:80], tries + 1, max_tries)
+    try:
+        await _close_page_safe(page, account_id)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return await _open_search_page(keyword, filters, account_id,
+                                       label="prepare_search_page_retry")
+    except Exception:  # noqa: BLE001
+        return None  # 重开失败：调用方收尾返回已采
+
+
+async def _search_round(page, items: list, seen: set, limit: int, stale: int,
+                        should_stop, on_progress) -> tuple[int, int, bool]:
+    """一轮：提取新卡片 → 播报进度 → 终止判定 → 滚动下一页。
+
+    返回 (added, stale, done)。done=True 表示本轮后收尾（采满/用户停止/不再增长）。
+    假死与崩溃异常直接上抛，由 `_search_loop` 统一处置。
+    """
+    added = await cdp_call(_drain_page(page, items, seen),
+                           timeout=CDP_DRAIN, label="drain_page")
+    if on_progress:
+        # R-6.53v：回调携带 items 引用——任务级取消收尾时，worker 据此
+        # 抢救已采数据（搜索阶段未返回即被 cancel，items 是唯一数据源）
+        on_progress(len(items), items)
+    done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
+    if done:
+        return added, stale, True
+    try:
+        await cdp_call(page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"),
+                       timeout=CDP_DRAIN, label="scroll_more")
+    except CdpTimeoutError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        setattr(exc, "_xhs_stage", "滚动")  # 崩溃归因：区分提取阶段与滚动阶段
+        raise
+    return added, stale, False
+
+
+async def _search_loop(page, keyword: str, filters, account_id: str, items: list,
+                       seen: set, limit: int, stale: int, should_stop, on_progress,
+                       max_crash_tries: int = 2):
+    """滚动采集循环（120s 上限）：捕获 CDP 假死与渲染进程崩溃。
+
+    返回 (page, stale)。崩溃重开成功时返回新 page；重开失败或假死收尾返回
+    (None 或原 page) ——调用方据 page 是否为 None 决定是否还要关闭。
+    """
+    crash_tries = 0
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            _added, stale, done = await _search_round(
+                page, items, seen, limit, stale, should_stop, on_progress)
+        except CdpTimeoutError:
+            return page, stale  # R-6.53s 假死：绝对超时打断收尾，不空等
+        except Exception as exc:  # noqa: BLE001
+            page = await _search_recover(page, keyword, filters, account_id, exc,
+                                         getattr(exc, "_xhs_stage", "采集页"),
+                                         crash_tries, max_crash_tries)
+            if page is None:
+                return None, stale
+            crash_tries += 1
+            continue
+        if done:
+            return page, stale
+        await asyncio.sleep(1.8)
+    return page, stale
+
+
+async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=None,
+                 filters: dict | None = None, account_id: str = "default") -> dict:
+    """任务式采集：滚动平台搜索页逐批提取，支持去重合并、进度回调与中途停止。
+
+    - on_progress(n, items)：每批提取后回调已采集数量与 items 引用
+    - should_stop()：返回 True 时提前收尾（用户点「停止采集」）
+    - filters：搜索筛选（排序/笔记类型/发布时间/搜索范围/位置距离）
+    - account_id：使用哪个账号引擎采集（默认 default）
+    - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
+    - R-6.53：渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
+      最多 2 次；已采 items 保留。
+    """
+    page = await _search_prepare(keyword, filters, account_id)
+    if page is None:
+        return {"keyword": keyword, "count": 0, "items": [],
+                "stopped": bool(should_stop and should_stop())}
     items: list = []
     seen: set = set()
-    stale = 0
-    deadline = time.time() + 120
     try:
-        while time.time() < deadline:
-            try:
-                added = await cdp_call(_drain_page(page, items, seen),
-                                       timeout=CDP_DRAIN, label="drain_page")
-            except CdpTimeoutError:
-                # R-6.53s：引擎卡死（CDP 无响应）时绝对超时打断收尾——否则 worker
-                # 卡在无响应的 evaluate 上，用户点停止迟迟不停、任务永不退出。
-                break
-            except Exception as exc:  # noqa: BLE001
-                # R-6.53：渲染进程崩溃→重开搜索页继续（保留已采 items）
-                if _is_crash_error(exc) and crash_tries < max_crash_tries:
-                    crash_tries += 1
-                    log.warning("采集页崩溃（%s），重开搜索页继续（第 %d/%d 次）",
-                                str(exc)[:80], crash_tries, max_crash_tries)
-                    try:
-                        await _close_page_safe(page, account_id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        page = await cdp_call(
-                            _prepare_search_page(keyword, filters, account_id),
-                            timeout=CDP_PREP, label="prepare_search_page_retry")
-                    except Exception:  # noqa: BLE001
-                        break  # 重开失败，收尾返回已采
-                    continue
-                break
-            if on_progress:
-                # R-6.53v：回调携带 items 引用——任务级取消收尾时，worker 据此
-                # 抢救已采数据（搜索阶段未返回即被 cancel，items 是唯一数据源）
-                on_progress(len(items), items)
-            done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
-            if done:
-                break
-            try:
-                await cdp_call(page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)"),
-                               timeout=CDP_DRAIN, label="scroll_more")
-            except CdpTimeoutError:
-                break
-            except Exception as exc:  # noqa: BLE001
-                if _is_crash_error(exc) and crash_tries < max_crash_tries:
-                    crash_tries += 1
-                    log.warning("滚动崩溃（%s），重开搜索页继续（第 %d/%d 次）",
-                                str(exc)[:80], crash_tries, max_crash_tries)
-                    try:
-                        await _close_page_safe(page, account_id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        page = await cdp_call(
-                            _prepare_search_page(keyword, filters, account_id),
-                            timeout=CDP_PREP, label="prepare_search_page_retry")
-                    except Exception:  # noqa: BLE001
-                        break
-                    continue
-                break
-            await asyncio.sleep(1.8)
-        stopped = bool(should_stop and should_stop())
-        return {"keyword": keyword, "count": len(items), "items": items, "stopped": stopped}
+        page, _stale = await _search_loop(page, keyword, filters, account_id,
+                                          items, seen, limit, 0, should_stop, on_progress)
+        return {"keyword": keyword, "count": len(items), "items": items,
+                "stopped": bool(should_stop and should_stop())}
     finally:
-        await _close_page_safe(page, account_id)
-
+        if page is not None:
+            await _close_page_safe(page, account_id)
 
 # ===========================================================================
 # 详情 / 作者 / 评论
