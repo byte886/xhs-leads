@@ -326,7 +326,57 @@ class WindowCoordinator:
     def register_tab2(self, page) -> None:
         self._tab2 = page
 
-    # ---------------- close 监听（幂等挂载） ----------------
+    @staticmethod
+    def _bind_page_events(page, on_close, on_crash) -> None:
+        """挂 close/crash 监听（事件不支持时静默：仍由 close/轮询兜底）。"""
+        try:
+            # R-6.22j 取证：记录壳窗 close 时的 URL，定位「壳窗被关」来源
+            page.on("close", lambda: print(
+                f"[xhs-leads][keeper] 壳窗 close 事件（url={page.url!r}）", flush=True))
+            page.on("close", on_close)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            page.on("crash", on_crash)
+        except Exception:  # noqa: BLE001（事件不支持时静默：真实场景仍由 close/轮询兜底）
+            pass
+
+    def _handle_close(self, page, is_shell: bool) -> None:
+        """close 事件：壳窗记时间并延迟校验；采集窗仅打印（应用保持运行）。"""
+        if self._stop is not None and self._stop.is_set():
+            return
+        if not is_shell:
+            print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
+            return
+        # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能立即退出——
+        # 延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
+        self._shell_close_ts = time.monotonic()  # R-6.53f：供轮询兜底
+        print("[xhs-leads][keeper] 壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）", flush=True)
+        # R-6.53g：close 回调在 playwright 驱动线程，必须用 bind 时捕获的
+        # keeper loop 调度；无 loop 时仅靠轮询 shell_close_age 兜底。
+        if self._loop is None:
+            return
+        try:
+            self._loop.call_later(3.0, lambda: asyncio.ensure_future(
+                self._shell_closed_verify()))
+        except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
+            pass
+
+    def _handle_crash(self, page, is_shell: bool) -> None:
+        """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
+        App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
+        if not is_shell:
+            return
+        if self._stop is not None and self._stop.is_set():
+            return
+        print("[xhs-leads][keeper] 壳窗口崩溃，触发残留窗口清理", flush=True)
+        try:
+            loop = asyncio.get_event_loop()
+            loop.call_later(3.0, lambda: asyncio.ensure_future(
+                self._recovery_cleanup_safe(page)))
+        except Exception:  # noqa: BLE001
+            pass
+
     def watch(self, page, is_shell: bool) -> None:
         if any(p is page for p in self._watched):
             return
@@ -334,54 +384,17 @@ class WindowCoordinator:
 
         def _on_close() -> None:
             try:
-                if self._stop is not None and self._stop.is_set():
-                    return
-                if is_shell:
-                    # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能
-                    # 立即退出——延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
-                    self._shell_close_ts = time.monotonic()  # R-6.53f：供轮询兜底
-                    print("[xhs-leads][keeper] 壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）", flush=True)
-                    try:
-                        # R-6.53g：close 回调在 playwright 驱动线程，必须用 bind 时
-                        # 捕获的 keeper loop 调度；无 loop 时仅靠轮询 shell_close_age 兜底。
-                        if self._loop is not None:
-                            self._loop.call_later(3.0, lambda: asyncio.ensure_future(
-                                self._shell_closed_verify()))
-                    except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
-                        pass
-                else:
-                    print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
+                self._handle_close(page, is_shell)
             except Exception:  # noqa: BLE001（loop 关闭中：兜底轮询接管）
                 pass
 
         def _on_crash() -> None:
-            """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
-            App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
             try:
-                if self._stop is not None and self._stop.is_set():
-                    return
-                if is_shell:
-                    print("[xhs-leads][keeper] 壳窗口崩溃，触发残留窗口清理", flush=True)
-                    try:
-                        loop = asyncio.get_event_loop()
-                        loop.call_later(3.0, lambda: asyncio.ensure_future(
-                            self._recovery_cleanup_safe(page)))
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._handle_crash(page, is_shell)
             except Exception:  # noqa: BLE001
                 pass
 
-        try:
-            # R-6.22j 取证：记录壳窗 close 时的 URL，定位「壳窗被关」来源
-            page.on("close", lambda: print(
-                f"[xhs-leads][keeper] 壳窗 close 事件（url={page.url!r}）", flush=True))
-            page.on("close", _on_close)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            page.on("crash", _on_crash)
-        except Exception:  # noqa: BLE001（事件不支持时静默：真实场景仍由 close/轮询兜底）
-            pass
+        self._bind_page_events(page, _on_close, _on_crash)
 
     async def _recovery_cleanup_safe(self, page):
         """壳窗口崩溃后的恢复清理（延迟执行）：等 Chrome 会话恢复稳定后，

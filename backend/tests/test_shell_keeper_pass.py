@@ -131,3 +131,82 @@ class TestKeeperPollPass:
         rc = _run(_call(coord, eng, lambda: None))
         assert rc == "continue"
         assert tab2 == []  # 采集执行中暂停 tab2 治理（避免 CDP 并发）
+
+
+class _EventPage:
+    """可挂事件的假 page：记录 (event, handler) 并支持手动触发。"""
+
+    def __init__(self, url="http://127.0.0.1:8791/"):
+        self.url = url
+        self.handlers = {}
+        self.closed = False
+
+    def on(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+    def is_closed(self):
+        return self.closed
+
+    def fire(self, event):
+        for h in self.handlers.get(event, []):
+            h()
+
+
+class TestWatchCallbacks:
+    """watch：幂等挂载 + close/crash 回调分流（壳窗 vs 采集窗）。"""
+
+    def test_watch_is_idempotent(self):
+        coord, page = sw.WindowCoordinator(), _EventPage()
+        coord.watch(page, is_shell=True)
+        n = len(page.handlers["close"])
+        coord.watch(page, is_shell=True)
+        assert len(page.handlers["close"]) == n  # 同一 page 只挂一次
+        assert "crash" in page.handlers
+
+    def test_shell_close_records_timestamp(self):
+        coord, page = sw.WindowCoordinator(), _EventPage()
+        coord.watch(page, is_shell=True)
+        before = coord.shell_close_age()
+        page.fire("close")
+        assert coord.shell_close_age() < before  # 记录时间戳 → age 由极大值变小
+        assert coord.shell_close_age() < 1e18
+
+    def test_tab2_close_does_not_record(self):
+        coord, page = sw.WindowCoordinator(), _EventPage()
+        coord.watch(page, is_shell=False)
+        page.fire("close")
+        assert coord.shell_close_age() >= 1e18  # 采集窗关闭不影响「主窗已关」判定
+
+    def test_stopped_coordinator_ignores_events(self):
+        import threading
+
+        coord, page = sw.WindowCoordinator(), _EventPage()
+        stop = threading.Event()
+        stop.set()
+        coord.bind(stop, lambda: None)
+        coord.watch(page, is_shell=True)
+        page.fire("close")
+        assert coord.shell_close_age() >= 1e18  # 已停止：不再记时间戳
+
+    def test_crash_only_schedules_for_shell(self, monkeypatch):
+        calls = []
+
+        async def fake_cleanup(p):
+            calls.append(p)
+
+        async def scenario():
+            coord, page = sw.WindowCoordinator(), _EventPage()
+            monkeypatch.setattr(coord, "_recovery_cleanup_safe", fake_cleanup)
+            monkeypatch.setattr(sw.asyncio, "get_event_loop",
+                                lambda: SimpleNamespace(call_later=lambda d, fn: fn()))
+            coord.watch(page, is_shell=True)
+            page.fire("crash")
+            await asyncio.sleep(0)
+            coord2, p2 = sw.WindowCoordinator(), _EventPage()
+            monkeypatch.setattr(coord2, "_recovery_cleanup_safe", fake_cleanup)
+            coord2.watch(p2, is_shell=False)
+            p2.fire("crash")
+            await asyncio.sleep(0)
+
+        _run(scenario())
+        assert len(calls) == 1  # 只壳窗崩溃触发恢复清理；采集窗崩溃不触发
