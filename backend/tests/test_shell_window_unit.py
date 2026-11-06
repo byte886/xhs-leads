@@ -62,23 +62,23 @@ def test_sweep_blank_keeps_working_pages():
     """正常运行的页面（explore/login-hint/任务页）不被 sweep 误关。"""
     ctx = FakeContext()
     shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
-    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    collect_win = FakePage("http://127.0.0.1:8791/login-hint")
     explore = FakePage("https://www.xiaohongshu.com/explore")
-    ctx.pages = [shell, tab2, explore]
+    ctx.pages = [shell, collect_win, explore]
     asyncio.run(sw._keeper_sweep_blank(ctx, shell))
-    assert not tab2.is_closed() and not explore.is_closed()
+    assert not collect_win.is_closed() and not explore.is_closed()
 
 
 def test_recovery_cleanup_closes_all_non_shell():
-    """崩溃恢复：只保留主窗口，其余（调试窗 Tab2/残留）全部关闭。"""
+    """崩溃恢复：只保留主窗口，其余（调试窗 采集窗/残留）全部关闭。"""
     ctx = FakeContext()
     shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
-    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    collect_win = FakePage("http://127.0.0.1:8791/login-hint")
     newtab = FakePage("chrome://newtab")
-    ctx.pages = [shell, tab2, newtab]
+    ctx.pages = [shell, collect_win, newtab]
     n = asyncio.run(sw._keeper_recovery_cleanup(ctx, shell))
     assert n == 2
-    assert tab2.is_closed() and newtab.is_closed()
+    assert collect_win.is_closed() and newtab.is_closed()
     assert not shell.is_closed()
 
 
@@ -135,13 +135,13 @@ def test_recovery_cleanup_safe_keeps_crashed_shell():
     """壳窗口崩溃：崩溃页（传入引用）保留由 Chrome 恢复，其余窗口关闭。"""
     ctx = FakeContext()
     shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
-    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
+    collect_win = FakePage("http://127.0.0.1:8791/login-hint")
     newtab = FakePage("chrome://newtab")
-    ctx.pages = [shell, tab2, newtab]
+    ctx.pages = [shell, collect_win, newtab]
     shell.context = ctx
     coord = sw.WindowCoordinator()
     asyncio.run(coord._recovery_cleanup_safe(shell))
-    assert tab2.is_closed() and newtab.is_closed()
+    assert collect_win.is_closed() and newtab.is_closed()
     assert not shell.is_closed()
 
 
@@ -149,8 +149,8 @@ def test_watch_shell_mounts_crash_handler():
     """watch 挂载 crash 监听：壳窗渲染器崩溃 → 触发恢复清理调度（不炸、幂等）。"""
     ctx = FakeContext()
     shell = FakePage("https://www.xiaohongshu.com/login?redirectPath=1")
-    tab2 = FakePage("http://127.0.0.1:8791/login-hint")
-    ctx.pages = [shell, tab2]
+    collect_win = FakePage("http://127.0.0.1:8791/login-hint")
+    ctx.pages = [shell, collect_win]
     coord = sw.WindowCoordinator()
     coord.bind(None, None)
     coord.watch(shell, is_shell=True)
@@ -286,13 +286,13 @@ def test_scan_signals_single_page():
     assert "登录超限" not in body  # 只扫第一页（全局信号单页足够）
 
 
-def test_login_canvas_prefers_tab2(monkeypatch):
+def test_login_canvas_prefers_collect_win(monkeypatch):
     """R-6.53z8d：登录落点必须是右侧调试窗——左窗只显示 APP，不参与登录。"""
     t2 = FakePage("https://www.xiaohongshu.com/login")
 
     class _Coord:
         @staticmethod
-        def tab2():
+        def collect_win():
             return t2
 
     monkeypatch.setattr(sw, "get_coordinator", lambda: _Coord())

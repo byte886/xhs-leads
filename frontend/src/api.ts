@@ -245,7 +245,7 @@ export async function apiMirrorWindow(on: boolean, account = 'default'): Promise
   }))
 }
 
-/** R-6.18 壳窗口双 Tab 设置：采集过程是否在壳窗口 Tab2 显示（collect_tab_visible） */
+/** R-6.18 双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
 export async function apiGetAppConfig(): Promise<{ ok: boolean; collect_tab_visible?: boolean; error?: string }> {
   try {
     return await j(await fetch(`${BASE}/api/app_config`))

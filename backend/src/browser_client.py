@@ -199,7 +199,7 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
     """打开页面并注入提取脚本（失败按 R-6.53 崩溃重试一次）。
 
     show_front=False（R-6.18）：采集后台完成——不 bring_to_front 抢前台，
-    采集 tab 留在壳窗口 Tab2（设置页开关控制是否显示）。
+    采集 tab 留在壳窗口 采集窗（设置页开关控制是否显示）。
     """
     page = await _page(account_id)
     try:

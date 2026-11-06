@@ -386,7 +386,7 @@ async def _decide_by_tokens(page, has_id_token: bool, has_ws: bool) -> bool:
         return True
     if not (has_ws and page is not None):
         return False
-    # R-6.28：不再 new_page 开 explore 判定页——Tab2 为本地提示页（login-hint）时
+    # R-6.28：不再 new_page 开 explore 判定页——采集窗 为本地提示页（login-hint）时
     # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
     # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
     # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
@@ -490,7 +490,7 @@ async def login_status():
 
 
 # ============ 采集调试窗登录提示页（R-6.28 / R-6.50）============
-# 未登录时 Tab2（采集/调试窗口）不再显示小红书登录墙，改为本提示页：
+# 未登录时 采集窗（采集/调试窗口）不再显示小红书登录墙，改为本提示页：
 # 与 ForceLogin 弹框同一视觉语言（品牌红 #ff2442、Phosphor sign-in 图标、
 # 圆角 16、卡片式、禁 emoji）。R-6.50：支持已登录态——已登录显示「已登录·开始采集」，
 # 点按钮直接进入采集页 explore；未登录保持「去登录」引导。登录成功后右窗由 keeper
@@ -584,7 +584,7 @@ _LOGIN_HINT_HTML = """<!doctype html>
 
 @app.get("/login-hint")
 async def login_hint():
-    """采集调试窗未登录提示页（Tab2 占位，登录后由守卫/import_cookies 导航回 explore）。"""
+    """采集调试窗未登录提示页（采集窗 占位，登录后由守卫/import_cookies 导航回 explore）。"""
     return Response(content=_LOGIN_HINT_HTML, media_type="text/html; charset=utf-8")
 
 
@@ -1305,7 +1305,7 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
 
     「采集多少条、评分多少条、进入列表多少条」恒等（用户口径：所见即所得）。
     四个分支都必须落 status——漏设会让任务永远停在 running，而 running 是
-    mirror 切换、keeper tab2 治理、Tab2 关闭三处的唯一判据（状态泄漏会连锁污染壳层）。
+    mirror 切换、keeper collect_win 治理、采集窗 关闭三处的唯一判据（状态泄漏会连锁污染壳层）。
     """
     if state["stop_event"] or res.get("stopped"):
         state["status"] = "stopped"
@@ -2750,7 +2750,7 @@ def clear_llm_config():
 
 
 # ====== R-6.18 壳窗口双 Tab：设置项读写（白名单，仅前端设置项） ======
-_APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 Tab2 显示
+_APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 采集窗 显示
 
 
 class AppConfigReq(BaseModel):
@@ -2770,7 +2770,7 @@ def app_config_get():
 
 @app.post("/api/app_config")
 async def app_config_set(req: AppConfigReq):
-    """写入 APP 设置（白名单字段；collect_tab_visible 即时联动 Tab2：开→前置；关→空闲关闭）。"""
+    """写入 APP 设置（白名单字段；collect_tab_visible 即时联动 采集窗：开→前置；关→空闲关闭）。"""
     data = req.model_dump(exclude_none=True)
     unknown = set(data) - set(_APP_SETTING_KEYS)
     if unknown:
@@ -2778,14 +2778,14 @@ async def app_config_set(req: AppConfigReq):
     for k, v in data.items():
         config.set_config(k, v)
     if "collect_tab_visible" in data:
-        await _sync_tab2_visibility(bool(data["collect_tab_visible"]))
+        await _sync_collect_visibility(bool(data["collect_tab_visible"]))
     return {"ok": True, "saved": list(data)}
 
 
-async def _ensure_tab2_skeleton(eng) -> None:
-    """R-6.37a 拆自 _sync_tab2_visibility：无任务 tab 时立即创建 Tab2 骨架（共享 TAB2_GUARD_LOCK）。"""
+async def _ensure_collect_skeleton(eng) -> None:
+    """R-6.37a 拆自 _sync_collect_visibility：无任务 tab 时立即创建 采集窗 骨架（共享 COLLECT_WIN_GUARD_LOCK）。"""
     from src import engine_pool  # noqa: PLC0415
-    async with engine_pool.TAB2_GUARD_LOCK:
+    async with engine_pool.COLLECT_WIN_GUARD_LOCK:
         if eng.task_page_snapshot() is not None:
             await eng.task_page_snapshot().bring_to_front()
             return
@@ -2802,14 +2802,14 @@ async def _ensure_tab2_skeleton(eng) -> None:
             _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
             await shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
             await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
-                           label="server.tab2_bring_to_front", skip=True)
-            log.info("app_config：已创建 Tab2 采集骨架（开关开）")
+                           label="server.collect_win_bring_to_front", skip=True)
+            log.info("app_config：已创建 采集窗 采集骨架（开关开）")
         except Exception:  # noqa: BLE001
-            log.warning("app_config：Tab2 骨架创建失败（keeper 兜底轮询接管）")
+            log.warning("app_config：采集窗 骨架创建失败（keeper 兜底轮询接管）")
 
 
-async def _close_idle_tab2_family(eng) -> None:
-    """R-6.37a 拆自 _sync_tab2_visibility：空闲时收起所有 Tab2 家族页（explore 骨架/残留采集页）。"""
+async def _close_idle_collect_pages(eng) -> None:
+    """R-6.37a 拆自 _sync_collect_visibility：空闲时收起所有 采集窗 家族页（explore 骨架/残留采集页）。"""
     ctx = await eng.context()
     closed = 0
     for p in list(ctx.pages):
@@ -2825,8 +2825,8 @@ async def _close_idle_tab2_family(eng) -> None:
     log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
 
 
-async def _sync_tab2_visibility(visible: bool) -> None:
-    """R-6.19 开关即时联动：开→Tab2 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
+async def _sync_collect_visibility(visible: bool) -> None:
+    """R-6.19 开关即时联动：开→采集窗 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
     try:
         from src import engine_pool  # noqa: PLC0415
 
@@ -2834,7 +2834,7 @@ async def _sync_tab2_visibility(visible: bool) -> None:
         tp = eng.task_page_snapshot()
         if visible:
             if tp is None:
-                await _ensure_tab2_skeleton(eng)
+                await _ensure_collect_skeleton(eng)
             else:
                 try:
                     await tp.bring_to_front()
@@ -2846,11 +2846,11 @@ async def _sync_tab2_visibility(visible: bool) -> None:
                 st.get("status") == "running" for st in _COLLECT_TASKS.values()
             )
             if running:
-                log.info("app_config：采集中，Tab2 保持后台（开关关，任务结束后自然闲置）")
+                log.info("app_config：采集中，采集窗 保持后台（开关关，任务结束后自然闲置）")
                 return
-            await _close_idle_tab2_family(eng)
+            await _close_idle_collect_pages(eng)
     except Exception as e:  # noqa: BLE001
-        log.warning("app_config Tab2 联动失败: %s", e)
+        log.warning("app_config 采集窗 联动失败: %s", e)
 
 
 @app.post("/api/llm_test")

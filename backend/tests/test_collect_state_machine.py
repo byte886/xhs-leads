@@ -1,7 +1,7 @@
 """采集任务状态机单测（R-6.53z 逐条流水线 + 四分支收尾 + 框架级停止）。
 
 覆盖 SOP §二 S2/S3 与 TS8/TS9/TS10 的单元层。硬约束：任何路径都不许漏落
-status——running 是 mirror 切窗、keeper 暂停 tab2 治理、Tab2 关闭三处唯一判据。
+status——running 是 mirror 切窗、keeper 暂停 collect_win 治理、采集窗 关闭三处唯一判据。
 """
 import asyncio
 

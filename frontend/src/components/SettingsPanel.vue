@@ -142,7 +142,7 @@ async function toggleCollectTab() {
     const r = await apiSetAppConfig({ collect_tab_visible: target })
     if (r.ok) {
       collectTabVisible.value = target
-      toast(target ? '已开启：采集画面前置显示于 Tab2（空闲/新任务即时生效）' : '已关闭：采集后台完成，空闲采集页已收起（即时生效）')
+      toast(target ? '已开启：采集画面前置显示于右侧采集窗（空闲/新任务即时生效）' : '已关闭：采集后台完成，空闲采集页已收起（即时生效）')
     } else {
       toast('保存失败：' + (r.error || '未知错误'), 'error')
     }
@@ -447,7 +447,7 @@ onMounted(async () => {
               <span class="cur-val">{{ collectTabVisible ? '已开启' : '已关闭' }}</span>
             </div>
             <p class="set-hint">
-              APP 壳窗口固定两个 Tab：Tab1 应用/登录（固定不可关），Tab2 采集。开 = 采集画面前置可见（调试/演示）；
+              左侧是应用窗口（固定不可关），右侧是采集窗口——采集与登录都在这里。开 = 采集画面前置可见（调试/演示）；
               关 = 采集后台完成、不抢前台（平时推荐）。开关即时生效。
             </p>
           </div>

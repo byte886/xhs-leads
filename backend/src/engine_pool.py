@@ -68,9 +68,9 @@ def shell_window_geometry() -> tuple[int, int, int, int]:
     win_w = min(1280, sw // 2)
     return win_w, 800, 0, win_w
 
-# R-6.19：Tab2（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
+# R-6.19：采集窗（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
-TAB2_GUARD_LOCK = asyncio.Lock()
+COLLECT_WIN_GUARD_LOCK = asyncio.Lock()
 
 log = xlog.get("engine")
 
@@ -521,7 +521,7 @@ class AccountEngine:
     # ---------------- 页面管理 ----------------
 
     def task_page_snapshot(self):
-        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 Tab2 显隐（R-6.19）。"""
+        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 采集窗 显隐（R-6.19）。"""
         tp = self._task_page
         if tp is not None:
             try:
@@ -570,7 +570,7 @@ class AccountEngine:
         # 转交窗（--app Popen 单实例路由）在 CFT 158 上实测两问题（Nov 5 取证）：
         # ① 后台化渲染节流——wait_cards n=0（同 URL probe 为 22 卡片）；
         # ② CDP 会话不稳——wait_cards 第二轮 evaluate 挂起触发假死强杀。
-        # 独立采集调试窗（keeper Tab2）保留为展示窗，采集执行页与之解耦。
+        # 独立采集调试窗（keeper 采集窗）保留为展示窗，采集执行页与之解耦。
         p = await ctx.new_page()
         # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
         try:
@@ -607,10 +607,10 @@ class AccountEngine:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
             # R-6.52 修复：不再对壳窗（ctx.pages[0]）执行 setWindowBounds。
-            # 原实现把壳窗窗口 bounds 设到右半屏(l2)，随后 open_tab2_window 又把
+            # 原实现把壳窗窗口 bounds 设到右半屏(l2)，随后 open_collect_window 又把
             # 采集窗弹到右半——两窗重叠，开始采集瞬间采集窗(小红书页)覆盖壳窗，
             # 用户观感「主窗瞬间跳小红书再切回」（主窗 URL 全程未变，纯窗口覆盖）。
-            # 壳窗位置由 keeper 守护（左半），采集窗位置由 open_tab2_window 内部校准。
+            # 壳窗位置由 keeper 守护（左半），采集窗位置由 open_collect_window 内部校准。
             src_page = ctx.pages[0]
             executable = None
             try:
@@ -619,7 +619,7 @@ class AccountEngine:
                     executable = cfts
             except Exception:  # noqa: BLE001
                 executable = None
-            page = await shell_window.open_tab2_window(
+            page = await shell_window.open_collect_window(
                 ctx, src_page, url="https://www.xiaohongshu.com/explore",
                 user_data_dir=self.user_data_dir, executable=executable,
             )
