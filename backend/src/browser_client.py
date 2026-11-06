@@ -1174,75 +1174,6 @@ async def _xhs_page(account_id: str = "default"):
     return None
 
 
-_ME_ENTRY_JS = """() => {
-  const a = [...document.querySelectorAll('a')]
-    .filter(x => (x.innerText || '').trim() === '我')
-    .map(x => { const r = x.getBoundingClientRect();
-      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
-               w: Math.round(r.width), h: Math.round(r.height) }; })
-    .filter(o => o.w > 0 && o.h > 0);
-  return a[0] || null;
-}"""
-
-_PROFILE_CARDS_JS = """() => [...document.querySelectorAll('.note-item')].map((el, i) => {
-  const r = el.getBoundingClientRect();
-  return { i,
-           text: (el.innerText || '').trim(),
-           x: Math.round(r.x + r.width / 2),
-           y: Math.round(r.y + Math.min(120, r.height / 2)),
-           w: Math.round(r.width), h: Math.round(r.height) };
-}).filter(o => o.w > 60 && o.h > 60)"""
-
-
-def _norm_text(t: str) -> str:
-    """标题比对归一化：去空白与常见分隔符。"""
-    return "".join(ch for ch in (t or "") if ch.strip() and ch not in "·|，。!?、.,")
-
-
-def _pick_card(cards, title: str):
-    """在主页卡片里按标题找那条笔记：先整串比对，再用前 10 字兜底（卡片可能截断）。"""
-    want = _norm_text(title)
-    if not want:
-        return None
-    for c in cards:
-        if want in _norm_text(c["text"]):
-            return c
-    head = want[:10]
-    if head:
-        for c in cards:
-            if head in _norm_text(c["text"]):
-                return c
-    return None
-
-
-async def _goto_me_profile(page, account_id: str) -> bool:
-    """确保页面停在「我」的主页：详情页先退回列表，再点侧栏「我」。"""
-    if "/explore/" in (page.url or ""):
-        await page.go_back()
-        await asyncio.sleep(2)
-    if "/user/profile/" in (page.url or ""):
-        return True
-    me = await page.evaluate(_ME_ENTRY_JS)
-    if not me:
-        log.info("找不到「我」入口 url=%s", _page_url_now(page))
-        return False
-    await page.mouse.click(me["x"], me["y"])
-    await asyncio.sleep(3)
-    return True
-
-
-async def _open_note_by_title(page, title: str) -> bool:
-    """在主页卡片里按标题定位并点开（找不到返回 False，不猜）。"""
-    cards = await page.evaluate(_PROFILE_CARDS_JS)
-    card = _pick_card(cards, title)
-    if card is None:
-        log.info("主页没找到这条笔记 title=%s cards=%s", title[:20], len(cards))
-        return False
-    await page.mouse.click(card["x"], card["y"])
-    await asyncio.sleep(4)
-    return True
-
-
 async def _back_home_quiet(page) -> None:
     """抓完退回主页；失败不抛，免得把已经抓到的结果盖掉。"""
     try:
@@ -1379,31 +1310,6 @@ async def sync_creator_stats(account_id: str = "default") -> list:
     if creator is None:
         return []
     return await _read_note_manager(creator)
-
-
-async def refresh_publish_note(title: str, account_id: str = "default") -> dict:
-    """去「我」的主页按标题找到那条已发布笔记，点开抓互动数据（全程点击，不构造 URL）。
-
-    用户指出得对：主页清单里每一条都能单独点进去，点开后就是同一条详情页——
-    和拿链接打开结果一样，但这是平台自己生成的导航，不自己拼 URL 去进入。
-    """
-    page = await _xhs_page(account_id)
-    if page is None:
-        return {}
-    await _assert_logged_in(page, account_id)
-    try:
-        if not await _goto_me_profile(page, account_id):
-            return {}
-        if not await _open_note_by_title(page, title):
-            return {}
-        d = await _read_note_detail(page)
-        log.info("刷新数据 title=%s url=%s fields=%s", title[:16],
-                 _page_url_now(page), sorted(d) if d else "空")
-        if d:
-            d["_url"] = str(page.url)
-        return d
-    finally:
-        await _back_home_quiet(page)
 
 
 async def current_note(account_id: str = "default") -> dict:

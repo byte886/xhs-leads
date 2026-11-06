@@ -157,37 +157,11 @@ export async function apiLogs(): Promise<LogItem[]> {
   return d.logs || []
 }
 
-export async function apiPublishStats(logId: number, noteUrl: string): Promise<{ ok: boolean; stats?: Record<string, string>; note?: string }> {
-  return j(await fetch(`${BASE}/api/publish_stats`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ log_id: logId, note_url: noteUrl })
-  }))
-}
-
-/** 刷新数据：去「我」的主页按标题找到那条笔记，点开抓一次（全程点击，不拼 URL）。 */
 /** 一次同步全量：创作者中心「笔记管理」里每条笔记的浏览/评/赞/藏/转 + 与上次的增量。 */
 export async function apiPublishStatsSync(): Promise<{
   ok: boolean; total?: number; matched?: unknown[]; unmatched?: unknown[]; detail?: string
 }> {
   return j(await fetch(`${BASE}/api/publish_stats_sync`, { method: 'POST' }))
-}
-
-export async function apiPublishStatsRefresh(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
-  return j(await fetch(`${BASE}/api/publish_stats_refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ log_id: logId })
-  }))
-}
-
-/** 不回粘贴：直接读右边引擎窗口当前页（用户刚发布完，页面就停在那条笔记上）。 */
-export async function apiPublishLinkFromCurrent(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
-  return j(await fetch(`${BASE}/api/publish_link_from_current`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ log_id: logId })
-  }))
 }
 
 // ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----

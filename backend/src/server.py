@@ -2348,79 +2348,6 @@ def publish_logs():
     return {"logs": [dict(r) for r in rows]}
 
 
-class PublishStatsReq(BaseModel):
-    log_id: int
-    note_url: str = ""
-
-
-async def _resolve_publish_detail(con, row, req):
-    """R-6.37g 拆自 publish_stats：解析笔记详情（用户链接优先，回退来源 feed_id+xsec_token）。"""
-    url = (req.note_url or "").strip()
-    if url:
-        d = await get_note_detail_by_url(url)
-        if not d:
-            raise HTTPException(400, "打开笔记失败：链接无效或需登录（请确认 Chrome 已登录小红书，且链接是公开笔记）")
-        return d
-    feed_id = row["feed_id"] or ""
-    if not feed_id:
-        raise HTTPException(400, "该记录无来源笔记 ID，请粘贴已发布笔记链接后重试")
-    # 搜索来源笔记带 xsec_token 才能打开详情页（explore 直开会 404/风控）
-    tok = ""
-    row2 = con.execute("SELECT xsec_token FROM notes WHERE feed_id=?", (feed_id,)).fetchone()
-    if row2 and row2[0]:
-        tok = row2[0]
-    note = {"feed_id": feed_id, "xsec_token": tok}
-    return await get_feed_detail(note)
-
-
-def _write_stats(con, log_id: int, d: dict, url: str = "") -> dict:
-    """把一次抓到的互动数据写进发布记录（publish_stats / publish_link_from_current 共用）。"""
-    stats = {k: d.get(k) or "" for k in ("views", "liked_count", "collected_count", "comment_count", "shared_count")}
-    if not any(v for v in stats.values()):
-        raise HTTPException(400, "未抓到互动数据：请确认已登录小红书且笔记可正常访问（可能已删除/被风控）")
-    stats["fetched_at"] = _now().isoformat(timespec="seconds")
-    payload = json.dumps(stats, ensure_ascii=False)
-    if url:
-        con.execute("UPDATE publish_logs SET note_url=?, stats_json=? WHERE id=?", (url, payload, log_id))
-    else:
-        con.execute("UPDATE publish_logs SET stats_json=? WHERE id=?", (payload, log_id))
-    con.commit()
-    return {"ok": True, "stats": stats}
-
-
-class PublishCurrentReq(BaseModel):
-    log_id: int
-
-
-@app.post("/api/publish_stats_refresh")
-async def publish_stats_refresh(req: PublishCurrentReq):
-    """刷新数据：去「我」的主页按标题找到那条笔记，点开抓一次。
-
-    全程点击（进主页 → 定位卡片 → 点开），不构造 URL 进入页面；
-    用户明确指出主页清单里每条都能单独点进去，和拿链接打开是同一条详情页。
-    """
-    await _require_login()
-    con = _db()
-    row = con.execute("SELECT title FROM publish_logs WHERE id=?", (req.log_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "发布记录不存在")
-    title = (row["title"] or "").strip()
-    if not title:
-        raise HTTPException(400, "这条发布记录没有标题，无法在主页定位；请先补标题或手动填链接")
-    try:
-        d = await browser_client.refresh_publish_note(title)
-    except browser_client.BrowserLoginRequiredError as e:
-        raise HTTPException(400, f"需要登录：{e}")
-    except Exception as e:  # noqa: BLE001
-        # 引擎崩溃/重建会打断页面操作：给一句人话，而不是甩一个 500
-        raise HTTPException(400, f"右边窗口中断了（会自动重建），等几秒再点一次：{type(e).__name__}")
-    if not d:
-        raise HTTPException(400, "没在「我」的主页找到这条笔记：可能已删除、改名，或右侧窗口当前停在不该停的地方")
-    url = (d.get("_url") or "").strip()
-    d.pop("_url", None)
-    return _write_stats(con, req.log_id, d, url)
-
-
 _STATS_FIELDS = ("views", "comment_count", "liked_count", "collected_count", "shared_count")
 
 
@@ -2524,45 +2451,6 @@ async def publish_stats_sync():
     return {"ok": True, "total": len(cards), "matched": matched, "unmatched": unmatched}
 
 
-@app.post("/api/publish_link_from_current")
-async def publish_link_from_current(req: PublishCurrentReq):
-    """不回粘贴：直接读右边窗口当前页。
-
-    用户手动发布完成后，小红书网页版会落到他自己那条笔记的详情页；
-    此时读这一页即可拿到链接和互动数据，无需复制粘贴。
-    """
-    await _require_login()
-    try:
-        d = await browser_client.current_note()
-    except browser_client.BrowserLoginRequiredError as e:
-        raise HTTPException(400, f"需要登录：{e}")
-    url = (d.get("_url") or "").strip()
-    if not url or "/explore/" not in url:
-        raise HTTPException(400, "右边窗口当前页不是笔记详情：先在右边窗口打开你刚发的那条笔记，再点这个按钮")
-    d.pop("_url", None)
-    con = _db()
-    if not con.execute("SELECT 1 FROM publish_logs WHERE id=?", (req.log_id,)).fetchone():
-        raise HTTPException(404, "发布记录不存在")
-    return _write_stats(con, req.log_id, d, url)
-
-
-@app.post("/api/publish_stats")
-async def publish_stats(req: PublishStatsReq):
-    """数据回流：本地浏览器打开已发布笔记详情页，抓取互动数据（浏览/赞/藏/评/转）回写发布记录。
-
-    优先用用户提供的发布后笔记链接（手动发布后新笔记有新的 feed_id）；
-    未提供时回退按记录里的来源 feed_id 抓取。
-    """
-    await _require_login()
-    con = _db()
-    row = con.execute("SELECT * FROM publish_logs WHERE id=?", (req.log_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "发布记录不存在")
-    d = await _resolve_publish_detail(con, row, req)
-    return _write_stats(con, req.log_id, d)
-
-
-# ================= 图片代理（容器内路径 → 浏览器可读） =================
 @app.get("/api/img")
 def img_proxy(path: str = ""):
     """把 /app/images/<file> 映射到本机 data/images/<file> 返回图片字节。"""
