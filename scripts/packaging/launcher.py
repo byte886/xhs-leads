@@ -279,7 +279,8 @@ def main() -> int:
     try:
         from src import watchdog  # noqa: PLC0415
 
-        watchdog.start()
+        wd_log = os.path.join(str(config.DATA_DIR), "watchdog.log")
+        watchdog.start(log_path=wd_log)
     except Exception as e:  # noqa: BLE001
         print(f"[xhs-leads][watchdog] 看门狗启动失败（不影响启动）: {e!r}", file=sys.stderr)
 
@@ -287,7 +288,7 @@ def main() -> int:
     try:
         from src import watchdog as _wd  # noqa: PLC0415
 
-        _wd.stop()  # 正常退出：主动关写端，让看门狗收尾后退出
+        _wd.stop(log_path=os.path.join(str(config.DATA_DIR), "watchdog.log"))
     except Exception:  # noqa: BLE001
         pass
     print("[xhs-leads] 已退出")

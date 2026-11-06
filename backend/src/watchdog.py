@@ -9,15 +9,19 @@
 - 管道读端 EOF 是**内核事件**：父进程不管以何种方式消失，写端都一定关闭，
   子进程的阻塞读立刻返回。零轮询、零延迟、零业务耦合。
 
-与「业务轮询」的边界（用户口径「轮形的都先去掉」）：
+为什么自带独立日志文件（R-6.53z8f）：
 
-- 业务状态同步一律走事件（SSE / page 事件 / asyncio.Event），本模块不碰。
-- 这里只做进程存活看门，属 OS 层职责，是「关窗/崩溃后不留残骸」的最后一道闸。
+- 主进程被强杀时，它自己的日志处理器来不及 flush，最后一行往往就是缺失的。
+- 看门狗把「何时发现父进程消失 / 命中哪些 PID / 杀掉成功与否 / 自身耗时」
+  写进 `<data>/watchdog.log`，该文件的 fd 与主进程日志互不相干，主进程死透了
+  也照样完整。定位「某次异常退出到底清没清干净」只看这一个文件。
 """
 import os
 import subprocess
+from datetime import datetime
 
 _WRITE_FD = -1  # 主进程持有的写端；进程无论怎么死，操作系统都会关闭它
+_LOG_KEEP_BYTES = 512 * 1024  # 看门狗日志轮转阈值
 
 
 def default_markers() -> list[str]:
@@ -46,6 +50,66 @@ def default_markers() -> list[str]:
     return [m for m in marks if m]
 
 
+def _stamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _log(log_path: str, event: str, msg: str) -> None:
+    """写一行看门狗日志：同时进独立文件与控制台（文件是主进程死后唯一可信源）。"""
+    line = f"{_stamp()} [watchdog][pid={os.getpid()}][{event}] {msg}"
+    if log_path:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+                f.flush()
+        except Exception:  # noqa: BLE001（无日志不能阻断清理）
+            pass
+    print(line, flush=True)
+
+
+def _rotate(log_path: str) -> None:
+    """超过阈值就把当前日志滚成 .1（覆盖旧备份），避免无限增长。"""
+    if not log_path:
+        return
+    try:
+        if os.path.getsize(log_path) > _LOG_KEEP_BYTES:
+            os.replace(log_path, log_path + ".1")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _tail_text(log_path: str, size: int = 4096) -> str:
+    """读日志末尾一段（用于判断上一次运行怎么结束的）。"""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            n = f.tell()
+            f.seek(max(0, n - size))
+            return f.read().decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _parse_line(line: str) -> tuple[str, str] | None:
+    """日志行 → (时间, 事件名)；不是看门狗行返回 None。"""
+    if "[watchdog]" not in line or "][" not in line:
+        return None
+    ts = line.split(" [watchdog]")[0].strip()
+    event = line.split("][")[-1].split("]")[0].strip()
+    return ts, event
+
+
+def _last_event(log_path: str) -> tuple[str, str] | None:
+    """读上一次运行的最后一条事件：(时间, 事件名)。用于识别上次是否异常退出。"""
+    if not log_path:
+        return None
+    for line in reversed(_tail_text(log_path).splitlines()):
+        ev = _parse_line(line)
+        if ev:
+            return ev
+    return None
+
+
 def _watch_until_eof(fd: int) -> None:
     """阻塞读管道，直到写端关闭（父进程消失）或读出错。"""
     try:
@@ -55,66 +119,155 @@ def _watch_until_eof(fd: int) -> None:
         pass
 
 
-def _reap(markers: list[str]) -> None:
-    """清理残留引擎进程（幂等，主进程正常退出后重复调用也无害）。"""
-    for m in markers:
+def _ps_table() -> str | None:
+    """一次取全量进程表（pid 命令行）。失败返回 None。"""
+    try:
+        return subprocess.run(  # noqa: S603,S607（固定参数、无 shell）
+            ["ps", "-ax", "-o", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _match_line(line: str, markers: list[str], me: int) -> list[tuple[int, str]]:
+    """一行 ps 输出 → 命中的 (pid, marker)；不合规行/自身返回空。"""
+    parts = line.strip().split(None, 1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return []
+    pid = int(parts[0])
+    if pid == me:
+        return []
+    return [(pid, m) for m in markers if m and m in parts[1]]
+
+
+def _find_targets(markers: list[str]) -> dict[str, list[int]]:
+    """按命令行特征找引擎进程 PID（一次 ps 覆盖全部特征，零周期）。
+
+    不用 `pgrep -f <marker>`：pgrep 自己的 argv 里就含 marker，会把自己列进来。
+    """
+    hits: dict[str, list[int]] = {m: [] for m in markers}
+    table = _ps_table()
+    if table is None:
+        return hits
+    me = os.getpid()
+    for line in table.splitlines():
+        for pid, m in _match_line(line, markers, me):
+            hits[m].append(pid)
+    return hits
+
+
+def _reap(markers: list[str], log_path: str = "") -> None:
+    """清理残留引擎进程：先找列表、逐个 kill、逐条落日志。"""
+    hits = _find_targets(markers)
+    for idx, m in enumerate(markers):
         if not m:
             continue
-        try:
-            subprocess.run(  # noqa: S603（固定参数、无 shell、路径来自本应用自身）
-                ["pkill", "-9", "-f", m],
-                check=False,
-                timeout=10,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:  # noqa: BLE001（清理失败不影响退出）
-            pass
+        pids = hits.get(m, [])
+        if not pids:
+            _log(log_path, "reap", f"marker[{idx}] 无命中（{m}）")
+            continue
+        ok, fail = 0, []
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+                ok += 1
+            except ProcessLookupError:
+                ok += 1  # 已自行退出，同样算清理完成
+            except Exception as e:  # noqa: BLE001
+                fail.append(f"{pid}:{e.__class__.__name__}")
+        _log(
+            log_path,
+            "reap",
+            f"marker[{idx}] 命中 {len(pids)} killed={ok} "
+            f"pids={','.join(str(p) for p in pids)} 失败={fail or '无'}",
+        )
 
 
-def _child_main(read_fd: int, markers: list[str]) -> None:
+def _child_main(read_fd: int, markers: list[str], log_path: str) -> None:
     """子进程主体：等父进程死 → 清理 → 退出。永不返回。"""
+    t0 = datetime.now()
     try:
         os.setsid()  # 独立会话：不再接收终端的 Ctrl-C，由管道 EOF 决定生死
     except Exception:  # noqa: BLE001
         pass
+    _log(log_path, "armed", f"等待父进程 EOF，监视 {len(markers)} 条特征")
     _watch_until_eof(read_fd)
-    _reap(markers)
+    _log(log_path, "eof", "父进程已消失（正常退出 / SIGKILL / 崩溃），开始清理引擎")
+    _reap(markers, log_path)
+    cost = (datetime.now() - t0).total_seconds()
+    _log(log_path, "exit", f"清理完成，存活 {cost:.1f}s 后退出")
     os._exit(0)
 
 
-def start(markers: list[str] | None = None) -> bool:
+def _can_start(marks: list[str], log_path: str) -> bool:
+    """前置条件：POSIX + 至少一条特征串；不满足时留痕说明原因。"""
+    if not hasattr(os, "fork"):
+        _log(log_path, "start", "跳过：当前平台无 os.fork")
+        return False
+    if not marks:
+        _log(log_path, "start", "跳过：找不到任何引擎特征串")
+        return False
+    return True
+
+
+def _warn_if_abnormal(log_path: str) -> None:
+    """上一次运行没走到 exit/stop → 说明是异常退出，必须在本次启动时说出来。"""
+    prev = _last_event(log_path)
+    if prev and prev[1] not in ("exit", "stop"):
+        _log(log_path, "start", f"告警：上次运行疑似异常退出（最后事件 {prev[0]} {prev[1]}）")
+
+
+def _spawn(marks: list[str], log_path: str) -> tuple[int, int]:
+    """派生看门狗。返回 (写端 fd, 子进程 pid)；失败返回 (-1, -1)。"""
+    try:
+        r, w = os.pipe()
+        pid = os.fork()
+    except Exception as e:  # noqa: BLE001
+        _log(log_path, "start", f"失败：{e.__class__.__name__}: {e}")
+        return -1, -1
+    if pid == 0:
+        try:
+            os.close(w)
+            _child_main(r, marks, log_path)
+        finally:
+            os._exit(0)  # 子进程永不返回父流程
+    os.close(r)
+    return w, pid
+
+
+def start(markers: list[str] | None = None, log_path: str = "") -> bool:
     """派生看门狗子进程。返回是否成功（失败只影响残留清理，不影响主流程）。"""
     global _WRITE_FD
     if _WRITE_FD >= 0:
         return True  # 已启动，幂等
-    if not hasattr(os, "fork"):  # 非 POSIX：不提供看门狗
-        return False
     marks = markers if markers is not None else default_markers()
-    if not marks:
+    if not _can_start(marks, log_path):
         return False
-    try:
-        r, w = os.pipe()
-        pid = os.fork()
-    except Exception:  # noqa: BLE001
+    _rotate(log_path)
+    _warn_if_abnormal(log_path)
+    w, pid = _spawn(marks, log_path)
+    if pid < 0:
         return False
-    if pid == 0:
-        try:
-            os.close(w)
-            _child_main(r, marks)
-        finally:
-            os._exit(0)
-    os.close(r)
     _WRITE_FD = w
-    print(f"[xhs-leads][watchdog] 看门狗已启动（pid={pid}，监视 {len(marks)} 条特征）", flush=True)
+    _log(
+        log_path,
+        "start",
+        f"主进程 pid={os.getpid()} 看门狗 pid={pid} 日志={log_path or '(未指定)'} "
+        f"markers={marks}",
+    )
     return True
 
 
-def stop() -> None:
+def stop(log_path: str = "") -> None:
     """关闭写端：子进程读到 EOF 后清理残留并退出。主进程退出前调用（可选）。"""
     global _WRITE_FD
     if _WRITE_FD < 0:
         return
+    _log(log_path, "stop", "主进程正常退出，通知看门狗收尾")
     try:
         os.close(_WRITE_FD)
     except OSError:
