@@ -97,14 +97,11 @@ class TestGuardNextForce:
         gate = {"evt": evt, "pending": False, "force": True}
         assert _run(sw._guard_next_force(gate, _FakeWin(), "b", threading.Event())) is None
 
-    def test_polling_fallback(self, monkeypatch):
-        monkeypatch.setattr(sw.asyncio, "sleep", _noop_sleep)
-
-        async def fake_wait(win, base, stop):
-            return False  # 主动重登
-
-        monkeypatch.setattr(sw, "_guard_wait_pending", fake_wait)
-        assert _run(sw._guard_next_force(None, _FakeWin(), "b", threading.Event())) is False
+    def test_no_gate_blocks_until_stop(self):
+        """R-6.53z8h：无事件源不再轮询查 HTTP，只阻塞到 stop；唤醒后返回 None。"""
+        stop = threading.Event()
+        stop.set()
+        assert _run(sw._guard_next_force(None, _FakeWin(), "b", stop)) is None
 
 
 class TestGuardMonitorStep:

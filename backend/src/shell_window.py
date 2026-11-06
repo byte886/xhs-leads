@@ -1039,29 +1039,22 @@ async def _guard_startup_status(base: str) -> None:
     )
 
 
-async def _guard_wait_pending(win: "ShellWindow", base: str, stop: "threading.Event") -> bool | None:
-    """轮询 login_begin_state：pending 出现返回 force(bool)，否则 None（继续外层）。"""
-    st = await _guard_get_json(base, "/api/auth/login_begin_state")
-    if not (st and st.get("pending")):
-        return None
-    return bool(st.get("force"))
-
-
 async def _guard_next_force(gate, win, base, stop) -> bool | None:
-    """等下一次「去登录」触发：事件驱动优先，gate 未注入时退化为 1.5s 轮询。
+    """等下一次「去登录」触发——只有事件源，没有轮询退化路径。
 
-    返回 force（True=强制登录 / False=主动重登），None 表示本轮无触发（继续外层）。
-    R-6.48q：pending 事件驱动——login_begin 置位 evt 才醒来（同进程同 loop）。
-    守卫无条件 clear 消费；pending 被 cancel 清掉（login_cancel）时不误导航。
+    R-6.48q：pending 事件驱动，login_begin 置位 evt 才醒来。
+    R-6.53z8h：删掉 gate 缺失时的 1.5s 轮询 + HTTP 查询兜底。生产调用点
+    （launcher）100% 注入 gate；没有事件源就没有登录信号，此时阻塞到 stop
+    为止即可，不允许再用周期查询顶着。
     """
-    if gate is not None and gate.get("evt") is not None:
-        await gate["evt"].wait()
-        gate["evt"].clear()
-        if not gate.get("pending"):
-            return None
-        return bool(gate.get("force"))
-    await asyncio.sleep(1.5)
-    return await _guard_wait_pending(win, base, stop)
+    if gate is None or gate.get("evt") is None:
+        await asyncio.to_thread(stop.wait)  # 无事件源：阻塞到停止，零轮询
+        return None
+    await gate["evt"].wait()
+    gate["evt"].clear()
+    if not gate.get("pending"):
+        return None
+    return bool(gate.get("force"))
 
 
 async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
