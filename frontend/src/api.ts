@@ -165,6 +165,15 @@ export async function apiPublishStats(logId: number, noteUrl: string): Promise<{
   }))
 }
 
+/** 不回粘贴：直接读右边引擎窗口当前页（用户刚发布完，页面就停在那条笔记上）。 */
+export async function apiPublishLinkFromCurrent(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
+  return j(await fetch(`${BASE}/api/publish_link_from_current`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ log_id: logId })
+  }))
+}
+
 // ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----
 /** 登录小窗/调试视图打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪） */
 export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string }> {

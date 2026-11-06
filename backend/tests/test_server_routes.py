@@ -609,6 +609,64 @@ class TestPublishStats:
         assert r.status_code == 404
 
 
+class TestPublishLinkFromCurrent:
+    """不回粘贴：直接读右边引擎窗口当前页（用户手动发布完成后停在笔记详情）。"""
+
+    @staticmethod
+    def _seed_log(tmp_path):
+        _seed_notes(tmp_path)
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.execute(
+            "INSERT INTO publish_logs (feed_id, title, content, tags, visibility, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            ("a1", "标题", "正文", "", "公开可见", "success", "2026-11-06T10:00:00"),
+        )
+        con.commit()
+        con.close()
+
+    def test_reads_current_page_and_writes_stats(self, client, monkeypatch, tmp_path):
+        self._seed_log(tmp_path)
+        from src import browser_client
+
+        async def fake_current(account_id="default"):
+            return {"views": "88", "liked_count": "7", "collected_count": "3",
+                    "comment_count": "1", "shared_count": "0",
+                    "_url": "https://www.xiaohongshu.com/explore/abc123"}
+
+        monkeypatch.setattr(browser_client, "current_note", fake_current)
+        r = client.post("/api/publish_link_from_current", json={"log_id": 1})
+        j = r.json()
+        assert r.status_code == 200 and j["ok"] is True and j["stats"]["views"] == "88"
+        con = sqlite3.connect(tmp_path / "test.db")
+        row = con.execute("SELECT note_url, stats_json FROM publish_logs WHERE id=1").fetchone()
+        con.close()
+        assert "explore/abc123" in row[0]          # 链接自动存下，用户没粘贴过
+        assert json.loads(row[1])["liked_count"] == "7"
+
+    def test_current_page_is_not_a_note(self, client, monkeypatch, tmp_path):
+        """右边窗口停在首页/发布页时，要明确告诉用户去打开那条笔记，而不是回写空数据。"""
+        self._seed_log(tmp_path)
+        from src import browser_client
+
+        async def fake_empty(account_id="default"):
+            return {}
+
+        monkeypatch.setattr(browser_client, "current_note", fake_empty)
+        r = client.post("/api/publish_link_from_current", json={"log_id": 1})
+        assert r.status_code == 400
+        assert "不是笔记详情" in r.json()["detail"]
+
+    def test_log_missing(self, client, monkeypatch, tmp_path):
+        from src import browser_client
+
+        async def fake_current(account_id="default"):
+            return {"views": "1", "_url": "https://www.xiaohongshu.com/explore/x"}
+
+        monkeypatch.setattr(browser_client, "current_note", fake_current)
+        r = client.post("/api/publish_link_from_current", json={"log_id": 999})
+        assert r.status_code == 404
+
+
 class TestCollectClients:
     def test_clients_ok(self, client, monkeypatch, tmp_path):
         _seed_notes(tmp_path)

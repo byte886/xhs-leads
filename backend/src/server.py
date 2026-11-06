@@ -2373,6 +2373,47 @@ async def _resolve_publish_detail(con, row, req):
     return await get_feed_detail(note)
 
 
+def _write_stats(con, log_id: int, d: dict, url: str = "") -> dict:
+    """把一次抓到的互动数据写进发布记录（publish_stats / publish_link_from_current 共用）。"""
+    stats = {k: d.get(k) or "" for k in ("views", "liked_count", "collected_count", "comment_count", "shared_count")}
+    if not any(v for v in stats.values()):
+        raise HTTPException(400, "未抓到互动数据：请确认已登录小红书且笔记可正常访问（可能已删除/被风控）")
+    stats["fetched_at"] = _now().isoformat(timespec="seconds")
+    payload = json.dumps(stats, ensure_ascii=False)
+    if url:
+        con.execute("UPDATE publish_logs SET note_url=?, stats_json=? WHERE id=?", (url, payload, log_id))
+    else:
+        con.execute("UPDATE publish_logs SET stats_json=? WHERE id=?", (payload, log_id))
+    con.commit()
+    return {"ok": True, "stats": stats}
+
+
+class PublishCurrentReq(BaseModel):
+    log_id: int
+
+
+@app.post("/api/publish_link_from_current")
+async def publish_link_from_current(req: PublishCurrentReq):
+    """不回粘贴：直接读右边窗口当前页。
+
+    用户手动发布完成后，小红书网页版会落到他自己那条笔记的详情页；
+    此时读这一页即可拿到链接和互动数据，无需复制粘贴。
+    """
+    await _require_login()
+    try:
+        d = await browser_client.current_note()
+    except browser_client.BrowserLoginRequiredError as e:
+        raise HTTPException(400, f"需要登录：{e}")
+    url = (d.get("_url") or "").strip()
+    if not url or "/explore/" not in url:
+        raise HTTPException(400, "右边窗口当前页不是笔记详情：先在右边窗口打开你刚发的那条笔记，再点这个按钮")
+    d.pop("_url", None)
+    con = _db()
+    if not con.execute("SELECT 1 FROM publish_logs WHERE id=?", (req.log_id,)).fetchone():
+        raise HTTPException(404, "发布记录不存在")
+    return _write_stats(con, req.log_id, d, url)
+
+
 @app.post("/api/publish_stats")
 async def publish_stats(req: PublishStatsReq):
     """数据回流：本地浏览器打开已发布笔记详情页，抓取互动数据（浏览/赞/藏/评/转）回写发布记录。
@@ -2386,14 +2427,7 @@ async def publish_stats(req: PublishStatsReq):
     if not row:
         raise HTTPException(404, "发布记录不存在")
     d = await _resolve_publish_detail(con, row, req)
-    stats = {k: d.get(k) or "" for k in ("views", "liked_count", "collected_count", "comment_count", "shared_count")}
-    if not any(v for v in stats.values()):
-        raise HTTPException(400, "未抓到互动数据：请确认 Chrome 已登录小红书且笔记可正常访问（笔记可能已删除/被风控）")
-    stats["fetched_at"] = _now().isoformat(timespec="seconds")
-    con.execute("UPDATE publish_logs SET stats_json=? WHERE id=?",
-                (json.dumps(stats, ensure_ascii=False), req.log_id))
-    con.commit()
-    return {"ok": True, "stats": stats}
+    return _write_stats(con, req.log_id, d)
 
 
 # ================= 图片代理（容器内路径 → 浏览器可读） =================

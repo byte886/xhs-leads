@@ -1157,6 +1157,29 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
             log.info("关闭采集过程新开页 %s 个", n)
 
 
+async def current_note(account_id: str = "default") -> dict:
+    """读取引擎窗口**当前**页面：恰好停在笔记详情页就直接抓，不导航、不刷新。
+
+    用途：用户在右边窗口手动发布完，小红书会落到他自己那条笔记的详情页——
+    这时直接读这一页，省掉「复制链接 → 粘贴 → 回写」这一趟，也不触发任何 URL 导航。
+    当前页不是详情页时返回 {}，由调用方提示「先在右边窗口打开你那条笔记」。
+    """
+    try:
+        ctx = await _ctx(account_id)
+        pages = [p for p in ctx.pages if not p.is_closed()]
+    except Exception:  # noqa: BLE001
+        return {}
+    for page in pages:
+        if _page_position(page) != "detail":
+            continue
+        await _assert_logged_in(page, account_id)   # 撞登录墙照常抛，由上层收尾
+        d = await _read_note_detail(page)
+        if d:
+            d["_url"] = str(page.url)
+            return d
+    return {}
+
+
 async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
     """按完整链接打开笔记页并提取详情（**唯一例外**：链接由用户本人提供，无页内入口可达）。"""
     page = await _load(url, wait_ms, account_id)
