@@ -3,7 +3,7 @@ from src.browser_client import _pick_card, _norm_text
 
 
 def _card(i: int, text: str) -> dict:
-    return {"i": i, "lines": text.split("\n"), "x": 100, "y": 100, "w": 200, "h": 300}
+    return {"i": i, "text": text.replace("\n", " "), "x": 100, "y": 100, "w": 200, "h": 300}
 
 
 CARDS = [

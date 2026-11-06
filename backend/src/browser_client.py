@@ -1187,7 +1187,7 @@ _ME_ENTRY_JS = """() => {
 _PROFILE_CARDS_JS = """() => [...document.querySelectorAll('.note-item')].map((el, i) => {
   const r = el.getBoundingClientRect();
   return { i,
-           lines: (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 4),
+           text: (el.innerText || '').trim(),
            x: Math.round(r.x + r.width / 2),
            y: Math.round(r.y + Math.min(120, r.height / 2)),
            w: Math.round(r.width), h: Math.round(r.height) };
@@ -1205,12 +1205,12 @@ def _pick_card(cards, title: str):
     if not want:
         return None
     for c in cards:
-        if want in _norm_text(" ".join(c["lines"])):
+        if want in _norm_text(c["text"]):
             return c
     head = want[:10]
     if head:
         for c in cards:
-            if head in _norm_text(" ".join(c["lines"])):
+            if head in _norm_text(c["text"]):
                 return c
     return None
 
