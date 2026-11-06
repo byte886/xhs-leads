@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
-import { apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes } from '../api'
+import { apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { isLoginAbnormal } from '../lib/auth'
 
 const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void }>()
@@ -102,6 +102,71 @@ let collectTimer: ReturnType<typeof setInterval> | null = null
 // 连续 >5 次才放弃复位，避免「按钮变开始采集但调试窗口还在采集」的状态错位
 let progressFailCount = 0
 
+/** R-6.53z5：进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
+function armProgressPolling(taskId: string) {
+  collectTaskId = taskId
+  progressFailCount = 0
+  if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
+  collectTimer = setInterval(async () => {
+    try {
+      const pr = await apiCollectProgress(taskId)
+      progressFailCount = 0  // 轮询成功即重置连续失败计数
+      if (pr.status === 'running') {
+        // R-6.53z 流式采集：进度文案走后端实时 note（已采集 N 条），并实时刷新
+        // 已入库列表——采一条进一条，用户看到列表随采集进度增长（所见即所得）
+        appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
+        try {
+          const live = await apiNotes('', 'score')
+          if (live.notes) {
+            appState.notes = live.notes
+            appState.total = live.total
+            appState.count = live.total
+          }
+        } catch { /* 轮询期间列表刷新偶发失败不阻断进度轮询 */ }
+        return
+      }
+      // 完成 / 停止 / 失败：统一收尾
+      if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
+      if (timer) { clearInterval(timer); timer = null }
+      appState.collecting = false
+      if (pr.status === 'error') {
+        appState.searchNote = pr.note || '采集失败'
+        appState.status = '失败'
+        toast(pr.note || '采集失败', 'error')
+        if (isLoginAbnormal(pr.note || '')) emit('open-login')
+        return
+      }
+      appState.searchNote = pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成')
+      toast(pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成'))
+      // 采集完成后拉评分排序结果，自动推进到"筛选结果"阶段
+      // R-6.23 对齐：标记"本次运行已产出列表"——登录往返 reload 时恢复列表、
+      // 应用重启（sessionStorage 清空）不重现上次搜索（保持空白输入态）
+      sessionStorage.setItem('xhs_stage_restore', '1')
+      const list = await apiNotes('', 'score')
+      appState.notes = list.notes
+      appState.total = list.total
+      appState.count = list.total
+      appState.status = '展示中'
+      setStage('pick')
+    } catch (e2) {
+      // R-6.53x：进度查询偶发失败（如列表接口 500）不复位采集状态、不销毁轮询——
+      // 任务可能仍在跑，复位会让按钮变「开始采集」而调试窗口还在采集（状态错位）。
+      // 保留 collecting 与 timer，下一轮继续；连续失败有上限，避免死循环轰炸。
+      progressFailCount += 1
+      if (progressFailCount > 5) {
+        if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
+        // R-6.53z5：这里不把 collecting 置回 false——任务很可能仍在跑，复位会让按钮
+        // 变回「开始采集」，用户一点就顶掉在跑的任务（正是「后端在采、按钮说开始」的错位）。
+        // 保持「停止」态，由用户自己点停止（停止分支里会自行复位）。
+        appState.searchNote = '进度查询连续失败，任务可能仍在采集，可点「停止采集」或重启应用'
+        toast(`进度查询连续失败：${(e2 as Error).message}`, 'error')
+        return
+      }
+      if (progressFailCount === 1) toast(`查询进度失败，自动重试：${(e2 as Error).message}`, 'error')
+    }
+  }, 1000)
+}
+
 // 任务式采集：开始采集 → 后台逐批提取（进度轮询）→ 采满/平台不增长/用户停止后统一评分排序展示
 async function doCollect() {
   if (appState.collecting) {
@@ -109,6 +174,14 @@ async function doCollect() {
     if (collectTaskId) {
       try { await apiCollectStop(collectTaskId) } catch { /* 忽略 */ }
       toast('已请求停止，正在收尾并排序…')
+      if (!collectTimer) {
+        // 轮询已停（进度查询连续失败后放弃）时不会再有收尾回调，这里自行复位，
+        // 否则按钮会永远卡在「停止」
+        appState.collecting = false
+        appState.status = '空闲'
+        appState.searchNote = '已停止采集'
+        if (timer) { clearInterval(timer); timer = null }
+      }
     }
     return
   }
@@ -132,62 +205,7 @@ async function doCollect() {
     const r = await apiCollectStart(appState.params)
     collectTaskId = r.task_id
     appState.searchNote = '正在采集…（可随时点「停止采集」）'
-    collectTimer = setInterval(async () => {
-      try {
-        const pr = await apiCollectProgress(collectTaskId)
-        progressFailCount = 0  // 轮询成功即重置连续失败计数
-        if (pr.status === 'running') {
-          // R-6.53z 流式采集：进度文案走后端实时 note（已采集 N 条），并实时刷新
-          // 已入库列表——采一条进一条，用户看到列表随采集进度增长（所见即所得）
-          appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
-          try {
-            const live = await apiNotes('', 'score')
-            if (live.notes) {
-              appState.notes = live.notes
-              appState.total = live.total
-              appState.count = live.total
-            }
-          } catch { /* 轮询期间列表刷新偶发失败不阻断进度轮询 */ }
-          return
-        }
-        // 完成 / 停止 / 失败：统一收尾
-        if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
-        if (timer) { clearInterval(timer); timer = null }
-        appState.collecting = false
-        if (pr.status === 'error') {
-          appState.searchNote = pr.note || '采集失败'
-          appState.status = '失败'
-          toast(pr.note || '采集失败', 'error')
-          if (isLoginAbnormal(pr.note || '')) emit('open-login')
-          return
-        }
-        appState.searchNote = pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成')
-        toast(pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成'))
-        // 采集完成后拉评分排序结果，自动推进到"筛选结果"阶段
-        // R-6.23 对齐：标记"本次运行已产出列表"——登录往返 reload 时恢复列表、
-        // 应用重启（sessionStorage 清空）不重现上次搜索（保持空白输入态）
-        sessionStorage.setItem('xhs_stage_restore', '1')
-        const list = await apiNotes('', 'score')
-        appState.notes = list.notes
-        appState.total = list.total
-        appState.count = list.total
-        appState.status = '展示中'
-        setStage('pick')
-      } catch (e2) {
-        // R-6.53x：进度查询偶发失败（如列表接口 500）不复位采集状态、不销毁轮询——
-        // 任务可能仍在跑，复位会让按钮变「开始采集」而调试窗口还在采集（状态错位）。
-        // 保留 collecting 与 timer，下一轮继续；连续失败有上限，避免死循环轰炸。
-        progressFailCount += 1
-        if (progressFailCount > 5) {
-          if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
-          appState.collecting = false
-          appState.searchNote = '进度查询失败，请点「开始采集」重试或重启应用'
-          toast(`进度查询连续失败：${(e2 as Error).message}`, 'error')
-          return
-        }
-        if (progressFailCount === 1) toast(`查询进度失败，自动重试：${(e2 as Error).message}`, 'error')
-      }
-    }, 1000)
+    armProgressPolling(r.task_id)
   } catch (e) {
     if (timer) { clearInterval(timer); timer = null }
     const msg = (e as Error).message
@@ -202,6 +220,23 @@ onMounted(async () => {
   try {
     const lg = await apiLoginStatus()
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
+  } catch { /* 后端未就绪时静默 */ }
+  // R-6.53z5：页面重载（登录往返回 APP、刷新）后 store 是空的，但后端可能仍在采集。
+  // 必须把「停止」态接回来：否则按钮显示「开始采集」而任务在跑，用户一点就顶掉它。
+  try {
+    const sn = await apiStatusNow()
+    if (sn.collecting && sn.task_id) {
+      appState.collecting = true
+      appState.status = '正在采集'
+      appState.searchNote = sn.detail || '正在采集…（可随时点「停止采集」）'
+      if (sn.keyword) appState.params.keyword = sn.keyword
+      if (sn.limit) appState.params.limit = sn.limit
+      appState.taskLabel = buildTaskLabel()
+      if (timer) clearInterval(timer)
+      timer = setInterval(() => { appState.elapsed += 1 }, 1000)
+      setStage('search')
+      armProgressPolling(sn.task_id)
+    }
   } catch { /* 后端未就绪时静默 */ }
   // R-6.23 对齐：恢复最近一次采集结果仅限"本次运行内采集过"（登录守卫导航
   // 回 APP 重载后 store 清空、列表消失的场景），由 sessionStorage 标记区分——

@@ -1,4 +1,5 @@
-"""浏览器客户端纯逻辑单测：滚动采集终止判定 + URL 编码 + CDP 路径可移植性。"""
+"""浏览器客户端纯逻辑单测：滚动采集终止判定 + URL/验证页判定 + CDP 路径可移植性。"""
+import asyncio
 import os
 import sys
 
@@ -27,11 +28,6 @@ class TestShouldStopCollect:
 
     def test_no_results_no_stop(self):
         assert bc._should_stop_collect(0, 30, 1, 0, None)[0] is False
-
-
-class TestUrlEncode:
-    def test_quote_space(self):
-        assert bc._urlencode("a b") == "a%20b"
 
 
 class TestHomeRelative:
@@ -103,3 +99,31 @@ def test_should_stop_collect_logic():
     # stale 高 → stop
     stopped, n = bc._should_stop_collect(5, 30, 20, 0, None)
     assert stopped is True
+
+
+class _UrlPage:
+    """只有 url 的假页面：URL 判定分支不需要 CDP。"""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+class TestDetectVerifyWallUrl:
+    """R-6.53z6：平台人机验证页必须被识别（原判定只看 /login 与中文文案，
+    实测 captcha 页两者都不命中 → 0 条被误报成「限流」）。"""
+
+    def _detect(self, url):
+        return asyncio.run(bc._detect_login_wall(_UrlPage(url)))
+
+    def test_captcha_page_is_wall(self):
+        assert "人机验证" in self._detect(
+            "https://www.xiaohongshu.com/website-login/captcha?verifyBiz=461")
+
+    def test_website_login_page_is_wall(self):
+        assert "人机验证" in self._detect("https://www.xiaohongshu.com/website-login")
+
+    def test_login_page_reports_session(self):
+        assert "登录" in self._detect("https://www.xiaohongshu.com/login")
+
+    def test_normal_search_page_not_wall(self):
+        assert self._detect("https://www.xiaohongshu.com/search_result?keyword=x") == ""

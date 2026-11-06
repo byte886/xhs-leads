@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { noteUrl } from '../xhsUrl'
 import { computed, ref } from 'vue'
 import type { Note } from '../types'
 import { coverProxy } from '../store'
@@ -72,9 +73,8 @@ function isSel(note: Note) {
 }
 
 function openOrigin(note: Note) {
-  const url = note.origin ||
-    `https://www.xiaohongshu.com/explore/${note.feed_id}${note.xsec_token ? `?xsec_token=${note.xsec_token}` : ''}`
-  window.open(url, '_blank')
+  const url = note.origin || noteUrl(note.feed_id, note.xsec_token)
+  if (url) window.open(url, '_blank')
 }
 
 function selectAll() {
@@ -146,7 +146,7 @@ function exportJSON() {
     feed_id: n.feed_id, title: n.title, nickname: n.nickname,
     liked_count: n.liked_count, collected_count: n.collected_count,
     comment_count: n.comment_count, desc: n.desc, cover_url: n.cover_url,
-    origin: n.xsec_token ? `https://www.xiaohongshu.com/explore/${n.feed_id}?xsec_token=${n.xsec_token}` : ''
+    origin: noteUrl(n.feed_id, n.xsec_token)
   }))
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const a = document.createElement('a')

@@ -158,11 +158,11 @@ async def _ensure_debug_title(page) -> None:
 
 
 # 真实登录页（R-6.5→R-6.6 强制登录）：直接导航小红书**独立整页登录页**。
-# 登录成功后小红书自动跳转 redirectPath（首页），守卫捕获 web_session 注入引擎后回 APP。
-XHS_LOGIN_URL = (
-    "https://www.xiaohongshu.com/login"
-    "?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F"
-)
+# R-6.53z6：去掉原 `?redirectPath=...` 后缀——未登录态实测该参数对跳转毫无作用
+# （带与不带都停在 /login），只会把脏参数带到地址栏。登录成功后由守卫捕获
+# web_session 注入引擎再回 APP，不依赖平台自动跳转。
+# 注：`/website-login` 实测会跳到 oia.xiaohongshu.com/oia（营销页），不可用。
+XHS_LOGIN_URL = "https://www.xiaohongshu.com/login"
 
 # 注：以下 JS 已全部上提至 injections 注册表（R-6.30a），按名取用：
 #   collect_debug_title（采集调试窗口标题守护，page init script）
@@ -738,9 +738,24 @@ def has_id_token(cookies) -> bool:
         return False
 
 
+_LOGIN_COOKIE_NAMES = ("id_token", "web_session")
+
+
+def has_login_cookie(cookies) -> bool:
+    """登录态判定（R-6.53z7）：id_token 或 web_session 任一存在即算已登录。
+
+    只认 id_token 时，登录后只有 web_session 的会话会被判「未登录」，守卫随即把
+    已跳到 explore 的页面拉回登录页（用户实测：登录成功又被弹回登录页）。
+    """
+    try:
+        return bool(cookies and any(c.get("name") in _LOGIN_COOKIE_NAMES for c in cookies))
+    except (TypeError, AttributeError):
+        return False
+
+
 async def _guard_try_import_cookies(win: "ShellWindow", base: str, cs, state) -> bool:
     """id_token 出现且满 0.5s → 注入引擎；成功返回 True。state 持 _t_last_import。"""
-    if not has_id_token(cs):
+    if not has_login_cookie(cs):
         return False
     now = time.monotonic()
     if now - state["import"] < 0.5:
@@ -806,6 +821,26 @@ def _guard_detect_escape(frame, stop, domain: str) -> str | None:
     return url
 
 
+async def _guard_pull_back_if_logged_out(win: "ShellWindow", stop, url: str) -> None:
+    """离开登录页后的处置（R-6.53z7，用户拍板）：
+
+    已登录 → **放行**。小红书登录页登录成功后会自己跳到 explore，我们不再插手，
+    更不许把人拉回登录页（旧逻辑「一离开 /login 就立即拉回」实测会让刚登录成功的
+    用户被弹回登录页）。
+    未登录 → 拉回登录页（防用户在登录页乱点跳走变白屏）。
+    """
+    if stop.is_set():
+        return
+    if has_login_cookie(await _guard_read_cookies(win)):
+        print(f"[xhs-leads][guard] 已登录，放行进入（{url[:50]}）", flush=True)
+        return
+    print(f"[xhs-leads][guard] 导航拦截：未登录离开登录页（{url[:70]}），立即拉回", flush=True)
+    try:
+        await win.load_url(XHS_LOGIN_URL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
     """R-6.48h 强制登录导航拦截：主窗口主 frame 一旦离开 /login（小红书域内
     乱点/外链跳转），事件级立即拉回登录页——替代纯轮询（0.3s 间隙内白屏/
@@ -822,9 +857,8 @@ def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
         url = _guard_detect_escape(frame, stop, _domain)
         if url is None:
             return
-        print(f"[xhs-leads][guard] 导航拦截：离开登录页（{url[:70]}），立即拉回", flush=True)
         try:
-            asyncio.get_running_loop().create_task(win.load_url(XHS_LOGIN_URL))
+            asyncio.get_running_loop().create_task(_guard_pull_back_if_logged_out(win, stop, url))
         except Exception:  # noqa: BLE001（loop 关闭中：轮询兜底）
             pass
 
@@ -841,8 +875,7 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
     R-6.48k：移除每 10s 轮询补注——登录页行为（弹窗锁/居中/标题）由
     add_init_script 在每个新 document 自动注入（事件驱动），无需循环守护。
     """
-    has_id = has_id_token(cs)
-    if has_id:
+    if has_login_cookie(cs):
         return await _guard_handle_id_token(win, base, cs, state)
     try:
         cur = await win.current_url()

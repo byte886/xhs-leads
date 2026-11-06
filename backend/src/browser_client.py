@@ -22,6 +22,7 @@ from src import config, engine_pool, injections, logger as xlog, risk
 from src.cdp_timeouts import (CdpTimeoutError, CDP_DRAIN, CDP_EVAL, CDP_NAV,
                               CDP_PREP, CDP_QUICK, cdp_call)
 from src.engine_pool import pool
+from src.urls import build_url
 
 log = xlog.get("browser")
 
@@ -412,11 +413,26 @@ async def _verify_profile(cookies_list: list[dict], account_id: str = "default")
 # ===========================================================================
 # 登录墙 / 筛选 / 搜索
 # ===========================================================================
+def _wall_by_url(url: str) -> str:
+    """按页面 URL 判定拦截原因（纯函数，便于单测与控圈复杂度）。
+
+    R-6.53z6：平台人机验证页实测不带 `/login`（地址是
+    `/website-login/captcha?...`），原判定只看 `/login` 与页面中文文案，
+    两者都不命中 → 采集 0 条被误报成「限流」，用户不知道要去过验证。
+    """
+    if "/login" in url:
+        return "页面已跳转登录（小红书会话失效，请重新扫码或导入 Cookie）"
+    if "captcha" in url or "website-login" in url:
+        return "页面跳转小红书人机验证（请在采集窗完成验证后重试）"
+    return ""
+
+
 async def _detect_login_wall(page) -> str:
     """检测搜索页是否被「登录墙 / 风控验证」拦截。返回原因描述；页面正常返回 ""。"""
     try:
-        if "/login" in page.url:
-            return "页面已跳转登录（小红书会话失效，请重新扫码或导入 Cookie）"
+        wall = _wall_by_url(page.url or "")
+        if wall:
+            return wall
         text = await cdp_call(
             page.evaluate("() => document.body ? document.body.innerText.slice(0, 1500) : ''"),
             timeout=CDP_EVAL, label="login_wall.text", skip=True)  # R-6.53s：引擎卡死不阻塞登录墙检测
@@ -538,7 +554,7 @@ async def _open_old_search_page(keyword: str, account_id: str):
     返回 (page, appeared)：appeared=False 时上层照常收尾（0 条由调用方提示
     「未采集到数据」），不在此处重试。
     """
-    page = await _load(_XHS + "/search_result?keyword=" + _urlencode(keyword), 2500,
+    page = await _load(build_url(_XHS, "/search_result", {"keyword": keyword}), 2500,
                        account_id,
                        show_front=config.get_config().get("collect_tab_visible", False))
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
@@ -556,7 +572,8 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     R-6.53v：停止由框架级 task.cancel() 中断所有 await 点（含本函数内的等待/重载），
     不再在各循环点插 should_stop 检查（避免散点补丁）。
     """
-    url = _XHS + "/search_result?keyword=" + _urlencode(keyword) + "&source=web_search_result_notes"
+    url = build_url(_XHS, "/search_result",
+                    {"keyword": keyword, "source": "web_search_result_notes"})
     page = await _load(url, 2500, account_id,
                        show_front=config.get_config().get("collect_tab_visible", False))
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
@@ -740,7 +757,8 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                account_id: str = "default") -> dict:
     url = (
-        f"{_XHS}/search_result/{note_id}?xsec_token={_urlencode(xsec_token)}&xsec_source=pc_search"
+        build_url(_XHS, f"/search_result/{note_id}",
+                  {"xsec_token": xsec_token, "xsec_source": "pc_search"})
         if xsec_token else f"{_XHS}/explore/{note_id}"
     )
     page = await _load(url, wait_ms, account_id)
@@ -760,7 +778,7 @@ async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -
 
 
 async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
-    page = await _load(f"{_XHS}/user/profile/{uid}", wait_ms, account_id)
+    page = await _load(build_url(_XHS, f"/user/profile/{uid}"), wait_ms, account_id)
     try:
         return await page.evaluate("() => xhsExtractUser()")
     finally:
@@ -770,7 +788,8 @@ async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> di
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default") -> dict:
     """采集笔记评论区互动用户名单：打开原作品页 → 等待评论区渲染 → DOM 提取。"""
     url = (
-        f"{_XHS}/search_result/{note_id}?xsec_token={_urlencode(xsec_token)}&xsec_source=pc_search"
+        build_url(_XHS, f"/search_result/{note_id}",
+                  {"xsec_token": xsec_token, "xsec_source": "pc_search"})
         if xsec_token else f"{_XHS}/explore/{note_id}"
     )
     page = await _load(url, 6000, account_id)
@@ -820,7 +839,3 @@ async def stop():
     """关闭全部引擎 + Playwright 实例（后端退出钩子）。"""
     await pool.close_all()
 
-
-def _urlencode(s: str) -> str:
-    import urllib.parse
-    return urllib.parse.quote(s)

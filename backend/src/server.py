@@ -1372,9 +1372,9 @@ async def status_now():
     数据源：采集任务注册表（_COLLECT_TASKS）→ 进行中则聚合动作文案+进度；否则空闲。
     与审计日志（logger.py 落盘账本）区分：本接口只服务前端实时播报。
     """
-    running = [st for st in _COLLECT_TASKS.values() if st.get("status") == "running"]
+    running = [(tid, st) for tid, st in _COLLECT_TASKS.items() if st.get("status") == "running"]
     if running:
-        st = running[0]
+        tid, st = running[0]
         # R-6.53z 流式流水线：采集=逐条提取+补全+评分+入库（phase=search/enrich 均在采集中），
         # 动作统一「正在采集」，进度由 note（已采集 N 条）实时播报。
         action = "正在采集"
@@ -1384,6 +1384,9 @@ async def status_now():
             "collected": st.get("collected", 0),
             "limit": st.get("limit", 0),
             "keyword": st.get("keyword", ""),
+            # R-6.53z5：把 task_id 交给前端——页面重载（登录往返回 APP）后前端据此
+            # 接回正在跑的轮询，按钮恢复「停止」，不再出现「后端在采、按钮却说开始采集」
+            "task_id": tid,
             "collecting": True,
         }
     return {"action": "空闲", "detail": "", "collecting": False}

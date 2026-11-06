@@ -264,6 +264,8 @@ export async function apiMirrorEvent(payload: MirrorEventPayload, account = 'def
 export async function apiStatusNow(): Promise<{
   action: string; detail: string; collecting: boolean
   collected?: number; limit?: number; keyword?: string
+  /** R-6.53z5：进行中任务 id —— 页面重载后据此接回轮询，按钮恢复「停止」 */
+  task_id?: string
 }> {
   return j(await fetch(`${BASE}/api/status_now`))
 }
