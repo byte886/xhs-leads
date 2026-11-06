@@ -6,7 +6,7 @@
   → **应用模式**（window.open 新页落新窗口而非本窗口内新 tab）+
     bounds.left == 0, width == min(1280, 主屏宽//2), height == 800
 - 右窗 = Tab2（基线感知，两种形态都算「右窗」）：
-  · 未登录态 = http://127.0.0.1:8791/login-hint（未登录提示页）
+  · 未登录态 = https://www.xiaohongshu.com/login（右窗直接是扫码页）
   · 已登录态 = xiaohongshu.com 采集调试窗（非 /login）
   → bounds.left == 窗口宽（与左窗等宽并排）, width == 窗口宽, height == 800
 - 不重叠：shell.left + shell.width <= tab2.left（严格相邻，允许 0 间隙）
@@ -19,7 +19,7 @@ R-6.22p 关窗语义（section 2，旧「Tab1 四连关重建」已与现行语�
   且 R-6.22p 已在代码/日志层覆盖（on_shell_closed → launcher 退出信号）。
 
 安全约束：本脚本只读布局 + 仅主动关闭 Tab2 测试窗；不杀进程、不重启实例；
-结束时恢复「壳窗 + /login-hint 提示页」2 页基线（开关 false→true 由服务端重建 Tab2）。
+结束时恢复「壳窗 + 小红书登录页」2 页基线（开关 false→true 由服务端重建采集窗）。
 
 用法：backend/.venv/bin/python scripts/ui_tests/layout_verify.py [--smoke-shell-close] [--screenshot /tmp/layout.png]
 依赖：dev 实例在跑（API 8791 + CDP 9223），串行运行（勿与 t 系列并发）。
@@ -89,14 +89,13 @@ def _norm(url: str) -> str:
 
 
 def _is_shell(pg):
-    """壳窗 = 8791 根路径页（'/'）。login-hint 不是壳窗。"""
+    """壳窗 = 8791 根路径页（'/'）；采集窗在 xiaohongshu.com，不会误判。"""
     return _norm(pg.url) == "/"
 
 
 def _is_tab2(pg):
-    """Tab2 基线感知：未登录=/login-hint；已登录=xiaohongshu.com 非 /login。"""
-    u = pg.url or ""
-    return _norm(u) == "/login-hint" or ("xiaohongshu.com" in u and "/login" not in u)
+    """采集窗 = 任何小红书页（R-6.53z8k：未登录落 /login，已登录落浏览页）。"""
+    return "xiaohongshu.com" in (pg.url or "")
 
 
 def _expected_geo() -> tuple:
@@ -174,7 +173,7 @@ def main() -> int:
         sb, cb = _bounds_of(shell), _bounds_of(tab2)
         checks = [
             ("左窗=主APP（8791 根路径）", _is_shell(shell)),
-            ("右窗=Tab2（login-hint 或 xiaohongshu 采集窗）", _is_tab2(tab2)),
+            ("右窗=采集窗（xiaohongshu 页）", _is_tab2(tab2)),
             ("左窗应用模式（window.open 开新窗口）", _is_app_window(b, shell)),
             ("左窗在右窗左侧（shell.left < tab2.left）", sb["left"] < cb["left"]),
             ("左窗贴主屏左缘（left==0）", sb["left"] == 0),
@@ -196,8 +195,7 @@ def main() -> int:
 
         # 2a) R-6.22p：关 Tab2 → 不复活、应用不退（等 ~10s = 2 个 keeper 5s 轮询）
         print("== section2a 关 Tab2（R-6.22p：不复活/应用不退） ==")
-        tid = [t for t in _tabs() if _norm(t["url"]) == "/login-hint"
-               or ("xiaohongshu.com" in t["url"] and "/login" not in t["url"])]
+        tid = [t for t in _tabs() if "xiaohongshu.com" in t["url"]]
         if not tid:
             print("FAIL: 未找到 Tab2 目标（无法执行关窗语义断言）")
             return 1
@@ -237,23 +235,25 @@ def main() -> int:
             b.close()
             return 0
 
-        # 3) 恢复基线：开关 false→true 由服务端重建 Tab2，keeper 兜底导航回 /login-hint
+        # 3) 恢复基线：开关 false→true 由服务端重建采集窗，keeper 导航到小红书登录页
         print("== section3 恢复未登录 2 页基线 ==")
         _json_post(f"{API}/api/app_config", {"collect_tab_visible": False})
         time.sleep(1.5)
         _json_post(f"{API}/api/app_config", {"collect_tab_visible": True})
-        # 等 keeper 兜底轮询（5s）把新建 explore 骨架导航回 /login-hint
+        # 等 keeper 把新建采集窗导航到 xiaohongshu /login
         ok = False
         for _ in range(12):
             time.sleep(1.5)
-            urls = sorted(_norm(t["url"]) for t in _tabs())
-            if urls == ["/", "/login-hint"]:
+            tabs = _tabs()
+            urls = sorted(_norm(t["url"]) for t in tabs)
+            if (len(tabs) == 2 and any(_norm(t["url"]) == "/" for t in tabs)
+                    and any("xiaohongshu.com" in t["url"] for t in tabs)):
                 ok = True
                 break
         urls = sorted(_norm(t["url"]) for t in _tabs())
         print(f"  恢复后页面集 path={urls}")
         if not ok:
-            print(f"FAIL: 基线未恢复（期望 ['/', '/login-hint']，实测 {urls}）")
+            print(f"FAIL: 基线未恢复（期望 [8791 /, xiaohongshu]，实测 {urls}）")
             return 1
         sb2 = _bounds_of(_find(_connect(p), _is_shell))
         print(f"  壳窗 bounds={sb2}（应保持 left=0 width={exp_w} height={exp_h}）")

@@ -46,7 +46,7 @@ def collect_pages(ctx):
 
 
 def find_page(ctx, needle: str):
-    """精确匹配 APP 页（needle=APP_URL 时排除 /login-hint 子页）。"""
+    """精确匹配 APP 页（needle=APP_URL 时排除 8791 子路由页）。"""
     for p in ctx.pages:
         url = (p.url or "").rstrip("/")
         if needle == APP_URL:

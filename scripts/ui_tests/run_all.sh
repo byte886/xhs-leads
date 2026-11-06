@@ -50,7 +50,7 @@ echo "✓ 引擎调试端口 9223 就绪（连引擎实例，登录态=引擎独
 
 # ---- G5 轻断言：就绪后页面集不得残留多余小红书登录页 ----
 # 就绪检查循环可能经 /api/mirror/open 拉起引擎（其副作用是打开小红书登录页）。
-# 未登录基线要求页面集={壳窗8791, /login-hint}：若 9223 页面集出现 xiaohongshu.com/login
+# 未登录基线要求页面集={壳窗8791, xiaohongshu/login}：若 9223 出现 explore
 # （采集窗在已登录态为 /explore，不含 /login），说明 mirror/open 副作用未清理 → FAIL 早失败。
 # ---- G5 环境无关断言：先读 login_status，按登录态分别断言 ----
 # 已登录 → 引擎页面集应为 {壳窗8791, xiaohongshu.com/explore}，不得残留 /login；
@@ -81,7 +81,7 @@ FILTER="${1:-}"
 PASS=0; FAIL=0; SKIP=0; FAILED_NAMES=()
 
 # ---- R-6.31a 未登录启动时序+窗口震荡（只读，必须最先跑：此时实例应在未登录 2 页基线）----
-# 只读断言 page 恰好 2 页（/ + /login-hint）且 15s 内页面集逐次恒定；任何后续脚本都会开窗，
+# 只读断言 page 恰好 2 页（8791 / + xiaohongshu/login）且 15s 内页面集逐次恒定；任何后续脚本都会开窗，
 # 故此 gate 必须位于一切可变布局脚本之前。
 if [ -z "$FILTER" ]; then
   if PYTHONPATH=backend/src "$PY" scripts/ui_tests/startup_unlogged_verify.py >/tmp/ui_startup.$$ 2>&1; then

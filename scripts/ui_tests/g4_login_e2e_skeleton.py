@@ -7,7 +7,7 @@
 
 运行前提（脚本自校验，不满足即退出）：
   - dev 实例运行中：壳窗前端 http://127.0.0.1:8791/ + 引擎 CDP http://127.0.0.1:9223/
-  - 未登录 2 页基线：CDP 页面集 = {壳窗 8791 /, /login-hint}，无多余小红书页
+  - 未登录 2 页基线：CDP 页面集 = {壳窗 8791 /, xiaohongshu /login}
   - ForceLogin 强制登录对话框已弹出（.force-mask 可见）
 
 流程（代码真值锚点，server.py:461-608 / ForceLogin.vue:62-68）：
@@ -72,8 +72,8 @@ def precheck():
     urls = [p.get("url", "") for p in pages]
     print(f"[G4] 前提2 CDP 页面集：{urls}")
     if len(urls) != 2 or not any(":8791/" in u for u in urls) or \
-       not any("login-hint" in u for u in urls):
-        die(2, f"未登录基线应为 2 页（壳窗8791 + /login-hint），实得 {len(urls)} 页——"
+       not any("xiaohongshu.com/login" in u for u in urls):
+        die(2, f"未登录基线应为 2 页（壳窗8791 + xiaohongshu/login），实得 {len(urls)} 页——"
                f"实例不在未登录基线态，请先重启实例到基线再跑 G4")
     return st
 

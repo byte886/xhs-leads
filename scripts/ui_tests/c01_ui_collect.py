@@ -37,7 +37,7 @@ def main() -> int:
     with sync_playwright() as p:
         b = p.chromium.connect_over_cdp("http://127.0.0.1:9223")
         ctx = b.contexts[0]
-        # R-6.53u：精确匹配主应用页（排除 keeper 的 login-hint——其 URL 也含 8791，
+        # R-6.53u：精确匹配主应用页（排除 8791 子路由，
         # 曾导致脚本操作登录提示页而非采集面板，采集语义完全不同）
         pg = next((x for x in ctx.pages
                    if (x.url or "").rstrip("/") == "http://127.0.0.1:8791"), None)

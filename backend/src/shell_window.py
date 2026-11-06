@@ -239,7 +239,7 @@ class WindowCoordinator:
     - guard（login_guard）与 engine_pool.cleanup_tabs 是**读取方**：shell()/collect_win()
       判活取引用，不再各自遍历 ctx.pages 找窗口（窗口竞态/震荡的历史根源）；
     - 引用失效：page 关闭后判活返回 None，由 keeper 按需重建/重新登记；
-    - 命令式方法：navigate_collect_win / show_login_hint / close_orphan_explore。
+    - 命令式方法：navigate_collect_win / close_orphan_explore。
     """
 
     def __init__(self):
@@ -474,9 +474,6 @@ class WindowCoordinator:
             return
         await t2.goto(url, wait_until="domcontentloaded", timeout=timeout)
 
-    async def show_login_hint(self, front_port: int) -> None:
-        """采集窗 显示未登录提示页（R-6.28 未登录闭环）。"""
-        await self.navigate_collect_win(f"http://127.0.0.1:{front_port}/login-hint")
 
 def _is_orphan_explore_url(u: str) -> bool:
     """R-6.37i：URL 是否孤儿 explore 页（小红书域且非 /login）。"""
@@ -1208,7 +1205,7 @@ async def _keeper_find_shell(ctx, base, coord):
         return alive
     for p in ctx.pages:
         u = p.url or ""
-        if not p.is_closed() and u.startswith(base) and "login-hint" not in u:
+        if not p.is_closed() and u.startswith(base):
             coord.register_shell(p)
             return p
     return None
@@ -1220,7 +1217,7 @@ def _match_collect_page(p, shell, coord):
     if p is shell or p.is_closed():
         return None
     u = p.url or ""
-    if ("xiaohongshu.com" in u and "/login" not in u) or "login-hint" in u:
+    if "xiaohongshu.com" in u:
         log.info(f"_find_collect_win 命中: url={u[:60]!r}")
         coord.register_collect_win(p)
         return p
@@ -1274,13 +1271,20 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
     log.info("壳窗口初始创建完成（R-6.22p 关主窗=退出应用）")
 
 
+_LOGIN_PAGE_URL = "https://www.xiaohongshu.com/login"
+
+
 async def _keeper_collect_target_url(config, engine_pool):
-    """采集窗 目标 URL（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
-    无论登录态，采集窗 兜底 /login-hint（已登录时页面内动态显示「已登录·开始采集」）。
-    永不返回 APP 首页/explore——APP 首页是壳窗内容（登录后右窗出现 APP 主界面=R-6.50
-    回归），explore 仅由采集 open_collect_window 或 login-hint 页内「开始采集」触发。"""
-    base = f"http://127.0.0.1:{config.front_port()}"
-    return base + "/login-hint"
+    """右窗目标 URL：一律小红书登录页。
+
+    R-6.53z8k 用户判据：能走 URL 的小红书页只有 login 这一个；登录成功后 login 页
+    自己会跳 explore，我方不做跳转。故右窗恒进 login——未登录时它就是扫码入口，
+    已登录由平台自跳，无需中间页。
+
+    取消本地 /login-hint 中间页：它让用户多点一次；页内「开始采集」用
+    location.href 进 explore，本身属于用 URL 跳非 login 页。
+    """
+    return _LOGIN_PAGE_URL
 
 
 async def _keeper_sweep_blank(ctx, shell) -> int:
@@ -1362,7 +1366,7 @@ async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None
     R-6.49：采集页（xiaohongshu.com）保持不动（合法采集目标，禁止启动路径导航走）；
     其余页按目标（未登录 login-hint / 已登录 APP 首页）校准。"""
     try:
-        if _t2_url and "login-hint" not in (t2.url or "") and "xiaohongshu.com" not in (t2.url or ""):
+        if _t2_url and "xiaohongshu.com" not in (t2.url or ""):
             await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
         # R-6.48h：复用残留路径同样补标题守护（此前仅新建路径注入——重启保留的
         # 采集窗 裸奔显示 login-hint 原始标题「尚未登录小红书」）
