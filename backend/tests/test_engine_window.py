@@ -4,14 +4,14 @@
 """
 import asyncio
 
-from src import config, mirror, server
+from src import config, engine_window, server
 
 
 def test_set_window_refuses_while_collecting():
     """采集进行中切换窗口会重启引擎，必须先拒绝。"""
     server._COLLECT_TASKS["t1"] = {"status": "running", "account_id": "default"}
     try:
-        r = asyncio.run(mirror.set_window("default", on=True))
+        r = asyncio.run(engine_window.set_window("default", on=True))
     finally:
         server._COLLECT_TASKS.pop("t1", None)
     assert r["ok"] is False
@@ -21,7 +21,7 @@ def test_set_window_refuses_while_collecting():
 def test_set_window_noop_when_already_target_mode(monkeypatch):
     """已经是目标模式时不重启引擎（重启代价高且会断登录态）。"""
     monkeypatch.setattr(config, "get_config", lambda: {"headless": False})
-    r = asyncio.run(mirror.set_window("default", on=True))
+    r = asyncio.run(engine_window.set_window("default", on=True))
     assert r["ok"] is True
     assert r["note"] == "已是目标模式，无需切换"
 
@@ -29,6 +29,6 @@ def test_set_window_noop_when_already_target_mode(monkeypatch):
 def test_set_window_noop_for_headless_target(monkeypatch):
     """反向：要回无头但本来就是无头。"""
     monkeypatch.setattr(config, "get_config", lambda: {"headless": True})
-    r = asyncio.run(mirror.set_window("default", on=False))
+    r = asyncio.run(engine_window.set_window("default", on=False))
     assert r["ok"] is True
     assert r["note"] == "已是目标模式，无需切换"

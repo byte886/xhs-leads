@@ -696,8 +696,8 @@ def _import_cookies_result(has_ws: bool, page_logged_in: bool, kicked: bool, log
 @app.post("/api/mirror/open")
 async def mirror_open(account_id: str = "default"):
     """登录小窗打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪）。"""
-    from src import mirror
-    return await mirror.open_login(account_id)
+    from src import engine_window
+    return await engine_window.open_login(account_id)
 
 
 class MirrorWindowReq(BaseModel):
@@ -711,8 +711,8 @@ async def mirror_window(req: MirrorWindowReq):
 
     用户需求：调试视图不再是「截图映射」，而是引擎独立小窗实时可见采集操作过程。
     """
-    from src import mirror
-    return await mirror.set_window(req.account_id, req.on)
+    from src import engine_window
+    return await engine_window.set_window(req.account_id, req.on)
 
 
 class SearchReq(BaseModel):
