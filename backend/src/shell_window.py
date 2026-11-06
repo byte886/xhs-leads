@@ -919,7 +919,7 @@ async def _guard_monitor_step(win, base: str, cur_force: bool, state: dict) -> b
 
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
     """小红书页内监视循环：强制=锁死拉回；主动=可关闭。返回 ok（登录成功回 APP）。"""
-    state = {"import": 0.0}
+    state = {"import": 0.0, "inject": 0.0}
     # R-6.48h：强制登录挂事件级导航拦截（离开 /login 立即拉回）；退出时移除。
     remove_nav_hook = _guard_hook_forced_nav(win, stop) if cur_force else None
     try:
@@ -1204,19 +1204,27 @@ async def _keeper_sweep_blank(ctx, shell) -> int:
     调用侧已降频到 30s，避免高频清理与手动浏览打架。
     """
     closed = 0
+    # R-6.53z8：/login 是登录窗扫码入口，keeper 一律不主动关——平台登录成功会
+    # 自己跳走；cookie 存在不代表平台已登录（实测停在 /login 不跳），按 cookie
+    # 关闭会误关扫码入口。这里只清空白/新标签页。
     for p in list(ctx.pages):
         if p is shell or p.is_closed():
             continue
-        u = (p.url or "").strip()
-        if u in ("", "about:blank", "chrome://newtab", "chrome://newtab/"):
-            await _safe_close(p)
+        if await _close_if_blank(p, (p.url or "").strip()):
             closed += 1
-            print(f"[xhs-leads][keeper] 清理空白/新标签页 url={u!r}", flush=True)
-        elif "xiaohongshu.com" in u and "/login" in u:
-            await _safe_close(p)
-            closed += 1
-            print(f"[xhs-leads][keeper] 清理残留登录页 url={u!r}", flush=True)
     return closed
+
+
+_BLANK_URLS = ("", "about:blank", "chrome://newtab", "chrome://newtab/")
+
+
+async def _close_if_blank(p, u: str) -> bool:
+    """空白/新标签页才关闭（返回 True=已关闭）；/login 等正常页面一律保留。"""
+    if u not in _BLANK_URLS:
+        return False
+    await _safe_close(p)
+    print(f"[xhs-leads][keeper] 清理空白/新标签页 url={u!r}", flush=True)
+    return True
 
 
 async def _keeper_recovery_cleanup(ctx, shell) -> int:

@@ -565,6 +565,11 @@ async def _open_login_page(page, timeout_s: float = 30) -> bool:
     return False
 
 
+# R-6.53z8b：对外公开的游客渲染态判据（server 的登录态判定复用同一份 JS，
+# 保证「后端 login_status」与「采集侧未登录拦截」不会口径分裂）。
+NEEDS_LOGIN_JS = _NEEDS_LOGIN_JS
+
+
 async def _page_needs_login(page) -> bool:
     """页面是否处于未登录渲染态（有手机号输入框/「登录探索更多内容」）。
 

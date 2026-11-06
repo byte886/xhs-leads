@@ -344,23 +344,56 @@ def _detect_risk_verify(body: str) -> bool:
     )
 
 
+async def _page_is_guest_render(page) -> bool:
+    """页面是否**明确**处于游客渲染态（手机号框 / 「登录探索更多内容」）。
+
+    R-6.53z8b：与 browser_client 同一判据（NEEDS_LOGIN_JS，唯一事实源），
+    消除「后端说已登录、采集侧说游客态」的口径分裂。读不到页面 → 返回 False
+    （不作否决，保留 id_token 兜底语义，避免空白页假阴性，R-6.6）。
+    """
+    try:
+        from src.browser_client import NEEDS_LOGIN_JS  # noqa: PLC0415
+
+        return bool(await page.evaluate(NEEDS_LOGIN_JS))
+    except Exception:  # noqa: BLE001（页面未就绪/注入失败：不否决）
+        return False
+
+
 async def _decide_page_logged_in(page, has_id_token: bool, has_ws: bool, kicked: bool) -> bool:
-    """R-6.37a 拆自 _engine_login_state：页面登录判定（id_token 权威 / ws+页面注入 回退）。"""
-    if has_id_token:
-        # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）；
-        # 被踢信号覆盖（平台已踢但 cookie 残留 → 判失效）
-        return not kicked
-    if has_ws and page is not None:
-        # R-6.28：不再 new_page 开 explore 判定页——Tab2 为本地提示页（login-hint）时
-        # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
-        # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
-        # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
-        try:
-            await page.evaluate(injections.get("extract"))
-            return bool(await page.evaluate("() => !!xhsIsLoggedIn()")) and not kicked
-        except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
+    """R-6.37a 拆自 _engine_login_state：页面登录判定（id_token 权威 / ws+页面注入 回退）。
+
+    R-6.53z8b：**页面明确游客态优先否决**——实测 web_session/id_token 残留而页面整页
+    游客渲染（点搜索框只弹登录浮层），此时任何 cookie 结论都是假阳性。页面不可读时
+    才退回 id_token 兜底（R-6.6 空白页假阴性防线）。
+    """
+    if kicked:
+        return False
+    if page is not None:
+        # 停在 /login 本身就是"这个会话要重新登录"的明确信号（已登录时平台会自己跳
+        # /explore）。cookie 残留不得覆盖它，否则前端以为已登录、不弹登录引导。
+        if "/login" in str(getattr(page, "url", "") or ""):
             return False
-    return False
+        if await _page_is_guest_render(page):
+            return False
+    return await _decide_by_tokens(page, has_id_token, has_ws)
+
+
+async def _decide_by_tokens(page, has_id_token: bool, has_ws: bool) -> bool:
+    """R-6.53z8b 拆自 _decide_page_logged_in：按令牌/页面注入判定（游客态与被踢已在外层处理）。"""
+    if has_id_token:
+        # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）
+        return True
+    if not (has_ws and page is not None):
+        return False
+    # R-6.28：不再 new_page 开 explore 判定页——Tab2 为本地提示页（login-hint）时
+    # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
+    # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
+    # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
+    try:
+        await page.evaluate(injections.get("extract"))
+        return bool(await page.evaluate("() => !!xhsIsLoggedIn()"))
+    except Exception:  # noqa: BLE001（页面未就绪/注入失败 → 不误判已登录）
+        return False
 
 
 def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in) -> dict:
@@ -675,15 +708,16 @@ async def _refresh_engine_after_inject(eng) -> None:
     """R-6.37a 拆自 import_cookies：注入后刷新引擎小红书页使登录态生效（无则开 explore）。"""
     from src import engine_pool  # noqa: PLC0415
     ctx = await eng.context()
-    # R-6.53z8：注入 cookie 后需要新文档才生效，但禁止 reload / URL 直进——
-    # 关掉旧的小红书页，新开 /login；已登录时平台自己跳 /explore。
+    # R-6.53z8：注入 cookie 后需要新文档才生效，但禁止 reload / URL 直进。
+    # 关键：**不能关闭任何既有页面**——壳窗本身可能正被登录守卫导航到 /login，
+    # 关掉它会被 keeper 判定「壳窗被关闭」直接退出应用（用户实测踩坑）。
+    # 已有 /login 页（含壳窗）时直接复用：cookie 是 context 级，新请求自然带上。
     for p in ctx.pages:
-        if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-            try:
-                await p.close()
-            except Exception:  # noqa: BLE001
-                pass
-            break
+        if p.is_closed():
+            continue
+        u = p.url or ""
+        if "xiaohongshu" in u and "/login" in u:
+            return
     page = await eng.new_page()
     await page.goto("https://www.xiaohongshu.com/login",
                     wait_until="domcontentloaded", timeout=30000)
@@ -755,9 +789,14 @@ async def qrcode():
     """Cookie 失效时前端引导登录（R 批 v1.4）：登录在 app 内登录小窗完成（引擎独立 profile，
     镜像=截图流+事件转发，途径不限）。本接口确保引擎打开小红书登录页并返回引导信息。
     前端配合轮询 /api/login_status 直到登录成功。"""
+    # R-6.53z8b：不再走 mirror.new_page（会在壳窗之外多开一个登录 tab，实测与守卫那条
+    # 路径并存 → 窗口叠加）。统一置登录门，由守卫把壳窗导航到 /login，只有一条入口。
+    _LOGIN_GATE["pending"] = True
+    _LOGIN_GATE["force"] = True
+    evt = _LOGIN_GATE.get("evt")
+    if evt is not None:
+        evt.set()
     try:
-        from src import mirror
-        await mirror.open_login("default")
         return {
             "ok": True,
             "guide": "app 内登录小窗已打开：请扫码、或手机号+验证码、或微信登录（任一途径），登录成功后自动继续。",

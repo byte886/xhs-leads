@@ -158,3 +158,16 @@ class TestNavRuleSourceGuard:
         src = self._src()
         assert 'f"/user/profile/' not in src
         assert "_XHS + \"/explore\"" not in src
+
+class TestImportInjectKeepShellGuard:
+    """R-6.53z8 回归：注入 Cookie 后不得关闭既有页面（壳窗被导航到 /login 时
+    关掉它 → keeper「壳窗被关闭」→ 整个应用退出，用户实测踩坑）。"""
+
+    def test_no_page_close_in_refresh(self):
+        import pathlib
+        src = pathlib.Path("src/server.py").read_text(encoding="utf-8")
+        start = src.index("async def _refresh_engine_after_inject")
+        end = src.index("async def import_cookies", start)
+        body = src[start:end]
+        assert ".close()" not in body, "注入后刷新不得关闭页面（会误关壳窗导致应用退出）"
+        assert "reload(" not in body, "注入后刷新不得 reload"
