@@ -101,10 +101,65 @@ def _data_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2] / "data"
 
 
+def _alert(title: str, body: str) -> None:
+    """打包态双击启动，stderr 用户看不见；用原生弹窗把「为什么没起来」说给用户听。"""
+    try:
+        if sys.platform == "darwin":
+            import subprocess  # noqa: PLC0415
+
+            # AppleScript 只认双引号字符串：单行化 + 转义，别把 Python repr 直接塞进去
+            body_esc = body.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "  ")
+            title_esc = title.replace("\\", "\\\\").replace('"', '\\"')
+            script = (
+                f'display dialog "{body_esc}" with title "{title_esc}" '
+                f'buttons {{"知道了"}} default button 1 with icon stop'
+            )
+            # 不等待：进程马上要退，弹窗得独立留在屏幕上，别让用户等 30 秒
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except Exception:  # noqa: BLE001（弹窗失败不影响退出流程）
+        pass
+
+
+def _acquire_single_instance(data_dir: pathlib.Path) -> bool:
+    """同一数据目录只允许一个实例：第二个实例说清楚并退出，不留「后端活着、窗口没有」的半死态。
+
+    同账号共用一份 profile，两个进程同时用会让 Chrome 把参数转交给已有实例后自己退出，
+    Playwright 判成启动失败 → 壳窗口起不来、后端却 200 正常，用户只看到「点了没反应」。
+    """
+    lock = data_dir / ".instance.lock"
+    try:
+        pid = int(lock.read_text().strip())
+    except (OSError, ValueError):
+        pid = 0
+    if pid and pid != os.getpid():
+        try:
+            os.kill(pid, 0)  # 探活：进程还在就拒绝启动
+        except OSError:
+            pid = 0  # 上次崩溃残留，接管
+        else:
+            msg = (
+                f"已经有一个实例在跑（pid={pid}），同一个数据目录只能开一个。\n"
+                f"请先退出它；确实要并行，请用不同的 --data-dir。"
+            )
+            print(f"[xhs-leads] {msg}", file=sys.stderr)
+            _alert("XHS Leads 已在运行", msg)
+            return False
+    try:
+        lock.write_text(str(os.getpid()))
+    except OSError:
+        pass  # 锁写不进去也不拦启动
+    return True
+
+
 def main() -> int:
     data_dir = _data_dir()
     _migrate_legacy_data(data_dir)  # 旧 codex-zhuke 数据目录首次迁移（仅打包态生效）
     data_dir.mkdir(parents=True, exist_ok=True)
+    if not _acquire_single_instance(data_dir):
+        return 1
 
     # 开发态：确保 backend（src 包父目录）在 sys.path（打包态由 spec pathex 提供）
     if not getattr(sys, "_MEIPASS", None):
@@ -207,9 +262,17 @@ def main() -> int:
         try:
             win = await shell_window.ensure_shell(url)
             print(f"[xhs-leads] 壳窗口就绪（CFT 承载前端，CDP 9223 可控）: {url}")
-        except Exception as e:  # noqa: BLE001（引擎拉起失败：服务仍可用，仅打日志）
-            print(f"[xhs-leads] 壳窗口启动异常（服务仍可用）: {e!r}", file=sys.stderr)
-            return
+        except Exception as e:  # noqa: BLE001（引擎拉起失败）
+            msg = str(e)
+            if "现有的浏览器会话" in msg or "has been closed" in msg:
+                hint = "profile 被另一个实例占着（或上次没退干净）：先退出所有 XHSLeads 实例再启动"
+            elif "timeout" in msg.lower():
+                hint = "引擎启动超时：检查网络与磁盘，或重开一次"
+            else:
+                hint = msg[:160]
+            print(f"[xhs-leads] 壳窗口没起来：{hint}", file=sys.stderr)
+            _alert("XHS Leads 启动失败", hint)
+            return 1
         # R-6.48q：pending 事件驱动——注入同进程 _LOGIN_GATE（含 asyncio.Event），
         # login_begin 置位唤醒守卫，主循环零轮询（守卫退化路径仅限 gate 未注入时）
         if server._LOGIN_GATE.get("evt") is None:
