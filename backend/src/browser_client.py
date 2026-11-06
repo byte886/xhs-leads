@@ -1253,6 +1253,134 @@ async def _back_home_quiet(page) -> None:
         pass
 
 
+_PUBLISH_ENTRY_JS = """() => {
+  for (const e of [...document.querySelectorAll('a, li, div, span')]) {
+    const t = (e.innerText || '').trim();
+    if (t === '发布') {
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    }
+  }
+  return null;
+}"""
+
+_NOTE_MANAGER_ENTRY_JS = """() => {
+  for (const e of [...document.querySelectorAll('a, li, div, span')]) {
+    const t = (e.innerText || '').trim();
+    if (t === '笔记管理') {
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    }
+  }
+  return null;
+}"""
+
+_SCROLL_TO_END_JS = """() => {
+  const box = [...document.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 100 && e.clientHeight > 300);
+  if (box) box.scrollTop = box.scrollHeight;
+  else window.scrollTo(0, document.body.scrollHeight);
+}"""
+
+# 创作者中心「笔记管理」每行卡片：标题、发布时间、5 个统计数（浏览/评/赞/藏/转）
+_CREATOR_CARDS_JS = """() => {
+  return [...document.querySelectorAll('.note-card')].map((el, i) => {
+    const pick = (s) => {
+      const e = el.querySelector(s);
+      return e ? (e.innerText || '').trim() : '';
+    };
+    const stats = [...el.querySelectorAll('.note-card__stat')].map((st) => {
+      const sp = st.querySelector('span');
+      return sp ? (sp.innerText || '').trim() : '';
+    });
+    return { i, title: pick('.note-card__title'), time: pick('.note-card__time'), stats };
+  });
+}"""
+
+
+async def _click_text_entry(page, js: str, wait: float) -> bool:
+    """按 JS 算出的中心点真鼠标点一下（不拼 URL）。"""
+    pos = await page.evaluate(js)
+    if not pos:
+        return False
+    await page.mouse.click(pos["x"], pos["y"])
+    await asyncio.sleep(wait)
+    return True
+
+
+async def _open_creator_page(page, ctx) -> bool:
+    """点侧栏「发布」让平台自己打开创作者中心；返回是否成功（不拼 URL）。"""
+    before = {id(p) for p in ctx.pages if not p.is_closed()}
+    if not await _click_text_entry(page, _PUBLISH_ENTRY_JS, 4):
+        return False
+    return any(not p.is_closed() and id(p) not in before
+               and "creator.xiaohongshu.com" in (p.url or "") for p in ctx.pages)
+
+
+async def _creator_page(ctx):
+    """取当前打开着的创作者中心页（没有就 None）。"""
+    for p in ctx.pages:
+        if not p.is_closed() and "creator.xiaohongshu.com" in (p.url or ""):
+            return p
+    return None
+
+
+async def _enter_note_manager(creator) -> bool:
+    """在创作者中心里点「笔记管理」。"""
+    if "/note-manager" in (creator.url or ""):
+        return True
+    return await _click_text_entry(creator, _NOTE_MANAGER_ENTRY_JS, 5)
+
+
+async def _scroll_creator_all(creator) -> None:
+    """列表是懒加载，滚到底把全部笔记拉出来。"""
+    for _ in range(8):
+        try:
+            await creator.evaluate(_SCROLL_TO_END_JS)
+        except Exception:  # noqa: BLE001
+            return
+        await asyncio.sleep(1.2)
+
+
+async def _ensure_creator_open(page, ctx):
+    """已经开着创作者中心就直接复用，否则点「发布」让平台开一个。"""
+    creator = await _creator_page(ctx)
+    if creator is not None:
+        return creator
+    if not await _open_creator_page(page, ctx):
+        return None
+    return await _creator_page(ctx)
+
+
+async def _read_note_manager(creator) -> list:
+    """进「笔记管理」→ 滚到底 → 读全部卡片。"""
+    if not await _enter_note_manager(creator):
+        return []
+    await _scroll_creator_all(creator)
+    try:
+        return await creator.evaluate(_CREATOR_CARDS_JS)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def sync_creator_stats(account_id: str = "default") -> list:
+    """进创作者中心「笔记管理」，一次读全量已发布笔记的 5 项互动数据。
+
+    浏览只在创作服务平台有（详情页弹窗里没有），所以数据源换到这里；
+    进入方式仍是点击（侧栏「发布」→ 平台自己跳 creator），不构造 URL。
+    """
+    page = await _xhs_page(account_id)
+    if page is None:
+        return []
+    ctx = await _ctx(account_id)
+    await _assert_logged_in(page, account_id)
+    if "/explore/" in (page.url or ""):
+        await _back_home_quiet(page)
+    creator = await _ensure_creator_open(page, ctx)
+    if creator is None:
+        return []
+    return await _read_note_manager(creator)
+
+
 async def refresh_publish_note(title: str, account_id: str = "default") -> dict:
     """去「我」的主页按标题找到那条已发布笔记，点开抓互动数据（全程点击，不构造 URL）。
 

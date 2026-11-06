@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { appState, coverProxy, setStage, setTab, toast } from '../store'
-import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStats, apiPublishLinkFromCurrent, apiPublishStatsRefresh } from '../api'
+import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStatsSync } from '../api'
 import type { DraftItem } from '../api'
 import type { LogItem, Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -285,8 +285,7 @@ toast(r.ok ? r.note || '草稿已保存（长期保留）' : `保存失败：${r
 
 // ---- P1 数据回流：发布记录 + 回写互动数据（浏览/赞/藏/评/转） ----
 const logs = ref<LogItem[]>([])
-const logBusy = ref(0)                          // 正在回写的记录 id
-const logUrlInput = ref<Record<string, string>>({})  // 每条记录的已发布链接输入（key=记录 id 字符串）
+const syncing = ref(false)                      // 是否正在同步全量数据
 
 async function loadLogs() {
   try { logs.value = await apiLogs() } catch { logs.value = [] }
@@ -298,65 +297,40 @@ function loadLogsOnOpen(ev: Event) {
   if (el.open) loadLogs()
 }
 
-function parseStats(lg: LogItem): Record<string, string> | null {
+function parseStats(lg: LogItem): Record<string, any> | null {
   const s = lg.stats_json
   if (typeof s !== 'string' || !s) return null
   try { return JSON.parse(s) } catch { return null }
 }
 
-/** 刷新数据：去「我」的主页找到这条笔记点开抓一次（点击路径，不拼 URL）。 */
-async function refreshStats(lg: LogItem) {
-  const id = Number(lg.id)
-  logBusy.value = id
-  try {
-    const r = await apiPublishStatsRefresh(id)
-    if (r.ok && r.stats) {
-      toast('已刷新互动数据')
-      await loadLogs()
-    } else {
-      toast(`刷新失败：${r.detail || '未知原因'}`, 'error')
-    }
-  } catch (e) {
-    toast(`刷新失败：${(e as Error).message}`, 'error')
-  } finally {
-    logBusy.value = 0
-  }
+/** 数值 + 与上一次的增量，例如 "93 (+13)"；没变化只给数值。 */
+function statText(lg: LogItem, key: string): string {
+  const s = parseStats(lg)
+  if (!s) return '-'
+  const v = s[key] || '-'
+  const d = (s.deltas || {})[key]
+  return d ? `${v} (${d})` : String(v)
 }
 
-/** 读右边窗口当前那条：用户手动发布完成后页面就停在笔记详情，省掉复制粘贴。 */
-async function readCurrent(lg: LogItem) {
-  const id = Number(lg.id)
-  logBusy.value = id
+/** 同步发布数据：一次进创作者中心「笔记管理」，把全部已发笔记的 5 项数据一次拿回来。
+ *  逐条点详情页拿不到浏览数，而且一条一条点是重复劳动，所以这里只保留全量入口。 */
+async function syncAll() {
+  if (syncing.value) return
+  syncing.value = true
   try {
-    const r = await apiPublishLinkFromCurrent(id)
-    if (r.ok && r.stats) {
-      toast('已读取右边窗口那条笔记的数据')
-      await loadLogs()
-    } else {
-      toast(`读取失败：${r.detail || '未知原因'}`, 'error')
+    const r = await apiPublishStatsSync()
+    if (!r.ok) {
+      toast(`同步失败：${r.detail || '未知原因'}`, 'error')
+      return
     }
+    const matched = (r.matched || []).length
+    const rest = (r.unmatched || []).length
+    toast(`已同步 ${r.total ?? 0} 条，其中 ${matched} 条对上发布记录${rest ? `，${rest} 条不在记录里` : ''}`)
+    await loadLogs()
   } catch (e) {
-    toast(`读取失败：${(e as Error).message}`, 'error')
+    toast(`同步失败：${(e as Error).message}`, 'error')
   } finally {
-    logBusy.value = 0
-  }
-}
-
-async function writeback(lg: LogItem) {
-  const id = String(lg.id)
-  logBusy.value = Number(id)
-  try {
-    const r = await apiPublishStats(Number(id), logUrlInput.value[id] || '')
-    if (r.ok && r.stats) {
-      toast('已回写互动数据（可在发布记录中查看）')
-      await loadLogs()
-    } else {
-      toast(`回写失败：${(r as { detail?: string }).detail || (r as { note?: string }).note || '未知原因'}`, 'error')
-    }
-  } catch (e) {
-    toast(`回写失败：${(e as Error).message}`, 'error')
-  } finally {
-    logBusy.value = 0
+    syncing.value = false
   }
 }
 
@@ -553,45 +527,25 @@ async function aiRun(action: string) {
              @toggle="loadLogsOnOpen($event)">
       <summary style="cursor:pointer;font-size:13px;color:var(--ink-2)">
         发布记录（{{ logs.length }}）
-        <button v-if="!logs.length" class="mini-btn" @click.prevent="loadLogs" style="margin-left:8px">刷新</button>
+        <button class="mini-btn" style="margin-left:8px" :disabled="syncing" @click.prevent="syncAll">
+          {{ syncing ? '同步中…' : '同步发布数据' }}
+        </button>
       </summary>
-      <div v-if="!logs.length" class="dim" style="padding:8px 0;font-size:12px">暂无发布记录。发布后在此显示，可回写浏览/赞/藏/评/转数据。</div>
+      <div v-if="!logs.length" class="dim" style="padding:8px 0;font-size:12px">
+        暂无发布记录。发布后在此显示；点「同步发布数据」一次取回全部已发笔记的浏览/评/赞/藏/转。
+      </div>
       <div v-for="lg in logs" :key="String(lg.id)" class="pub-log-item" style="border-top:1px dashed var(--line);padding:8px 0;margin-top:6px">
         <div style="display:flex;gap:10px;align-items:center;font-size:12px">
           <span style="font-weight:600">{{ String(lg.title || '(无标题)').slice(0, 24) }}</span>
           <span class="dim">{{ String(lg.created_at || '').replace('T', ' ') }}</span>
           <span :style="{ color: lg.status === 'success' ? 'var(--green, #16a34a)' : '#b45309' }">{{ lg.status === 'success' ? '已发布' : '待手动发布' }}</span>
         </div>
-        <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-          <button :disabled="logBusy === lg.id" @click="refreshStats(lg)"
-                  style="border:1px solid var(--line);border-radius:6px;padding:5px 12px;font-size:12px;background:var(--bg);color:var(--ink-1);cursor:pointer">
-            {{ logBusy === lg.id ? '刷新中…' : '刷新数据' }}
-          </button>
-          <span class="dim" style="font-size:11px">去「我」的主页找到这条，点开抓一次</span>
+        <div v-if="parseStats(lg)" class="dim" style="font-size:12px;margin-top:6px">
+          浏览 {{ statText(lg, 'views') }} · 评 {{ statText(lg, 'comment_count') }} ·
+          赞 {{ statText(lg, 'liked_count') }} · 藏 {{ statText(lg, 'collected_count') }} ·
+          转 {{ statText(lg, 'shared_count') }} · 抓于 {{ (parseStats(lg)?.fetched_at || '').replace('T', ' ') }}
         </div>
-        <details style="margin-top:4px">
-          <summary class="dim" style="font-size:11px;cursor:pointer">其他方式</summary>
-          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-            <button :disabled="logBusy === lg.id" @click="readCurrent(lg)"
-                    style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:11px;background:var(--bg);color:var(--ink-1);cursor:pointer">
-              读右边窗口当前页
-            </button>
-            <span class="dim" style="font-size:11px">刚发完、右边窗口还停在那条笔记上时用</span>
-          </div>
-          <div style="display:flex;gap:8px;margin-top:6px">
-            <input v-model="logUrlInput[lg.id as number]" placeholder="粘贴已发布笔记链接"
-                   style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;color:var(--ink-1)" />
-            <button :disabled="logBusy === lg.id" @click="writeback(lg)"
-                    style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:11px;background:var(--bg);color:var(--ink-1);cursor:pointer">
-              {{ logBusy === lg.id ? '回写中…' : '粘贴链接回写' }}
-            </button>
-          </div>
-        </details>
-        <div v-if="parseStats(lg)" class="dim" style="font-size:12px;margin-top:4px">
-          浏览 {{ parseStats(lg)?.views || '-' }} · 赞 {{ parseStats(lg)?.liked_count || '-' }} ·
-          藏 {{ parseStats(lg)?.collected_count || '-' }} · 评 {{ parseStats(lg)?.comment_count || '-' }} ·
-          转 {{ parseStats(lg)?.shared_count || '-' }} · 抓于 {{ (parseStats(lg)?.fetched_at || '').replace('T', ' ') }}
-        </div>
+        <div v-else class="dim" style="font-size:12px;margin-top:6px">还没取过数据</div>
       </div>
     </details>
 

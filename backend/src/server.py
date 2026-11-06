@@ -2421,6 +2421,109 @@ async def publish_stats_refresh(req: PublishCurrentReq):
     return _write_stats(con, req.log_id, d, url)
 
 
+_STATS_FIELDS = ("views", "comment_count", "liked_count", "collected_count", "shared_count")
+
+
+def _ensure_stats_history(con) -> None:
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS publish_stats_history ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, log_id INTEGER NOT NULL, "
+        "views TEXT, comment_count TEXT, liked_count TEXT, collected_count TEXT, shared_count TEXT, "
+        "fetched_at TEXT NOT NULL)"
+    )
+
+
+def _as_number(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _delta_text(cur, prev) -> str:
+    """当前值减上一次的差；算不出来或没变化就给空串。"""
+    a, b = _as_number(cur), _as_number(prev)
+    if a is None or b is None:
+        return ""
+    diff = int(a - b)
+    return f"{diff:+d}" if diff else ""
+
+
+def _squash(t) -> str:
+    return "".join((t or "").split())
+
+
+def _match_by_title(logs, title):
+    want = _squash(title)
+    if not want:
+        return None
+    for lg in logs:
+        if want in _squash(lg["title"]):
+            return lg["id"]
+    return None
+
+
+def _match_log(logs, title, time_text):
+    """先按标题认（标题可能为空），再按发布日期认；认不准返回 None，不硬凑。"""
+    hit = _match_by_title(logs, title)
+    if hit is not None:
+        return hit
+    day = (time_text or "")[:10]
+    same_day = [lg["id"] for lg in logs if day and (lg["created_at"] or "")[:10] == day]
+    return same_day[0] if len(same_day) == 1 else None
+
+
+def _apply_creator_card(con, log_id: int, card: dict) -> dict:
+    """把卡片上的 5 项数据落库，顺带记一条历史快照并算增量。"""
+    stats = {}
+    for key, raw in zip(_STATS_FIELDS, card.get("stats") or []):
+        stats[key] = (raw or "").strip()
+    stats["fetched_at"] = _now().isoformat(timespec="seconds")
+    prev = con.execute(
+        "SELECT " + ",".join(_STATS_FIELDS) + " FROM publish_stats_history WHERE log_id=? ORDER BY id DESC LIMIT 1",
+        (log_id,),
+    ).fetchone()
+    stats["deltas"] = {k: _delta_text(stats.get(k), prev[k] if prev else None) for k in _STATS_FIELDS}
+    con.execute(
+        "INSERT INTO publish_stats_history (log_id," + ",".join(_STATS_FIELDS) + ",fetched_at) VALUES (?,?,?,?,?,?,?)",
+        (log_id, *[stats[k] for k in _STATS_FIELDS], stats["fetched_at"]),
+    )
+    con.execute("UPDATE publish_logs SET stats_json=? WHERE id=?",
+                (json.dumps(stats, ensure_ascii=False), log_id))
+    return stats
+
+
+@app.post("/api/publish_stats_sync")
+async def publish_stats_sync():
+    """一次同步全量：创作者中心「笔记管理」里每条笔记的浏览/评/赞/藏/转 + 与上次的增量。
+
+    浏览只在创作服务平台有（笔记详情页弹窗不显示），所以数据源是创作者中心列表页；
+    进入靠点侧栏「发布」由平台自己跳转，不构造 URL。
+    """
+    await _require_login()
+    try:
+        cards = await browser_client.sync_creator_stats()
+    except browser_client.BrowserLoginRequiredError as e:
+        raise HTTPException(400, f"需要登录：{e}")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"右边窗口中断了（会自动重建），等几秒再试：{type(e).__name__}")
+    if not cards:
+        raise HTTPException(400, "没读到创作者中心的笔记列表：确认已登录，且右侧窗口能点开侧栏「发布」")
+    con = _db()
+    _ensure_stats_history(con)
+    logs = [dict(r) for r in con.execute("SELECT id,title,created_at FROM publish_logs")]
+    matched, unmatched = [], []
+    for card in cards:
+        log_id = _match_log(logs, card.get("title"), card.get("time"))
+        if log_id is None:
+            unmatched.append({"title": card.get("title", ""), "time": card.get("time", "")})
+            continue
+        matched.append({"log_id": log_id, "title": card.get("title", ""), "time": card.get("time", ""),
+                        "stats": _apply_creator_card(con, log_id, card)})
+    con.commit()
+    return {"ok": True, "total": len(cards), "matched": matched, "unmatched": unmatched}
+
+
 @app.post("/api/publish_link_from_current")
 async def publish_link_from_current(req: PublishCurrentReq):
     """不回粘贴：直接读右边窗口当前页。

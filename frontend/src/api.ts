@@ -166,6 +166,13 @@ export async function apiPublishStats(logId: number, noteUrl: string): Promise<{
 }
 
 /** 刷新数据：去「我」的主页按标题找到那条笔记，点开抓一次（全程点击，不拼 URL）。 */
+/** 一次同步全量：创作者中心「笔记管理」里每条笔记的浏览/评/赞/藏/转 + 与上次的增量。 */
+export async function apiPublishStatsSync(): Promise<{
+  ok: boolean; total?: number; matched?: unknown[]; unmatched?: unknown[]; detail?: string
+}> {
+  return j(await fetch(`${BASE}/api/publish_stats_sync`, { method: 'POST' }))
+}
+
 export async function apiPublishStatsRefresh(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
   return j(await fetch(`${BASE}/api/publish_stats_refresh`, {
     method: 'POST',
