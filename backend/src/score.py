@@ -157,7 +157,7 @@ def score_note(
     return {
         "score": total,
         "tag": tag,
-        "fan_ratio": round(fan_ratio, 2),
+        "fan_ratio": round(fan_ratio, 4),
         "dimensions": {
             "like_fan_ratio": round(ratio_score, 1),
             "low_fan": round(low_fan_score, 1),

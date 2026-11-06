@@ -984,12 +984,79 @@ async def _read_note_detail(page) -> dict:
     return await page.evaluate("() => xhsExtractNoteDetail()")
 
 
+_AUTHOR_POINT_JS = """() => {
+  const links = [...document.querySelectorAll('a[href*="/user/profile/"]')].map(a => {
+    const r = a.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+             w: Math.round(r.width), h: Math.round(r.height) };
+  }).filter(l => l.w >= 30 && l.h >= 10 && l.y > 40 && l.y < 400);
+  return links.length ? links[0] : null;
+}"""
+
+
+async def _extract_fans(target) -> str:
+    """在作者页上取粉丝数（导航后需重新注入提取脚本）。"""
+    await injections.inject_once(target, "extract")
+    u = await target.evaluate("() => xhsExtractUser()")
+    return (u or {}).get("fans", "") or ""
+
+
+def _find_new_user_page(page, before: set):
+    """在当前 context 里找点击后新出现、且是作者主页的标签页。"""
+    for p in page.context.pages:
+        try:
+            if id(p) not in before and "/user/profile/" in (p.url or ""):
+                return p
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+async def _wait_user_page(page, before: set, tries: int = 16):
+    """等新开的作者页出现（最多 tries × 0.5s，实测 1~4s 出现）。"""
+    for _ in range(tries):
+        fresh = _find_new_user_page(page, before)
+        if fresh is not None:
+            return fresh
+        await asyncio.sleep(0.5)
+    return None
+
+
+async def _read_author_fans(page, account_id: str = "default") -> str:
+    """详情页内点作者 → 平台新开一个作者页标签 → 在它上面取粉丝 → 立刻关掉。
+
+    R-6.53z8k+（Nov 6 实测）：点作者**不是同页跳转，而是新标签页**（引擎里一度堆了
+    3 个作者页），所以不能靠等当前页 URL 变化；拿到新页后取完立即关闭，搜索页与历史栈
+    都不受影响。搜索页上点作者会污染历史栈，所以只能在这里（详情页内）做。
+    """
+    before = {id(p) for p in page.context.pages}
+    pt = await cdp_call(page.evaluate(_AUTHOR_POINT_JS),
+                        timeout=CDP_EVAL, label="author.point", skip=True)
+    if not pt:
+        return ""
+    await cdp_call(page.mouse.click(pt["x"], pt["y"]),
+                   timeout=CDP_QUICK, label="author.click", skip=True)
+    fresh = await _wait_user_page(page, before)
+    if fresh is None:
+        log.info("作者页未出现，跳过粉丝数 url=%s", _page_url_now(page))
+        return ""
+    try:
+        await asyncio.sleep(1)
+        fans = await _extract_fans(fresh)
+        log.info("作者页粉丝 fans=%s", fans)
+        return fans
+    finally:
+        await cdp_call(_close_page_safe(fresh, account_id),
+                       timeout=CDP_QUICK, label="author.close", skip=True)
+
+
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
-               account_id: str = "default") -> dict:
+               account_id: str = "default", with_author: bool = False) -> dict:
     """详情页数据：在采集搜索页里点开目标卡片提取（不用 URL、不刷新）。
 
     没有活动搜索页（采集已结束/被关）时返回 {}，由调用方按缺字段降级——
     绝不为了补字段另开 /explore/{id} 或 /search_result/{id}。
+    `with_author=True` 时顺带进作者主页取粉丝数（唯一安全位置就是详情页内）。
     """
     page = _active_page(account_id)
     if page is None:
@@ -1007,6 +1074,8 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
         log.info("详情提取 note_id=%s url=%s fields=%s", note_id,
                  _page_url_now(page),
                  sorted(d) if isinstance(d, dict) else type(d).__name__)
+        if d and with_author:
+            d["author_fans"] = await _read_author_fans(page, account_id)
         return d
     finally:
         await _back_to_list(page)

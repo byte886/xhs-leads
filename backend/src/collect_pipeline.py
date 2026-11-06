@@ -112,14 +112,15 @@ async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, sh
 
 
 async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id: str = "default",
-                       wait_ms: int | None = None) -> dict | None:
+                       wait_ms: int | None = None, **kw) -> dict | None:
     """经常驻账号引擎连接调浏览器执行（note/user），复用连接不弹窗。失败返回 None。"""
     from src import browser_client
 
     try:
         if cmd == "note":
             return (await browser_client.note(arg, arg2, wait_ms=wait_ms or 5000,
-                                              account_id=account_id)) or None
+                                              account_id=account_id,
+                                              with_author=kw.get("with_author", False))) or None
         if cmd == "user":
             return (await browser_client.user(arg, wait_ms=wait_ms or 5000,
                                               account_id=account_id)) or None
@@ -137,7 +138,7 @@ async def get_feed_detail(note: dict, account_id: str = "default") -> dict:
     """
     d = await _run_browser("note", note.get("feed_id", ""), "NOTE",
                            note.get("xsec_token", ""), account_id,
-                           wait_ms=3000)
+                           wait_ms=3000, with_author=True)
     if d:
         _merge_detail_core(note, d)
         _merge_detail_interactions(note, d)
@@ -195,6 +196,9 @@ def _merge_detail_interactions(note: dict, d: dict) -> None:
             note["publish_time"] = int(ms) // 1000
         except (TypeError, ValueError):
             note["publish_time"] = None
+    # 粉丝数：详情页内点作者取回（空串=没取到，留给 get_user_profile 兜底）
+    if d.get("author_fans"):
+        note["fans_count"] = _parse_fans(d["author_fans"])
 
 
 def _parse_fans(text: str) -> int:
@@ -213,6 +217,8 @@ async def get_user_profile(note: dict, cache: dict, account_id: str = "default")
     uid = note.get("user_id")
     if not uid:
         return note
+    if note.get("fans_count"):
+        return note  # 详情页内已取到，不再单独开作者页（搜索页点作者会毁历史栈）
     if uid in cache:
         note["fans_count"] = cache[uid]
         return note
