@@ -102,15 +102,15 @@ class TestQrcode:
         r = client.get("/api/qrcode")
         assert r.json()["ok"] is True and "登录小窗" in r.json()["guide"]
 
-    def test_qrcode_fail(self, client, monkeypatch):
-        from src import mirror
+    def test_qrcode_sets_login_gate(self, client):
+        """R-6.53z8b 起 /api/qrcode 不再开 mirror 页，只置登录门（唯一入口是采集窗）。"""
+        from src import server
 
-        async def boom(account="default"):
-            raise RuntimeError("引擎未启动")
-
-        monkeypatch.setattr(mirror, "open_login", boom)
         r = client.get("/api/qrcode")
-        assert r.json()["ok"] is False and "引擎未启动" in r.json()["error"]
+        body = r.json()
+        assert body["ok"] is True
+        assert "登录" in body["guide"]
+        assert server._LOGIN_GATE["pending"] is True
 
 
 class TestSearch:
@@ -714,35 +714,6 @@ class TestCookieInfo:
         r = client.get("/api/cookie_info")
         j = r.json()
         assert j["ok"] is False and "失败" in j["error"]
-
-
-class TestImportCookie:
-    def test_import_empty(self, client):
-        r = client.post("/api/import_cookie", json={"cookie_text": "  "})
-        assert r.status_code == 400
-
-    def test_import_unparseable(self, client):
-        r = client.post("/api/import_cookie", json={"cookie_text": "无等号"})
-        assert r.status_code == 400
-
-    def test_import_invalid(self, client, monkeypatch):
-        async def fake_verify(cookies):
-            return {"logged_in": False, "url": "u", "hasLoginUi": True}
-
-        monkeypatch.setattr(server, "_verify_cookies_or_raise", fake_verify)
-        r = client.post("/api/import_cookie", json={"cookie_text": "web_session=abc; a1=def"})
-        j = r.json()
-        assert j["ok"] is False and j["valid"] is False
-
-    def test_import_ok(self, client, monkeypatch, tmp_path):
-        async def fake_verify(cookies):
-            return {"logged_in": True}
-
-        monkeypatch.setattr(server, "_verify_cookies_or_raise", fake_verify)
-        r = client.post("/api/import_cookie", json={"cookie_text": "web_session=abc; a1=def"})
-        j = r.json()
-        assert j["ok"] is True and j["valid"] is True and j["count"] == 2
-        assert (tmp_path / "data" / "cookies.json").exists()
 
 
 class TestSaveDraft:

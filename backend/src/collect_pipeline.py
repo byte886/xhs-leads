@@ -122,8 +122,7 @@ async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id:
                                               account_id=account_id,
                                               with_author=kw.get("with_author", False))) or None
         if cmd == "user":
-            return (await browser_client.user(arg, wait_ms=wait_ms or 5000,
-                                              account_id=account_id)) or None
+            return (await browser_client.user(arg, account_id=account_id)) or None
         return None
     except Exception:  # noqa: BLE001
         return None

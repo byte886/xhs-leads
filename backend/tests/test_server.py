@@ -7,7 +7,7 @@ import pytest
 from src import server
 from src.server import (
     _cleanup_orphan_images, _cookie_items, _duplicate_published, _img_name,
-    _last_publish_ago_minutes, _parse_cookie_text, _publish_count_today,
+    _last_publish_ago_minutes, _publish_count_today,
     _publish_guard, _publish_guard_quota, _publish_guard_time, _publish_week_days,
     _rank_and_insert, _risk_blocked_until,
 )
@@ -21,27 +21,6 @@ class TestImgName:
 
     def test_suffix(self):
         assert _img_name("id123", suffix="p1") == "id123_p1.jpg"
-
-
-class TestParseCookieText:
-    def test_multi_line_and_semicolon(self):
-        c = _parse_cookie_text("a=1; b=2\nc=3")
-        assert {x["name"]: x["value"] for x in c} == {"a": "1", "b": "2", "c": "3"}
-        assert all(x["domain"] == ".xiaohongshu.com" for x in c)
-
-    def test_skip_invalid(self):
-        c = _parse_cookie_text("a=1;;   ; =x; d=")
-        names = {x["name"] for x in c}
-        assert names == {"a", "d"}  # 空段/无名段跳过；d=（空 value）保留
-
-    def test_no_equals_segment_skipped(self):
-        # 非空但无 "=" 的段（如 "abc"）必须跳过不崩（or->and 于 624 行应被杀）
-        assert _parse_cookie_text("abc") == []
-
-    def test_http_only_set(self):
-        c = {x["name"]: x for x in _parse_cookie_text("web_session=1; a1=2; other=3")}
-        assert c["web_session"]["httpOnly"] is True
-        assert c["other"]["httpOnly"] is False
 
 
 class TestRankAndInsert:

@@ -155,5 +155,5 @@ class TestChineseUnits:
 
     def test_mixed_unit_fan_count(self):
         info = score_note(_note(liked_count="500", fans_count="6.1万"))
-        # fan_ratio 输出 round(x, 2)：500/61000=0.0082 → 0.01
-        assert info["fan_ratio"] == pytest.approx(round(500 / 61000, 2), abs=1e-9)
+        # fan_ratio 输出 round(x, 4)：500/61000=0.0082（两位小数会舍成 0.01，看不出量级）
+        assert info["fan_ratio"] == pytest.approx(round(500 / 61000, 4), abs=1e-9)

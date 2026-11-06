@@ -899,14 +899,6 @@ _CARD_POINT_JS = """(fid) => {
   return {x: Math.round(r.x + r.width / 2), y: Math.round(y)};
 }"""
 
-_CLICK_AUTHOR_JS = """(uid) => {
-  const links = [...document.querySelectorAll('a[href*="/user/profile/"]')];
-  const hit = links.find(a => ((a.getAttribute('href') || '') + '').indexOf(uid) >= 0);
-  if (!hit) return false;
-  hit.click();
-  return true;
-}"""
-
 
 def _remember_page(page, account_id: str = "default") -> None:
     """记下当前采集搜索页：详情/作者/评论只能在这个页面上点开，不新开 URL。"""
@@ -947,13 +939,57 @@ def _active_page(account_id: str = "default"):
     return None
 
 
-async def _back_to_list(page) -> None:
-    """从详情页返回结果页：历史后退（实测详情页没有可见返回/关闭按钮）；不刷新、不输 URL。"""
+def _page_position(page) -> str:
+    """给当前页贴位置标签（判断顺序敏感：首页 `/explore` 不含 `/explore/`）。"""
     try:
-        await cdp_call(page.go_back(), timeout=CDP_NAV, label="back.history", skip=True)
-        await asyncio.sleep(1.5)
+        url = page.url or ""
     except Exception:  # noqa: BLE001
-        pass
+        return "other"
+    if "/user/profile/" in url:
+        return "author"
+    if "search_result" in url:
+        return "search"
+    if "/explore/" in url:
+        return "detail"
+    if "xiaohongshu.com/explore" in url:
+        return "feeds"
+    if "127.0.0.1" in url:
+        return "app"
+    return "other"
+
+
+async def _close_stray_pages(page, before: set, account_id: str) -> int:
+    """关掉采集过程中意外新开的小红书页（首页/作者页），防孤儿页堆积。"""
+    closed = 0
+    for p in list(page.context.pages):
+        try:
+            if id(p) in before or p is page or _page_position(p) not in ("detail", "author"):
+                continue
+            await _close_page_safe(p, account_id)
+            closed += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return closed
+
+
+async def _back_to_list(page) -> bool:
+    """从详情页返回结果页：只在"确实站在详情页"时才后退，退完校验落点。
+
+    R-6.53z8k+（Nov 6 修）：原来是无条件 `go_back()` + 等 1.5s —— 点卡片落空时
+    会把搜索页直接退到 `/explore` 首页，后续所有详情都点不到卡片；平台多 push
+    一条历史时又会退到中间态。改成：先断言当前位置是详情页，退一次，再校验是否
+    落回搜索结果页，不落就如实打日志交给调用方降级（绝不连退）。
+    """
+    if _page_position(page) != "detail":
+        log.info("返回跳过：当前不在详情页 url=%s", _page_url_now(page))
+        return False
+    await cdp_call(page.go_back(), timeout=CDP_NAV, label="back.history", skip=True)
+    await asyncio.sleep(1.5)
+    where = _page_position(page)
+    if where != "search":
+        log.warn("后退未落回搜索页 pos=%s url=%s", where, _page_url_now(page))
+        return False
+    return True
 
 
 async def _open_note_card(page, note_id: str) -> bool:
@@ -994,11 +1030,10 @@ _AUTHOR_POINT_JS = """() => {
 }"""
 
 
-async def _extract_fans(target) -> str:
-    """在作者页上取粉丝数（导航后需重新注入提取脚本）。"""
+async def _extract_user(target) -> dict:
+    """在作者页上取资料（导航后需重新注入提取脚本）。"""
     await injections.inject_once(target, "extract")
-    u = await target.evaluate("() => xhsExtractUser()")
-    return (u or {}).get("fans", "") or ""
+    return await target.evaluate("() => xhsExtractUser()") or {}
 
 
 def _find_new_user_page(page, before: set):
@@ -1022,8 +1057,8 @@ async def _wait_user_page(page, before: set, tries: int = 16):
     return None
 
 
-async def _read_author_fans(page, account_id: str = "default") -> str:
-    """详情页内点作者 → 平台新开一个作者页标签 → 在它上面取粉丝 → 立刻关掉。
+async def _read_author_profile(page, account_id: str = "default") -> dict:
+    """详情页内点作者 → 平台新开一个作者页标签 → 在它上面取资料 → 立刻关掉。
 
     R-6.53z8k+（Nov 6 实测）：点作者**不是同页跳转，而是新标签页**（引擎里一度堆了
     3 个作者页），所以不能靠等当前页 URL 变化；拿到新页后取完立即关闭，搜索页与历史栈
@@ -1033,21 +1068,28 @@ async def _read_author_fans(page, account_id: str = "default") -> str:
     pt = await cdp_call(page.evaluate(_AUTHOR_POINT_JS),
                         timeout=CDP_EVAL, label="author.point", skip=True)
     if not pt:
-        return ""
+        return {}
     await cdp_call(page.mouse.click(pt["x"], pt["y"]),
                    timeout=CDP_QUICK, label="author.click", skip=True)
     fresh = await _wait_user_page(page, before)
     if fresh is None:
-        log.info("作者页未出现，跳过粉丝数 url=%s", _page_url_now(page))
-        return ""
+        log.info("作者页未出现，跳过作者资料 url=%s", _page_url_now(page))
+        return {}
     try:
         await asyncio.sleep(1)
-        fans = await _extract_fans(fresh)
-        log.info("作者页粉丝 fans=%s", fans)
-        return fans
+        return await _extract_user(fresh)
     finally:
         await cdp_call(_close_page_safe(fresh, account_id),
                        timeout=CDP_QUICK, label="author.close", skip=True)
+
+
+async def _read_author_fans(page, account_id: str = "default") -> str:
+    """只取粉丝数（作者资料取完页已关，这里不再需要回退）。"""
+    u = await _read_author_profile(page, account_id)
+    fans = (u or {}).get("fans", "") or ""
+    if fans:
+        log.info("作者页粉丝 fans=%s", fans)
+    return fans
 
 
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
@@ -1065,6 +1107,7 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                  note_id, list(_ACTIVE_PAGES),
                  "none" if cached is None else cached.is_closed())
         return {}
+    before = {id(p) for p in page.context.pages}
     if not await _open_note_card(page, note_id):
         log.info("详情卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
         return {}
@@ -1079,6 +1122,9 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
         return d
     finally:
         await _back_to_list(page)
+        n = await _close_stray_pages(page, before, account_id)
+        if n:
+            log.info("关闭采集过程新开页 %s 个", n)
 
 
 async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
@@ -1090,29 +1136,22 @@ async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -
         await _close_page_safe(page, account_id)
 
 
-async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
-    """作者主页数据：在详情页点作者链接进入（不用 URL、不刷新）；无活动页返回 {}。
+async def user(uid: str, account_id: str = "default") -> dict:
+    """作者资料：只在详情页内点作者（平台会新开作者页，取完即关闭，无历史回退）。
 
-    R-6.53z8k+（Nov 6 实测）：在搜索页上 JS 点作者链接 URL 不变、但历史栈里已经 push
-    了一条，随后 `go_back()` 会把整页退回 /explore 首页 —— 本轮后续所有详情补全都点
-    不到卡片。所以只在详情页里点作者，搜索页直接跳过（调用方按 fans=0 降级）。
+    搜索页上点作者会污染历史栈（后续 `go_back()` 会把整页退回 /explore 首页，
+    后续详情全部点不到卡片），所以非详情页一律跳过，调用方按 fans=0 降级。
     """
     page = _active_page(account_id)
     if page is None:
         log.info("无活动搜索页，跳过作者页 uid=%s", uid)
         return {}
-    if "/explore/" not in (page.url or ""):
+    if _page_position(page) != "detail":
         log.info("作者页需在详情页内打开，当前页=%s 跳过 uid=%s", _page_url_now(page), uid)
         return {}
-    hit = await cdp_call(page.evaluate(_CLICK_AUTHOR_JS, uid),
-                         timeout=CDP_EVAL, label="user.click")
-    if not hit:
-        return {}
-    await asyncio.sleep(wait_ms / 1000)
-    try:
-        return await page.evaluate("() => xhsExtractUser()")
-    finally:
-        await _back_to_list(page)
+    u = await _read_author_profile(page, account_id)
+    log.info("作者页提取 uid=%s 命中=%s", uid, bool(u))
+    return u
 
 
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default") -> dict:

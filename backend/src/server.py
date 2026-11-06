@@ -630,41 +630,47 @@ async def _refresh_engine_after_inject(eng) -> None:
     await asyncio.sleep(3)
 
 
-@app.post("/api/auth/import_cookies")
-async def import_cookies(req: ImportCookiesReq):
-    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
-    global _LOGIN_INVALID  # R-6.26 失效记忆解除点（登录成功验证通过时置 False）
+def _mark_login_ok() -> None:
+    """登录验证通过后的统一收尾：解失效记忆、清登录门、唤醒续采、推事件。"""
+    global _LOGIN_INVALID
+    _notify_login_ok()  # R-6.53z8c：唤醒等待登录的采集任务（扫码即自动续采）
+    _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
+    # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
+    _LOGIN_INVALID = False
+    _LOGIN_GATE["pending"] = False
+    _LOGIN_GATE["force"] = False
+    evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
+    if evt is not None:
+        evt.clear()
+
+
+async def _apply_cookies_to_engine(cookies: list, account_id: str = "default") -> dict:
+    """把 Cookie 注入运行中的引擎并真实判定（扫码捕获与粘贴导入共用这一条链路）。"""
     from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
 
-    pw = _filter_xhs_cookies(req.cookies)
+    pw = _filter_xhs_cookies(cookies)
     if not pw:
         return {"ok": False, "error": "未捕获到小红书域 Cookie"}
-
-    eng = await engine_pool.pool.get("default")
-    ok = await eng.inject_cookies(pw)
-    if not ok:
+    eng = await engine_pool.pool.get(account_id)
+    if not await eng.inject_cookies(pw):
         return {"ok": False, "error": "注入引擎失败"}
-
     try:
         await _refresh_engine_after_inject(eng)
     except Exception as e:  # noqa: BLE001
         log.warning("注入后刷新引擎页面失败（不影响判定）: %s", e)
-
     has_ws, page_logged_in, kicked = await _judge_after_inject(eng)
     # R-6.8：被踢（登录超限/请重新登录）→ 视为未通过，守卫留在登录页重新登录
     logged_in = has_ws and page_logged_in and not kicked
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
-        _notify_login_ok()  # R-6.53z8c：唤醒等待登录的采集任务（扫码即自动续采）
-        _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
-        # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
-        _LOGIN_INVALID = False
-        _LOGIN_GATE["pending"] = False
-        _LOGIN_GATE["force"] = False
-        evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
-        if evt is not None:
-            evt.clear()
+        _mark_login_ok()
     return _import_cookies_result(has_ws, page_logged_in, kicked, logged_in)
+
+
+@app.post("/api/auth/import_cookies")
+async def import_cookies(req: ImportCookiesReq):
+    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
+    return await _apply_cookies_to_engine(req.cookies)
 
 
 async def _judge_after_inject(eng) -> tuple[bool, bool, bool]:
@@ -2164,34 +2170,6 @@ async def cookie_info():
         return {"ok": False, "count": 0, "saved_at": "", "cookies": [], "error": f"本地读取失败: {str(e)[:100]}"}
 
 
-class ImportCookieReq(BaseModel):
-    cookie_text: str = ""
-
-
-def _parse_cookie_text(text: str) -> list[dict]:
-    """解析导入的 Cookie 文本：支持 `k=v; k2=v2` 与每行一条 name=value。
-    返回 Playwright/CDP 可用的 cookie 列表（域固定小红书）。"""
-    out = []
-    for seg in text.replace("\n", ";").split(";"):
-        seg = seg.strip()
-        if not seg or "=" not in seg:
-            continue
-        k, v = seg.split("=", 1)
-        k, v = k.strip(), v.strip()
-        if not k:
-            continue
-        out.append({
-            "name": k,
-            "value": v,
-            "domain": ".xiaohongshu.com",
-            "path": "/",
-            "secure": True,
-            "httpOnly": k in ("web_session", "last_web_session", "a1", "acw_tc"),
-            "sameSite": "Lax",
-        })
-    return out
-
-
 def _save_cookies_file(cookies: list[dict]):
     """备份旧文件后保存 cookies.json（供 profile 模式启动自动载入）。"""
     dest = DATA_DIR / "cookies.json"
@@ -2279,43 +2257,6 @@ async def _verify_cookies_or_raise(cookies: list, account_id: str = "default") -
         return await browser_client.verify_cookies(cookies, account_id)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"校验失败（浏览器未就绪）：{str(e)[:100]}")
-
-
-@app.post("/api/import_cookie")
-async def import_cookie(req: ImportCookieReq):
-    """导入 Cookie（新架构）：解析 → 注入独立 profile Chrome 校验登录态 → 有效则保存到本地。
-
-    - daily 调试模式：校验在独立 profile Chrome（APP 交付形态预演）中完成，不污染用户日常 Chrome；
-    - 生产模式：APP 自拉独立 profile，导入后直接注入该 Chrome，采集/发布即用该账号 —— 链路相同。
-    - 校验失败（无效/过期）：返回原因，前端引导去 Chrome 扫码登录。
-    """
-    text = (req.cookie_text or "").strip()
-    if not text:
-        raise HTTPException(400, "请粘贴需要导入的 Cookie（name=value; 格式）")
-    cookies = _parse_cookie_text(text)
-    if not cookies:
-        raise HTTPException(400, "未能从文本中解析出 Cookie（请确认格式：web_session=xxx; a1=yyy）")
-
-    r = await _verify_cookies_or_raise(cookies)
-    if not r.get("logged_in"):
-        return {
-            "ok": False,
-            "valid": False,
-            "error": "Cookie 无效或已过期（登录态检测未通过）。请确认 Cookie 来自最近登录的小红书账号，或直接在 app 内登录小窗扫码/手机号/微信登录。",
-            "count": len(cookies),
-            "raw": f"url={r.get('url')} hasLoginUi={r.get('hasLoginUi')}",
-        }
-
-    # 有效：备份旧文件后保存（供 profile 模式启动自动载入）
-    _save_cookies_file(cookies)
-    ws = next((c["value"] for c in cookies if c["name"] == "web_session"), "")
-    return {
-        "ok": True,
-        "valid": True,
-        "count": len(cookies),
-        "account": (ws[:8] + "…") if ws else "已登录",
-        "note": "Cookie 有效并已保存。独立引擎（app 内呈现形态）将直接使用该账号；登录态只存引擎独立 profile，不依赖系统 Chrome。",
-    }
 
 
 # ================= 发布 =================

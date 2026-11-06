@@ -1376,22 +1376,38 @@ def _watch_collect_win_login(page) -> None:
         return
     try:
         setattr(page, "_xhs_login_probe", True)
+        setattr(page, "_xhs_login_from", _safe_url(page))
         page.on("framenavigated",
                 lambda *_a: asyncio.create_task(_probe_collect_win_login(page)))
     except Exception as e:  # noqa: BLE001
         log.warning(f"采集窗登录监听挂载失败: {e!r}")
 
 
+def _safe_url(page) -> str:
+    """读页面当前地址（页已销毁/被关时返回空串）。"""
+    try:
+        return page.url or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def _probe_collect_win_login(page) -> None:
-    """页面离开 /login 且持有 web_session → 把 Cookie 导入引擎（幂等，30s 节流）。"""
+    """页面离开 /login 且持有 web_session → 把 Cookie 导入引擎（幂等，30s 节流）。
+
+    只有"上一次看到的地址还在 /login"才算真扫码（用户必须先停在登录页扫码，
+    页面才会从 /login 跳到浏览页）；启动/重建时页面本来就在浏览态，那种导入是
+    恢复既有登录态，不能打「扫码成功」——否则排障时会被这句假话带偏。
+    """
     now = time.monotonic()
     if now - _LOGIN_PROBE_LAST[0] < _LOGIN_PROBE_GAP:
         return
     _LOGIN_PROBE_LAST[0] = now
+    was_login = "/login" in (getattr(page, "_xhs_login_from", "") or "")
+    setattr(page, "_xhs_login_from", _safe_url(page))
     xhs = await _login_cookies_on_browsing_page(page)
     if not xhs:
         return
-    await _post_import_cookies(xhs)
+    await _post_import_cookies(xhs, fresh_scan=was_login)
 
 
 async def _login_cookies_on_browsing_page(page) -> list:
@@ -1422,8 +1438,12 @@ async def _xhs_cookies(page) -> list:
     return [c for c in cs if "xiaohongshu" in (c.get("domain") or "")]
 
 
-async def _post_import_cookies(cookies) -> None:
-    """POST /api/auth/import_cookies（触发登录成功链路：解除失效记忆/唤醒续采/推事件）。"""
+async def _post_import_cookies(cookies, fresh_scan: bool = False) -> None:
+    """POST /api/auth/import_cookies（触发登录成功链路：解除失效记忆/唤醒续采/推事件）。
+
+    fresh_scan=True 表示这次是真的从登录页扫码跳过来的；False 是启动/重建时
+    恢复既有登录态的例行同步。
+    """
     from src import config  # noqa: PLC0415
 
     base = f"http://127.0.0.1:{config.front_port()}"
@@ -1438,7 +1458,10 @@ async def _post_import_cookies(cookies) -> None:
 
     try:
         await asyncio.to_thread(_do)
-        log.info("扫码成功——Cookie 已自动导入引擎（未点「去登录」路径）")
+        if fresh_scan:
+            log.info("扫码成功——Cookie 已自动导入引擎（未点「去登录」路径）")
+        else:
+            log.info("登录态恢复——引擎 Cookie 已同步（非本次扫码）")
     except Exception as e:  # noqa: BLE001
         log.warning(f"扫码自动导入 Cookie 失败: {e!r}")
 

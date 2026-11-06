@@ -95,9 +95,10 @@ def test_app_config_rejects_unknown(client):
     assert r.status_code == 422
 
 
-def test_login_hint_page(client):
+def test_login_hint_page_removed(client):
+    """R-6.53z8k 起 /login-hint 中间页已删（采集窗直落登录页），路由不该再回来。"""
     r = client.get("/login-hint")
-    assert r.status_code == 200
+    assert r.status_code == 404
 
 
 def test_clients_agg_empty(client):
