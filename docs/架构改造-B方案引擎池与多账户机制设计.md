@@ -252,15 +252,15 @@ cooldown ──(人工确认/到期)────► ok
 | 旧行为（问题） | 新机制（已落地） |
 |---|---|
 | 登录墙/验证码一律 `mark_risk` 24h 熔断死等 | 软/硬分级：验证码/扫码/登录墙 → `mark_manual`（不死等）；明确封禁 → `mark_hard` 24h |
-| 风控后无自动恢复 | 恢复闭环：`refresh_cookie_from_chrome` 读引擎内存 Cookie（CDP）→ 校验 → 落盘 → **自动 `resolve` 解锁**；`login_status` 纸面有效同样自动解锁 |
+| 风控后无自动恢复 | 恢复闭环由 `login_status` 承担：判定有效 → 落盘 Cookie → **自动 `risk.resolve` 解锁**（z8o 起删除冗余的 `refresh_cookie_from_chrome`） |
 | 连续临时风控无节奏控制 | `mark_soft` 指数退避：1→2→4→8→16 分钟封顶 30 分钟，冷却到期自动回 ok，不要求人工 |
 | 前端无引导 | 拦截文案明确「页面已打开登录入口，请扫码或完成验证，恢复后自动解除」；登录页保留供扫码 |
 
 **闭环时序（软风控）**：
-采集遇验证码 → `mark_manual` + 任务 error（页面保留）→ 前端提示扫码 → 用户扫码/验证 → `refresh_cookie_from_chrome` / `login_status` 检测有效 → `risk.resolve` 自动解锁 → 用户重试采集即继续。
+采集遇验证码 → `mark_manual` + 任务 error（页面保留）→ 前端提示扫码 → 用户扫码/验证 → `login_status` 检测有效 → `risk.resolve` 自动解锁 → 用户重试采集即继续。
 
 ### 验收补充（现象三机制）
 - [ ] ~~同关键词 60s 内重复 `collect_start` → 409~~【R-6.22h 已改为：同词连点均 200】
 - [ ] 连续 3 次 `mark_soft` → 冷却 4 分钟（指数退避），非 24h
-- [ ] `mark_manual` 后扫码成功 → `refresh_cookie_from_chrome` 返回 ok 且 `risk.state` 回 ok
+- [x] `mark_manual` 后扫码成功 → `login_status` 判有效且 `risk.state` 回 ok（原 refresh_cookie 端点已删）
 - [ ] 任务结束引擎窗口保留（不反复开关）；`cleanup_tabs` 仅清理非 APP/空白页

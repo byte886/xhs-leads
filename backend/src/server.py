@@ -902,6 +902,25 @@ async def _require_login(account_id: str = "default"):
             raise HTTPException(403, real.get("note", "独立 profile 未登录小红书，请先在 app 内登录小窗完成登录"))
 
 
+def _require_login_fast(account_id: str = "default") -> None:
+    """同步版登录熔断（供同步路由使用）：只读 15s 缓存 + 风控状态，绝不连 Chrome。
+
+    为什么不用 async 版：publish 路由是同步函数（内含 2–5s 拟人停顿），
+    改成 async 会让这段停顿阻塞整个事件循环，拖慢所有轮询与截图请求。
+    缓存未命中视为「未知」放行——发布真发不出去时平台会给出真实反馈，
+    不值得为一次前置检查把服务卡住。
+    """
+    blocked, reason = risk.is_blocked(account_id)
+    if blocked:
+        raise HTTPException(403, reason)
+    st = _login_status_from_cache(time.time())
+    if st and st.get("status") == "not_logged_in":
+        raise HTTPException(
+            403,
+            "小红书登录态已失效：请在 app 内登录小窗完成登录（扫码/手机号/微信任一途径）后重试",
+        )
+
+
 @app.post("/api/search")
 async def search(req: SearchReq):
     """搜索（同步版，兼容旧前端）：采集 → 评分 → 落库。返回新增条数与最新 TOP 评分。"""
@@ -2122,11 +2141,21 @@ def clients_agg():
 _COOKIE_ORDER = ["web_session", "last_web_session", "a1", "webId", "gid", "id_token", "acw_tc", "websectiga"]
 
 
-def _cookie_items(cookies: list) -> tuple[list, str]:
-    """把本地 cookie 列表整理成展示项（按 _COOKIE_ORDER 排序）+ 提取 web_session 摘要。
+def _mask_cookie_value(v: str) -> str:
+    """Cookie 值掩码：短值全遮，长值留前 3 后 3（足够判断是哪条，又不泄露会话）。"""
+    if not v:
+        return ""
+    if len(v) <= 8:
+        return "******"
+    return v[:3] + "****" + v[-3:]
 
-    登录 UI 改版（用户拍板）：Cookie 只读粒度尽量完整 —— 名称 + 完整值 + 域 + 有效期；
-    前端以「隐藏值」开关控制完整值是否脱敏展示（防截图外发泄露会话）。
+
+def _cookie_items(cookies: list) -> tuple[list, str]:
+    """把本地 cookie 列表整理成诊断项（按 _COOKIE_ORDER 排序）+ 提取 web_session 摘要。
+
+    只给诊断用的最小信息：名称 + 域 + 有效期 + 掩码值（前 3 位/后 3 位）。
+    不返回完整值——Cookie 是引擎内部实现细节（用户拍板：需求层面不需要 Cookie 管理），
+    排障只需要判断「哪一条在、到没到期」，不需要拿到会话原文。
     """
     items = []
     for i, c in enumerate(cookies):
@@ -2136,7 +2165,7 @@ def _cookie_items(cookies: list) -> tuple[list, str]:
             exp = None
         items.append({
             "name": nm,
-            "value": str(c.get("value", "")),  # 完整值（前端默认脱敏，开关可显示原文）
+            "value": _mask_cookie_value(str(c.get("value", ""))),  # 掩码，不吐原文
             "domain": str(c.get("domain", ".xiaohongshu.com")),
             "expires": exp if isinstance(exp, (int, float)) else None,  # 会话级 = None
             "ord": i,
@@ -2208,44 +2237,6 @@ async def _persist_session_cookies_if_stale(eng, stale_seconds: float = 300.0) -
         pass
 
 
-@app.post("/api/refresh_cookie_from_chrome")
-async def refresh_cookie_from_chrome(account_id: str = "default"):
-    """登录态自动续期（R 批 v1.4：引擎独立 profile 单链路，不再读系统 Chrome）。
-
-    ① 引擎 CDP：登录发生在引擎独立 profile 内，内存 Cookie 立即可读（扫码/手机号/
-       微信登录后即生效），成功后 risk.resolve(account_id) —— 软风控自动解锁；
-    ② 引擎未运行/未登录 → 返回引导：在 app 内登录小窗完成登录（R3）。
-
-    旧链路（方案 A 遗留，R 批下线留档）：读 .xhs-leads-profile/引擎 profile 磁盘
-    Cookie 库（钥匙串解密）自动续命 → 不再使用（依赖系统 Chrome 登录态，违背独立口径）。
-    """
-    from src import engine_pool, risk
-
-    account_id = account_id or "default"
-    # ① 引擎内存 Cookie（CDP，登录后立即可用）
-    try:
-        eng = await engine_pool.pool.get(account_id)
-        mem = await eng.read_cookies()
-        if any(c.get("name") == "web_session" for c in mem):
-            r = await _verify_cookies_or_raise(mem, account_id)
-            if r.get("logged_in"):
-                _save_cookies_file(mem)
-                risk.resolve(account_id, reason="引擎登录恢复（CDP）")
-                return {
-                    "ok": True, "valid": True, "count": len(mem),
-                    "account": "已登录（引擎）",
-                    "raw": f"url={r.get('url')} hasLoginUi={r.get('hasLoginUi')}",
-                }
-    except Exception as e:  # noqa: BLE001
-        log.warning("引擎 CDP 读 Cookie 失败: %s", e)
-
-    # ② 引擎未登录 → 引导 app 内登录（R 批：不再读系统/目标 Chrome 磁盘库自动续命）
-    return {
-        "ok": False, "valid": False,
-        "error": "独立 profile 无有效登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）后重试。",
-    }
-
-
 async def _verify_cookies_or_raise(cookies: list, account_id: str = "default") -> dict:
     """校验导入/读取的 Cookie（headless 优先、回退账号引擎），失败抛 502。
 
@@ -2259,7 +2250,6 @@ async def _verify_cookies_or_raise(cookies: list, account_id: str = "default") -
         raise HTTPException(502, f"校验失败（浏览器未就绪）：{str(e)[:100]}")
 
 
-# ================= 发布 =================
 class PublishReq(BaseModel):
     title: str
     content: str = ""
@@ -2482,6 +2472,7 @@ def _publish_guard(con, req: PublishReq) -> dict | None:
 @app.post("/api/publish")
 def publish(req: PublishReq):
     _check_license_or_raise("publish")  # 授权薄层：publish 功能闸门（free 恒放行）
+    _require_login_fast()  # 登录前置（同步读缓存，不连 Chrome、不阻塞事件循环）
     # ① 拟人思考：发布前随机停顿 2-5s（像真人斟酌后再点）
     human_delay(2.0, 5.0)
 
