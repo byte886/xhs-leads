@@ -60,7 +60,7 @@ function pickAuthor(a: Author) {
     <!-- 待输入 -->
     <div v-if="appState.stage === 'input'" class="empty">
       <template v-if="appState.params.keyword.trim()">
-        <div class="big">已载入上次搜索条件</div>
+        <div class="big">条件已就绪</div>
         <p>检查左侧参数后点击「开始采集」</p>
       </template>
       <template v-else>
