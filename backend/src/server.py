@@ -82,8 +82,8 @@ def _mark_collect_done(account_id: str = "default") -> None:
 def _reset_collection_data() -> int:
     """R-6.25：清空采集存储数据（笔记 + 客户 + 采集下载的本地图片）。
 
-    语义（用户对齐）：应用重启时清空一次；每次新采集开始时再清空一次，
-    保证任何时刻库里只有"本次运行/本次采集"的数据。
+    语义（z8p 调整）：应用重启时清空一次；前端点「开始采集」前调 /api/collect_clear 清一次。
+    本函数只被这两处显式调用，不再由 collect_start 隐式触发。
     user_ 前缀（发布页「追加图片」上传资产）属用户主动操作产物，保留。
     返回删除的图片文件数。
     """
@@ -1071,11 +1071,9 @@ def _keep_image(f, ids: set) -> bool:
 
 
 def _persist_notes(keyword: str, notes: list, account_id: str = "default") -> tuple:
-    """搜索/采集结果落库：新结果替换旧批次（用完即失效）+ 本地评分。
-    返回 (added, total, top)。"""
+    """搜索/采集结果落库：按 feed_id 主键插入或更新（同批次重复采集不堆积）+ 本地评分。
+    返回 (added, total, top)。整表清空由 /api/collect_clear 负责，本函数不删任何行。"""
     con = _db()
-    con.execute("DELETE FROM notes")
-    con.commit()
     now = datetime.datetime.now().isoformat(timespec="seconds")
     saved = 0
     for n in notes:
@@ -1471,6 +1469,18 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         emit_collect(state)  # 收尾一次推送：done/stopped/error 统一从事件到前端
 
 
+@app.post("/api/collect_clear")
+def collect_clear():
+    """清空本批采集数据（笔记 + 客户 + 采集图片），独立于开始采集。
+
+    拆出来的原因：清空是破坏性动作，不该藏在「开始采集」里顺手做——
+    外部脚本或别的入口调 collect_start 时不应被动清库。
+    前端在点「开始采集」时先调本接口、再调 collect_start，行为与原来一致。
+    """
+    removed = _reset_collection_data()
+    return {"ok": True, "images_removed": removed}
+
+
 @app.post("/api/collect_start")
 async def collect_start(req: SearchReq):
     """启动采集任务：后台滚动平台搜索页逐条提取→逐条补全评分入库，直到满额/平台不增长/用户停止。
@@ -1480,9 +1490,8 @@ async def collect_start(req: SearchReq):
     account_id = (req.account_id or "default").strip() or "default"
     _check_license_or_raise("collect")  # 授权薄层：collect 功能闸门（free 恒放行）
     await _require_login(account_id)
-    # R-6.25 用户对齐：新采集开始时清空旧采集存储（笔记+客户+采集图片），
-    # 保证库中只有本次采集数据；登录校验通过后才清，登录失败不破坏数据。
-    _reset_collection_data()
+    # R-6.25（z8p 调整）：清库已拆成独立的 /api/collect_clear，由前端在开始前显式调用。
+    # collect_start 自身不再清空——避免脚本或其他入口调它时被动删数据。
     # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
     # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
@@ -2500,8 +2509,8 @@ def publish(req: PublishReq):
 
 
 # ================= 发布记录 =================
-@app.get("/api/logs")
-def logs():
+@app.get("/api/publish_logs")
+def publish_logs():
     con = _db()
     rows = con.execute("SELECT * FROM publish_logs ORDER BY id DESC LIMIT 50").fetchall()
     return {"logs": [dict(r) for r in rows]}

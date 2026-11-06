@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
-import { apiCollectGiveup, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
+import { apiCollectClear, apiCollectGiveup, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { onAppEvent } from '../events'
 import { isLoginAbnormal } from '../lib/auth'
 
@@ -220,6 +220,8 @@ async function doCollect() {
   setStage('search')
   emit('collect-started')
   try {
+    // z8p：清库与开始采集拆成两个动作，前端按顺序显式调用（行为与原来一致）
+    await apiCollectClear()
     const r = await apiCollectStart(appState.params)
     collectTaskId = r.task_id
     appState.searchNote = '正在采集…（可随时点「停止采集」）'

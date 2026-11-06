@@ -74,7 +74,7 @@ def test_drafts_empty(client):
 
 
 def test_logs_empty(client):
-    r = client.get("/api/logs").json()
+    r = client.get("/api/publish_logs").json()
     assert r["logs"] == []
 
 
@@ -279,7 +279,7 @@ def test_logs_with_row(client):
     con = server._db()
     con.execute("INSERT INTO publish_logs (feed_id,title,status) VALUES ('f','t','ok')")
     con.commit()
-    r = client.get("/api/logs").json()
+    r = client.get("/api/publish_logs").json()
     assert len(r["logs"]) == 1
 
 

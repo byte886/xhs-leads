@@ -771,7 +771,7 @@ class TestPublish:
 
 class TestLogs:
     def test_logs_empty(self, client):
-        assert client.get("/api/logs").json()["logs"] == []
+        assert client.get("/api/publish_logs").json()["logs"] == []
 
     def test_logs_with_data(self, client, tmp_path):
         con = sqlite3.connect(tmp_path / "test.db")
@@ -779,8 +779,41 @@ class TestLogs:
         server._init_tables(con)
         _seed_publish_log(con, "success")
         con.close()
-        r = client.get("/api/logs")
+        r = client.get("/api/publish_logs")
         assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["status"] == "success"
+
+
+class TestCollectClear:
+    """z8p：清库从 collect_start 拆成独立接口——collect_start 不再隐式删数据。"""
+
+    def test_clear_removes_notes_and_clients(self, client, tmp_path):
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.row_factory = sqlite3.Row
+        server._init_tables(con)
+        con.execute("INSERT INTO notes (feed_id, title) VALUES ('n1', '旧笔记')")
+        con.execute("INSERT INTO clients (uid, feed_id, nickname) VALUES ('u1', 'f1', '老王')")
+        con.commit()
+        con.close()
+
+        r = client.post("/api/collect_clear")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        con = sqlite3.connect(tmp_path / "test.db")
+        assert con.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0
+        con.close()
+
+    def test_clear_keeps_user_uploaded_images(self, client, tmp_path):
+        images = tmp_path / "images"
+        images.mkdir(parents=True, exist_ok=True)
+        (images / "user_keep.png").write_bytes(b"keep")
+        (images / "123_cover.png").write_bytes(b"drop")
+
+        r = client.post("/api/collect_clear")
+        assert r.json()["images_removed"] == 1
+        assert (images / "user_keep.png").exists()
+        assert not (images / "123_cover.png").exists()
 
 
 class TestImgProxy:

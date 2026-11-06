@@ -59,6 +59,11 @@ export async function apiLicenseActivate(key: string): Promise<{ ok: boolean; no
   }))
 }
 
+export async function apiCollectClear(): Promise<{ ok: boolean; images_removed: number }> {
+  // 清空本批采集数据（笔记 + 客户 + 采集图片）。破坏性动作，由调用方显式触发。
+  return j(await fetch(`${BASE}/api/collect_clear`, { method: 'POST' }))
+}
+
 export async function apiCollectStart(p: SearchParams): Promise<{ ok: boolean; task_id: string; keyword: string; limit: number }> {
   const body = {
     keyword: p.keyword, limit: p.limit, sort: p.sort, note_type: p.noteType,
@@ -181,7 +186,7 @@ export async function apiSaveDraft(payload: {
 }
 
 export async function apiLogs(): Promise<LogItem[]> {
-  const d = await j<{ logs: LogItem[] }>(await fetch(`${BASE}/api/logs`))
+  const d = await j<{ logs: LogItem[] }>(await fetch(`${BASE}/api/publish_logs`))
   return d.logs || []
 }
 
