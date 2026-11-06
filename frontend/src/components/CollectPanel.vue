@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
-import { apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
+import { apiCollectGiveup, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { isLoginAbnormal } from '../lib/auth'
 
 const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void }>()
@@ -103,6 +103,13 @@ let collectTimer: ReturnType<typeof setInterval> | null = null
 let progressFailCount = 0
 
 /** R-6.53z5：进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
+/** R-6.53z8c：等待登录时选择「就用这些」——放弃剩余，保留已采数据 */
+async function doGiveup() {
+  if (!collectTaskId) return
+  const r = await apiCollectGiveup(collectTaskId)
+  if (r.ok) toast(r.note || '已保留已采数据')
+}
+
 function armProgressPolling(taskId: string) {
   collectTaskId = taskId
   progressFailCount = 0
@@ -111,7 +118,20 @@ function armProgressPolling(taskId: string) {
     try {
       const pr = await apiCollectProgress(taskId)
       progressFailCount = 0  // 轮询成功即重置连续失败计数
+      if (pr.status === 'paused_need_login') {
+        // R-6.53z8c：撞墙暂停——任务仍存活，等扫码；按钮转「等待登录」不结束任务
+        appState.pausedNeedLogin = true
+        appState.collecting = true
+        appState.status = '等待登录'
+        appState.searchNote = pr.note || '需要登录：右侧窗口已打开登录页，请扫码后自动续采'
+        try {
+          const live = await apiNotes('', 'score')
+          if (live.notes) { appState.notes = live.notes; appState.total = live.total; appState.count = live.total }
+        } catch { /* 刷新偶发失败不阻断等待 */ }
+        return
+      }
       if (pr.status === 'running') {
+        appState.pausedNeedLogin = false
         // R-6.53z 流式采集：进度文案走后端实时 note（已采集 N 条），并实时刷新
         // 已入库列表——采一条进一条，用户看到列表随采集进度增长（所见即所得）
         appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
@@ -129,6 +149,7 @@ function armProgressPolling(taskId: string) {
       if (collectTimer) { clearInterval(collectTimer); collectTimer = null }
       if (timer) { clearInterval(timer); timer = null }
       appState.collecting = false
+      appState.pausedNeedLogin = false
       if (pr.status === 'error') {
         appState.searchNote = pr.note || '采集失败'
         appState.status = '失败'
@@ -169,6 +190,7 @@ function armProgressPolling(taskId: string) {
 
 // 任务式采集：开始采集 → 后台逐批提取（进度轮询）→ 采满/平台不增长/用户停止后统一评分排序展示
 async function doCollect() {
+  if (appState.pausedNeedLogin) return  // 等待登录期间主按钮无效，避免误触停止/重启
   if (appState.collecting) {
     // 采集中再点 = 停止采集
     if (collectTaskId) {
@@ -338,9 +360,17 @@ onMounted(async () => {
       </div>
 
       <!-- 开始采集：独立整行 -->
-      <button class="btn-search" :class="{ stop: appState.collecting }" @click="doCollect">
-        <span v-if="appState.collecting" class="btn-spinner" />
-        {{ appState.collecting ? '停止' : '开始采集' }}
+      <button
+        class="btn-search"
+        :class="{ stop: appState.collecting, waiting: appState.pausedNeedLogin }"
+        :disabled="appState.pausedNeedLogin"
+        @click="doCollect"
+      >
+        <span v-if="appState.collecting && !appState.pausedNeedLogin" class="btn-spinner" />
+        {{ appState.pausedNeedLogin ? '等待登录…' : (appState.collecting ? '停止' : '开始采集') }}
+      </button>
+      <button v-if="appState.pausedNeedLogin" class="btn-giveup" @click="doGiveup">
+        就用已采 {{ appState.total }} 条
       </button>
     </section>
   </aside>
@@ -548,6 +578,24 @@ onMounted(async () => {
   opacity: 0.7;
   cursor: default;
 }
+/* R-6.53z8c：等待登录不是「不可用」，是「等用户扫码」——保持可见度，别看着像坏了 */
+.btn-search.waiting {
+  opacity: 1;
+  background: #8a6d1f;
+  cursor: default;
+}
+.btn-giveup {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 0;
+  font-size: 12px;
+  color: #555;
+  background: #f3f3f3;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.btn-giveup:hover { background: #eaeaea; }
 .btn-spinner {
   display: inline-block;
   width: 12px;

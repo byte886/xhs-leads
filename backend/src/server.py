@@ -55,6 +55,7 @@ _INTERVAL = (1.0, 1.8)
 
 from src.score import rank_notes, _to_int  # noqa: E402
 from src.jsonio import read_json_safe, write_json  # noqa: E402
+from src.browser_client import BrowserLoginRequiredError
 from src.collect_pipeline import (  # noqa: E402
     get_feed_detail,
     get_note_detail_by_url,
@@ -752,6 +753,7 @@ async def import_cookies(req: ImportCookiesReq):
     logged_in = has_ws and page_logged_in and not kicked
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
+        _notify_login_ok()  # R-6.53z8c：唤醒等待登录的采集任务（扫码即自动续采）
         # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
         _LOGIN_INVALID = False
         _LOGIN_GATE["pending"] = False
@@ -1295,6 +1297,136 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
     state["phase"] = "done"
 
 
+# R-6.53z8c：撞墙暂停等登录的最长等待（用户不在也可回来续采，超时转部分完成）
+COLLECT_PAUSE_MAX = 600.0
+# 连续撞墙上限：达到即判账号受限，不再无限重试（风控累积效应）
+COLLECT_WALL_LIMIT = 3
+
+
+def _collect_seen_ids(con) -> set:
+    """已入库的笔记 ID 集合——断点事实源（不另存游标）。"""
+    try:
+        rows = con.execute("SELECT feed_id FROM notes").fetchall()
+        return {r[0] for r in rows if r and r[0]}
+    except Exception:  # noqa: BLE001（表未建/查询失败：按空集处理）
+        return set()
+
+
+def _collect_begin_round(state: dict) -> None:
+    """每轮开始前的阶段重置；续采保留已采计数（否则界面数字归零）。"""
+    state["phase"] = "search"
+    if not state.get("resumed"):
+        state["collected"] = 0
+        state["saved"] = 0
+        state["partial_items"] = []
+
+
+async def _pause_for_login(state: dict, err: Exception) -> bool:
+    """撞墙暂停等登录。返回 True=继续采，False=用户放弃或超时。
+
+    事件驱动、零轮询：worker 挂在 resume_event 上，扫码成功由 import_cookies/
+    collect_resume 置位唤醒；超时则按「已采数据保留」收尾。
+    """
+    state["status"] = "paused_need_login"
+    state["phase"] = "paused"
+    state["note"] = f"需要登录：{str(err)[:80]}"
+    state["paused_at"] = time.time()
+    ev = state.get("resume_event")
+    if ev is None:
+        ev = asyncio.Event()
+        state["resume_event"] = ev
+    ev.clear()
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=COLLECT_PAUSE_MAX)
+    except asyncio.TimeoutError:
+        state["note"] = "等待登录超时，已保留已采数据"
+        return False
+    return not state.get("giveup", False)
+
+
+def _notify_login_ok() -> int:
+    """登录成功：唤醒所有「等待登录」的采集任务（事件驱动，零轮询）。返回唤醒数。"""
+    n = 0
+    for st in list(_COLLECT_TASKS.values()):
+        if st.get("status") != "paused_need_login":
+            continue
+        ev = st.get("resume_event")
+        if ev is None:
+            continue
+        ev.set()
+        n += 1
+    return n
+
+
+async def _collect_round(state: dict, req, ctx: dict, account_id: str):
+    """一轮「搜索 → 逐条补全入库」；撞墙抛 BrowserLoginRequiredError 给外层暂停。
+
+    返回搜索结果 dict；候选为空时已就地收尾并返回 None。
+    """
+    _collect_begin_round(state)
+    res = await search_via_browser(
+        req.keyword, req.limit,
+        # R-6.53v：回调携带 items 引用——任务级取消时已采数据从此处抢救
+        on_progress=lambda n, it=None: (
+            state.__setitem__("collected", state.get("base_saved", 0) + n),
+            state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
+        ),
+        should_stop=lambda: state["stop_event"],
+        filters={
+            "sort": req.sort, "note_type": req.note_type,
+            "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
+        },
+        account_id=account_id,
+    )
+    candidates = res["items"]
+    if not candidates:
+        _collect_finalize_empty(state, res)
+        return None
+    seen = _collect_seen_ids(ctx["con"])
+    state["phase"] = "enrich"
+    for item in candidates:
+        if state["stop_event"]:
+            break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
+        fid = item.get("feed_id")
+        if fid and fid in seen:
+            continue  # 续采：跳过已入库，只补中断后缺的那些
+        await _collect_one(item, state, ctx)
+    return res
+
+
+def _finalize_paused(state: dict, req, account_id: str, reason: str) -> None:
+    """暂停态收尾：先落通用状态，再把真实原因写回（否则用户只看到「已停止」）。"""
+    _finalize_stopped(state, req, account_id)
+    state["note"] = (
+        f"{reason}：已采集 {state['saved']} 条" if state["saved"] else reason
+    )
+
+
+async def _collect_run_rounds(state: dict, req, ctx: dict, account_id: str):
+    """多轮采集：撞墙 → 暂停等登录 → 扫码恢复后重新搜索续采（跳过已入库）。
+
+    返回最终搜索结果 dict；已就地收尾（放弃/超时/空结果）时返回 None。
+    """
+    while True:
+        try:
+            return await _collect_round(state, req, ctx, account_id)
+        except BrowserLoginRequiredError as e:
+            state["wall_count"] = state.get("wall_count", 0) + 1
+            if state["wall_count"] >= COLLECT_WALL_LIMIT:
+                _finalize_paused(
+                    state, req, account_id,
+                    f"连续 {state['wall_count']} 次需要登录，疑似账号受限",
+                )
+                return None
+            if not await _pause_for_login(state, e):
+                _finalize_paused(state, req, account_id, state.get("note") or "等待登录失败")
+                return None
+            state["resumed"] = True
+            state["base_saved"] = state["saved"]
+            state["status"] = "running"
+            state["note"] = "登录已恢复，继续采集"
+
+
 async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
     """单条流水：补全详情 → 本地评分 → 入库 → 播报进度（一条一提交，停止即可见）。"""
     try:
@@ -1303,6 +1435,10 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
         else:
             item = await get_feed_detail(item, ctx["account_id"])
             item = await get_user_profile(item, ctx["cache"], ctx["account_id"])
+    except BrowserLoginRequiredError:
+        # R-6.53z8c：登录墙必须冒泡——吞掉会让后续条目用残缺粗数据入库，
+        # 用户看到「采到了但内容不全」，比直接暂停更糟。
+        raise
     except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
         pass
     if _rank_and_insert(ctx["con"], item, ctx["req"].keyword, ctx["now"], ctx["account_id"]):
@@ -1314,55 +1450,28 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
 
 
 async def _collect_worker(state: dict, req, account_id: str) -> None:
-    """采集 worker：search 提取 → 逐条「补全→评分→入库」→ 统一收尾。
+    """采集 worker：多轮「搜索 → 逐条补全入库」，撞墙暂停等登录后自动续采。
 
-    R-6.53z 流式流水线：不再「先全部提取、再批量补全」（那种批次模型会让界面停在
-    补全阶段、停止后结果与显示矛盾）。采满 limit 自动完成，停止时结果=已入库条数。
-    R-6.53z1 从 collect_start 内嵌闭包抽为模块级函数：原 CC=19 超「≤8 逐函数硬门槛」，
-    且只有经 HTTP 才能间接测到；抽出后可单测直调、状态机逻辑集中在此。
+    R-6.53z 流式流水线：采满 limit 自动完成，停止时结果=已入库条数。
+    R-6.53z8c：撞到登录墙不再当 error 退出——任务转为 paused_need_login 挂起等待，
+    扫码成功后从断点（已入库 feed_id）续采，用户不在时超时转部分完成。
     """
     con = None
     try:
         set_rhythm(req.interval)  # R-6.47：请求间隔真实生效（会话级节奏，默认 1000ms=1–1.8s）
-        state["phase"] = "search"
-        res = await search_via_browser(
-            req.keyword, req.limit,
-            # R-6.53v：回调携带 items 引用——任务级取消（collect_stop→task.cancel）时
-            # search/enrich 未正常返回，已采数据从该引用抢救，避免取消即丢失。
-            on_progress=lambda n, it=None: (
-                state.__setitem__("collected", n),
-                state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
-            ),
-            should_stop=lambda: state["stop_event"],
-            filters={
-                "sort": req.sort, "note_type": req.note_type,
-                "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
-            },
-            account_id=account_id,
-        )
-        candidates = res["items"]
-        if not candidates:
-            _collect_finalize_empty(state, res)
-            return
-        state["phase"] = "enrich"
-        state["collected"] = 0
-        state["saved"] = 0
-        state["partial_items"] = []
         con = _db()  # collect_start 已 _reset_collection_data 清空旧批次，此处只追加
         ctx = {
             "req": req, "account_id": account_id, "con": con, "cache": {},
             "now": datetime.datetime.now().isoformat(timespec="seconds"),
         }
-        for item in candidates:
-            if state["stop_event"]:
-                break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
-            await _collect_one(item, state, ctx)
+        res = await _collect_run_rounds(state, req, ctx, account_id)
+        if res is None:
+            return  # 已就地收尾（空结果/放弃/超时/账号受限），不再重复 finalize
         con.commit()
         state["phase"] = "save"
         _collect_finalize(state, req, res)
     except asyncio.CancelledError:
-        # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await（含 CDP 调用），
-        # 不再逐点插 should_stop 检查。此处立即收尾已入库数据（逐条 commit 已保证不丢）。
+        # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await（含 CDP 调用）
         _finalize_stopped(state, req, account_id)
         raise
     except Exception as e:  # noqa: BLE001 任务不因单点异常悬挂在 running
@@ -1371,7 +1480,7 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         state["phase"] = "done"
     finally:
         if con is not None:
-            con.close()  # _db() 每次新建连接，结束即释放（原闭包版本未关闭）
+            con.close()  # _db() 每次新建连接，结束即释放
         _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
 
 
@@ -1448,6 +1557,40 @@ def collect_progress(task_id: str = ""):
 
 class CollectStopReq(BaseModel):
     task_id: str
+
+
+@app.post("/api/collect_resume")
+async def collect_resume(req: CollectStopReq):
+    """R-6.53z8c：唤醒「等待登录」的采集任务（自动恢复之外的兜底入口）。
+
+    正常情况下扫码成功由 import_cookies 自动唤醒；本端点用于用户手动点「继续」。
+    """
+    st = _COLLECT_TASKS.get(req.task_id)
+    if not st:
+        return {"ok": False, "note": "任务不存在或已结束"}
+    if st.get("status") != "paused_need_login":
+        return {"ok": False, "note": f"任务当前状态为 {st.get('status')}，无需恢复"}
+    ev = st.get("resume_event")
+    if ev is None:
+        return {"ok": False, "note": "任务没有等待中的登录信号"}
+    ev.set()
+    return {"ok": True, "note": "已恢复，正在续采上次中断的部分"}
+
+
+@app.post("/api/collect_giveup")
+async def collect_giveup(req: CollectStopReq):
+    """R-6.53z8c：放弃剩余采集，保留已采数据（用户选择「就用这些」）。"""
+    st = _COLLECT_TASKS.get(req.task_id)
+    if not st:
+        return {"ok": False, "note": "任务不存在或已结束"}
+    if st.get("status") != "paused_need_login":
+        return {"ok": False, "note": f"任务当前状态为 {st.get('status')}，无需放弃"}
+    st["giveup"] = True
+    ev = st.get("resume_event")
+    if ev is None:
+        return {"ok": False, "note": "任务没有等待中的登录信号"}
+    ev.set()
+    return {"ok": True, "note": f"已放弃剩余，保留已采 {st.get('saved', 0)} 条"}
 
 
 @app.post("/api/collect_stop")

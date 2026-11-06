@@ -86,6 +86,22 @@ export async function apiCollectStop(taskId: string): Promise<{ ok: boolean; not
   }))
 }
 
+export async function apiCollectResume(taskId: string): Promise<{ ok: boolean; note: string }> {
+  return j(await fetch(`${BASE}/api/collect_resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_id: taskId })
+  }))
+}
+
+export async function apiCollectGiveup(taskId: string): Promise<{ ok: boolean; note: string }> {
+  return j(await fetch(`${BASE}/api/collect_giveup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_id: taskId })
+  }))
+}
+
 export async function apiSearch(p: SearchParams): Promise<SearchResult> {
   const body = { keyword: p.keyword, limit: p.limit, sort: p.sort, note_type: p.noteType, interval: p.interval, fast: !!p.fast }
   // 90s 超时：平台 AI 搜索页渲染偶发慢/卡，超时后前端自动恢复按钮并提示，避免无限"搜索中"
