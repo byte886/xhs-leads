@@ -357,7 +357,8 @@ class WindowCoordinator:
         if self._stop is not None and self._stop.is_set():
             return
         if not is_shell:
-            print("[xhs-leads][tab2] 采集窗口被关闭（仅关闭采集窗，应用保持运行）", flush=True)
+            print("[xhs-leads][tab2] 右侧调试窗被关闭（应用保持运行，按需重建）", flush=True)
+            self._schedule_tab2_rebuild()
             return
         # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能立即退出——
         # 延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
@@ -373,6 +374,49 @@ class WindowCoordinator:
         except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
             pass
 
+
+    def _tab2_should_rebuild(self) -> bool:
+        """右窗关闭后是否重建：登录流程进行中视为「用户取消登录」，不重建。"""
+        try:
+            from src import server as _server  # noqa: PLC0415（延迟导入规避循环依赖）
+
+            return not bool(_server._LOGIN_GATE.get("pending"))
+        except Exception:  # noqa: BLE001（状态源不可用：按需要重建处理）
+            return True
+
+    def _schedule_tab2_rebuild(self) -> None:
+        """右窗关闭后的重建调度（一次性定时，不是周期轮询）。
+
+        采集中 → 立即重建（采集不能没有窗口）；空闲 → 15s 后重建（用户口径
+        「关掉了左边也能打开它」，留出误关的反悔窗口）。
+        """
+        if self._loop is None or not self._tab2_should_rebuild():
+            return
+        delay = 0.0 if _server_has_running_collect() else 15.0
+        try:
+            self._loop.call_later(delay, lambda: asyncio.ensure_future(self._rebuild_tab2_once()))
+        except Exception:  # noqa: BLE001（loop 关闭中：不重建）
+            pass
+
+    async def _rebuild_tab2_once(self) -> None:
+        """真正重建右窗：已存在则跳过（15s 窗口内用户可能已手动开回来）。"""
+        if self._stop is not None and self._stop.is_set():
+            return
+        if self.tab2() is not None:
+            return
+        try:
+            from src import config, engine_pool  # noqa: PLC0415
+
+            eng = await engine_pool.pool.get("default")
+            ctx = await eng.context()
+            p = await ctx.new_page()
+            self.register_tab2(p)
+            self.watch(p, is_shell=False)
+            url = await _keeper_tab2_target_url(config, engine_pool)
+            await p.goto(url, wait_until="domcontentloaded", timeout=8000)
+            print(f"[xhs-leads][keeper] 右侧调试窗已重建（{url}）", flush=True)
+        except Exception as e:  # noqa: BLE001（重建失败下次关闭事件再试，不做周期重试）
+            print(f"[xhs-leads][keeper] 右侧调试窗重建失败: {e!r}", flush=True)
     def _handle_crash(self, page, is_shell: bool) -> None:
         """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
         App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
@@ -1388,32 +1432,6 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
 _KEEPER_SWEEP_LAST = [0.0]
 
 
-async def _keeper_link_tab2(t2, coord, ctx, config, engine_pool):
-    """Tab2 登录态联动（R-6.49 用户判据：登录→login、采集→explore；启动路径禁 explore）：
-    未登录 → 拉回 login-hint（含采集残留页）；已登录 → 采集页（xiaohongshu.com）保持、
-    其余本地页校准到 APP 首页。explore 不再由 keeper 主动打开——仅采集 open_tab2_window 触发。
-
-    R-6.53n 修复：_keeper_tab2_target_url 自 R-6.49 起恒返回 /login-hint（"无论登录态兜底"），
-    原保持条件 `"xiaohongshu.com" in u and "login-hint" not in _url` 中后项恒 False → 死代码，
-    采集中的 search_result/explore 页每轮被 goto 拉回 login-hint → 采集器解析提示页无卡片 → 0 条
-    （notes 自 R-6.49 起从未落库，与 21:32/21:38 两次采集 0 条取证一致）。
-    改为：小红书域页（采集搜索页/explore/登录墙页）一律保持，不拉回。"""
-    coord.register_tab2(t2)
-    coord.watch(t2, is_shell=False)
-    try:
-        _url = await _keeper_tab2_target_url(config, engine_pool)
-        u = t2.url or ""
-        if "xiaohongshu.com" in u:
-            return  # 小红书域页（采集搜索页/explore/登录墙页）：保持，不拉回 login-hint
-        if u != _url and u.rstrip("/") != _url.rstrip("/"):
-            await t2.goto(_url, wait_until="domcontentloaded", timeout=8000)
-        # R-6.53t：不再每轮 close_orphan_explore——R-6.28 起 login_status 已不 new_page
-        # 开 explore 判定页，此调用只剩每 5s 误关用户手动打开的第二个 explore 标签的副作用
-        # （用户实测「右侧窗口似乎有一些自动化操作」根因之一）。
-    except Exception:  # noqa: BLE001（导航失败不阻断监护，下轮再试）
-        pass
-
-
 def _server_has_running_collect() -> bool:
     """R-6.53o：采集执行期间 keeper 暂停 tab2 治理/崩溃清理，避免与采集器 CDP
     并发触发引擎假死、且崩溃恢复清理误关采集中的搜索页。延迟导入规避循环依赖。"""
@@ -1422,107 +1440,6 @@ def _server_has_running_collect() -> bool:
         return any(st.get("status") == "running" for st in _server._COLLECT_TASKS.values())
     except Exception:  # noqa: BLE001（状态源不可用视为不采集，keeper 正常治理）
         return False
-
-
-async def _keeper_snapshot(engine_pool, coord, last):
-    """取引擎上下文 + 采集态判定 + 页面集快照日志。返回 (eng, ctx, collecting)。"""
-    eng = await engine_pool.pool.get("default")
-    ctx = await eng.context()
-    collecting = _server_has_running_collect()
-    if collecting:
-        print("[xhs-leads][keeper] 采集执行中：暂停 tab2 治理/清理（避免 CDP 并发与误关采集页）", flush=True)
-    else:
-        _keeper_log_snapshot(ctx, coord, last)
-    return eng, ctx, collecting
-
-
-async def _keeper_missing_shell(base, coord, ctx, engine_pool, on_shell_closed) -> tuple:
-    """壳窗引用缺失的处置：重建窗口 / 判定应用退出。返回 (shell, verdict)。
-
-    verdict="exit" / "continue" 时调用方直接返回该值；None 表示本轮照常继续。
-    """
-    eng = await engine_pool.pool.get("default")
-    if eng.rebuild_age() < 60:
-        # R-6.53d：引擎重建需要数秒，壳窗重开可能在引擎就绪前调用——
-        # 失败不退出，下轮重试；60s 重建窗口过后自然走下方退出分支收敛。
-        try:
-            shell = await _keeper_rebuild_shell(ctx, base, coord, engine_pool)
-        except Exception as e:  # noqa: BLE001（重建未就绪：下轮重试）
-            print(f"[xhs-leads][keeper] 引擎重建期壳窗重开暂未就绪（下轮重试）: {e!r}", flush=True)
-            shell = None
-        if shell is not None:
-            print("[xhs-leads][keeper] 引擎重建，壳窗已重开，应用继续", flush=True)
-            return shell, None
-        print("[xhs-leads][keeper] 引擎重建期壳窗未就绪，下轮轮询重试（不退出）", flush=True)
-        return None, "continue"
-    if coord.shell_close_age() < 1e17 and eng.is_connected_now():
-        # R-6.53f：壳窗 close 事件已有记录且引擎存活（非崩溃）→ 用户真关主窗
-        print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭（引擎存活），触发应用退出", flush=True)
-        on_shell_closed()
-        return None, "exit"
-    if on_shell_closed is not None:
-        print("[xhs-leads][keeper] 兜底轮询确认主窗已关闭，触发应用退出", flush=True)
-        on_shell_closed()
-        return None, "exit"
-    return None, None
-
-
-async def _keeper_shell_pass(base, coord, ctx, engine_pool, collecting, on_shell_closed) -> tuple:
-    """崩溃恢复清理 + 壳窗注册/缺失处置。返回 (shell, verdict)。"""
-    # R-6.48o：崩溃恢复检测——壳窗引用失效（引擎崩溃/会话重建）后扫描重新
-    # 找到 → 判定为崩溃恢复，关闭所有非主窗口残留（is_closed 判活盲区见
-    # _keeper_shell_effective：引用不在当前页面集即视为失效）。
-    was_dead = _keeper_shell_effective(coord, ctx) is None
-    shell = await _keeper_find_shell(ctx, base, coord)
-    if was_dead and shell is not None:
-        if collecting:
-            print("[xhs-leads][keeper] 采集执行中：跳过崩溃恢复清理（保留采集页）", flush=True)
-        else:
-            n = await _keeper_recovery_cleanup(ctx, shell)
-            if n:
-                print(f"[xhs-leads][keeper] 崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口", flush=True)
-    if shell is not None:
-        coord.register_shell(shell)
-        coord.watch(shell, is_shell=True)
-        return shell, None
-    if coord.shell() is not None:
-        return None, None
-    # R-6.53b：引擎崩溃自动重建后壳窗缺失（新引擎进程内没有旧壳窗）——
-    # 重建时间窗内重开壳窗，避免 keeper 误判「主窗已关闭→退出应用」；
-    # 非重建场景（用户真关主窗且 close 事件丢失）维持原退出语义。
-    return await _keeper_missing_shell(base, coord, ctx, engine_pool, on_shell_closed)
-
-
-async def _keeper_tab2_pass(ctx, coord, config, engine_pool) -> None:
-    """采集空闲时的 Tab2 登录态联动 + 空白页清理（30s 节流，R-6.53t）。"""
-    t2 = await _keeper_find_tab2(ctx, coord.shell(), coord)
-    if t2 is not None:
-        await _keeper_link_tab2(t2, coord, ctx, config, engine_pool)
-    # R-6.53t：空白清理降频 5s→30s（高频清理与用户手动浏览打架，
-    # 用户实测「右侧窗口似乎有一些自动化操作」根因之一）。
-    if time.monotonic() - _KEEPER_SWEEP_LAST[0] >= 30.0:
-        _KEEPER_SWEEP_LAST[0] = time.monotonic()
-        try:
-            n = await _keeper_sweep_blank(ctx, coord.shell())
-            if n:
-                print(f"[xhs-leads][keeper] 空白清理关闭 {n} 个页面", flush=True)
-        except Exception:  # noqa: BLE001（清理失败不阻断监护，下轮再试）
-            pass
-
-
-async def _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_pool, last) -> str:
-    """兜底轮询单轮：壳窗缺失（close 事件丢失）→ 触发应用退出；Tab2 登录态联动。返回 'exit'|'continue'。"""
-    try:
-        _, ctx, collecting = await _keeper_snapshot(engine_pool, coord, last)
-        _shell, verdict = await _keeper_shell_pass(
-            base, coord, ctx, engine_pool, collecting, on_shell_closed)
-        if verdict:
-            return verdict
-        if not collecting:
-            await _keeper_tab2_pass(ctx, coord, config, engine_pool)
-    except Exception:  # noqa: BLE001（引擎未就绪：下轮再试）
-        pass
-    return "continue"
 
 
 async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed: "Callable[[], None] | None" = None) -> None:
@@ -1549,8 +1466,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
                 print(f"[xhs-leads][keeper] Tab1 初始化监护暂不可用（重试）: {e!r}", flush=True)
             await asyncio.sleep(2.0)
 
-    # 兜底轮询：壳窗缺失（close 事件丢失场景）→ 触发应用退出；仅监护不重建
-    while not stop.is_set():
-        await asyncio.sleep(5.0)
-        if await _keeper_poll_pass(base, coord, stop, on_shell_closed, config, engine_pool, last) == "exit":
-            break
+    # R-6.53z8d：取消 5s 兜底轮询。「壳窗被关=退出应用」由 close 事件驱动
+    # （_handle_close → 3s 校验 → _shell_closed_verify）；右窗被关由 close 事件
+    # 按需重建（_schedule_tab2_rebuild）。此处只阻塞等待停止信号，零周期查询。
+    await asyncio.to_thread(stop.wait)
