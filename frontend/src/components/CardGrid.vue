@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import type { Note } from '../types'
 import { coverProxy } from '../store'
 import { appState, selectedCount, toast } from '../store'
+import { descIsOnlyTags } from '../tagOnly'
 
 const props = defineProps<{
   notes: Note[]
@@ -55,15 +56,6 @@ function phStyle(note: Note): Record<string, string> {
   let h = 0
   for (const ch of note.feed_id || '') h = (h * 31 + ch.charCodeAt(0)) % 997
   return { background: palette[h % palette.length] }
-}
-
-/** 正文是否只有话题标签：去掉 #话题 与标点空白后不剩文字 => 作者只勾了标签、没写正文。
- *  这类笔记可评分、可看数据，但没有可克隆的文字内容。 */
-function descTagOnly(note: Note): boolean {
-  const d = (note.desc || '').replace(/[\r\n]+/g, ' ').trim()
-  if (!d) return false
-  const stripped = d.replace(/#[^#\s]+/g, '').replace(/[，。！？、,.!?\s@【】（）()]/g, '').trim()
-  return stripped.length === 0
 }
 
 function onCardClick(note: Note, ev: MouseEvent) {
@@ -296,7 +288,7 @@ function fmtPub(ts: string | number | null): string {
         <div class="title">
           {{ note.title || '（无标题）' }}
           <span
-            v-if="descTagOnly(note)"
+            v-if="descIsOnlyTags(note.desc)"
             class="tag-only"
             title="这条笔记正文只有话题标签、没有文字内容：可评分选品，不适合克隆仿写"
           >正文仅标签</span>
