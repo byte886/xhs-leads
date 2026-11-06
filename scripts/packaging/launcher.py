@@ -273,7 +273,23 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001（清理失败不影响主退出）
             print(f"[xhs-leads] 引擎清理异常: {e!r}", file=sys.stderr)
 
+    # R-6.53z8e：进程级看门狗。主进程被强杀/崩溃时 atexit/signal 都不执行，
+    # 引擎会残留成孤儿；子进程靠管道 EOF（内核事件）感知父进程消失并清理，
+    # 零轮询、不碰任何业务状态。启动失败只影响残留清理，不阻断应用。
+    try:
+        from src import watchdog  # noqa: PLC0415
+
+        watchdog.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[xhs-leads][watchdog] 看门狗启动失败（不影响启动）: {e!r}", file=sys.stderr)
+
     asyncio.run(_amain(url))
+    try:
+        from src import watchdog as _wd  # noqa: PLC0415
+
+        _wd.stop()  # 正常退出：主动关写端，让看门狗收尾后退出
+    except Exception:  # noqa: BLE001
+        pass
     print("[xhs-leads] 已退出")
     return 0
 
