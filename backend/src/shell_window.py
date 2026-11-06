@@ -1289,8 +1289,9 @@ async def _keeper_sweep_blank(ctx, shell) -> int:
     R-6.48o：扩展 chrome://newtab 清理——引擎崩溃后 Chrome 会话恢复会把崩溃前
     的标签全部还原，新上下文首个默认页 chrome://newtab 也在此列；此前只清
     ""/about:blank 导致崩溃恢复后残留空标签（用户实测：崩溃重启后多出空白窗口）。
-    R-6.53t：返回关闭数并打日志（用户手动新标签 5s 内被关=「自动化操作」取证）；
-    调用侧已降频到 30s，避免高频清理与手动浏览打架。
+    R-6.53t：返回关闭数并打日志（用户手动新标签 5s 内被关=「自动化操作」取证）。
+    R-6.53z8j：原先靠 _KEEPER_SWEEP_LAST 把调用降频到 30s，但 5s 轮询删掉后
+    本函数只在启动时调一次，节流变量从未被读取（死代码），一并删除。
     """
     closed = 0
     # R-6.53z8：/login 是登录窗扫码入口，keeper 一律不主动关——平台登录成功会
@@ -1430,9 +1431,6 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
         await _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config)
     await _keeper_sweep_blank(ctx, coord.shell())
 
-
-# R-6.53t：空白清理 30s 节流状态（跨 keeper 轮询保持）
-_KEEPER_SWEEP_LAST = [0.0]
 
 
 def _server_has_running_collect() -> bool:
