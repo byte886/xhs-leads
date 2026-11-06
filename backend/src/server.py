@@ -130,7 +130,7 @@ async def _shutdown_close_engines():
         from src import browser_client
         await asyncio.wait_for(browser_client.stop(), timeout=20)
     except Exception as e:  # noqa: BLE001
-        print(f"[xhs-leads][server] 引擎关闭异常（非阻断）: {e}")
+        log.warning(f"引擎关闭异常（非阻断）: {e}")
 
 
 @app.post("/api/cleanup_images")
@@ -1440,6 +1440,7 @@ def _finalize_paused(state: dict, req, account_id: str, reason: str) -> None:
     )
 
 
+@_log.tagged("worker:collect:round")
 async def _collect_run_rounds(state: dict, req, ctx: dict, account_id: str):
     """多轮采集：撞墙 → 暂停等登录 → 扫码恢复后重新搜索续采（跳过已入库）。
 
@@ -1487,6 +1488,7 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
         state["note"] = f"已采集 {state['saved']} 条"
 
 
+@_log.tagged("worker:collect")
 async def _collect_worker(state: dict, req, account_id: str) -> None:
     """采集 worker：多轮「搜索 → 逐条补全入库」，撞墙暂停等登录后自动续采。
 
@@ -2825,6 +2827,7 @@ async def _close_idle_collect_pages(eng) -> None:
     log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
 
 
+@_log.tagged("win:collect")
 async def _sync_collect_visibility(visible: bool) -> None:
     """R-6.19 开关即时联动：开→采集窗 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
     try:

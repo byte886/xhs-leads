@@ -12,6 +12,10 @@
     xlog.get("engine").warning("连接重试 %s", n)
     xlog.redact("web_session=abc123")  # → "web_session=***"
 """
+import asyncio
+import contextlib
+import contextvars
+import functools
 import datetime
 import json
 import logging
@@ -19,6 +23,63 @@ import logging.handlers
 import pathlib
 import re
 import time
+
+# ---------------------------------------------------------------------------
+# 来源标签（R-6.53z8i）：窗口触发 / 窗口下的工人 / 无窗口后台
+# ---------------------------------------------------------------------------
+# 标签用冒号分级，可按需要分多细：
+#   win:shell            左壳窗自己的动作
+#   win:collect          采集窗（导航/重建/可见性）
+#   win:collect:login    采集窗上的登录流程
+#   worker:collect       采集任务工人
+#   bg:engine            无窗口的引擎层
+#   bg:sse               事件总线
+_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar("log_source", default="bg:main")
+
+
+class _SourceFilter(logging.Filter):
+    """把当前 contextvar 的来源标签塞进每条 LogRecord（handler 级，覆盖全部子 logger）。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.source = _SOURCE.get()
+        return True
+
+
+@contextlib.contextmanager
+def scope(tag: str):
+    """标注日志来源，只在触发入口包一层，整条调用链自动继承。
+
+        with xlog.scope("worker:collect"):
+            await _collect_worker(...)   # 里面所有日志自动带 worker:collect
+
+    asyncio 每个 task 创建时复制 context，采集任务与守卫循环互不串味。
+    """
+    token = _SOURCE.set(tag)
+    try:
+        yield
+    finally:
+        _SOURCE.reset(token)
+
+
+def tagged(tag: str):
+    """装饰器版 scope：@xlog.tagged("win:collect:login")，用于函数级入口。"""
+
+    def deco(fn):
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def aw(*a, **k):
+                with scope(tag):
+                    return await fn(*a, **k)
+            return aw
+
+        @functools.wraps(fn)
+        def sw(*a, **k):
+            with scope(tag):
+                return fn(*a, **k)
+        return sw
+
+    return deco
+
 
 # ---------------------------------------------------------------------------
 # 敏感值遮蔽
@@ -67,20 +128,23 @@ def _setup() -> None:
         return
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        "%(asctime)s %(levelname)s [%(source)s][%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     root = logging.getLogger("src")
     root.setLevel(logging.INFO)
     # 控制台（app.log 双写，避免 print 时代排障信息丢失）
+    flt = _SourceFilter()
     console = logging.StreamHandler()
     console.setFormatter(fmt)
+    console.addFilter(flt)
     root.addHandler(console)
     # 滚动文件
     fh = logging.handlers.RotatingFileHandler(
         _LOGS_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf8",
     )
     fh.setFormatter(fmt)
+    fh.addFilter(flt)
     root.addHandler(fh)
     _INITIALIZED = True
 

@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from src import logger as xlog  # noqa: E402
+log = xlog.get("collect")
 # 允许从任意 cwd 导入 score 模块
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.score import rank_notes, _to_int  # noqa: E402
@@ -284,7 +286,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
 
 async def _cli_search(args) -> list:
     """CLI 阶段 1：多关键词搜索 + 去重。返回合并后的笔记列表。"""
-    print(f"[xhs-leads][collect] [1/4] 多关键词搜索: {args.keywords}")
+    log.info(f"[1/4] 多关键词搜索: {args.keywords}")
     all_notes = []
     seen = set()
     for kw in args.keywords:
@@ -295,12 +297,12 @@ async def _cli_search(args) -> list:
                     seen.add(n["feed_id"])
                     n["keyword"] = kw
                     all_notes.append(n)
-            print(f"[xhs-leads][collect] 「{kw}」→ +{len(notes_kw)} 条，累计去重 {len(all_notes)} 条")
+            log.info(f"「{kw}」→ +{len(notes_kw)} 条，累计去重 {len(all_notes)} 条")
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads][collect] 「{kw}」失败: {e}")
+            log.warning(f"「{kw}」失败: {e}")
         time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     notes = all_notes[: args.limit]
-    print(f"[xhs-leads][collect] → 最终取 {len(notes)} 条（去重后）")
+    log.info(f"→ 最终取 {len(notes)} 条（去重后）")
     return notes
 
 
@@ -311,7 +313,7 @@ async def _cli_enrich(con: sqlite3.Connection, notes: list, keyword: str) -> lis
     now = datetime.datetime.now().isoformat(timespec="seconds")
     existing = {r[0] for r in con.execute("SELECT feed_id FROM notes").fetchall()}
     todo = [n for n in notes if n["feed_id"] not in existing]
-    print(f"[xhs-leads][collect] [2/4] 详情+粉丝补全（待处理 {len(todo)} 条，已跳过 {len(notes)-len(todo)} 条）...")
+    log.info(f"[2/4] 详情+粉丝补全（待处理 {len(todo)} 条，已跳过 {len(notes)-len(todo)} 条）...")
     cache = {}
     for i, n in enumerate(todo):
         try:
@@ -320,13 +322,13 @@ async def _cli_enrich(con: sqlite3.Connection, notes: list, keyword: str) -> lis
             n["score_info"] = rank_notes([n])[0]["score_info"]
             _upsert_note(con, n, keyword, now)
             if (i + 1) % 10 == 0 or (i + 1) == len(todo):
-                print(f"[xhs-leads][collect] → {i+1}/{len(todo)}（库内累计 {con.execute('SELECT COUNT(*) FROM notes').fetchone()[0]} 条）")
+                log.info(f"→ {i+1}/{len(todo)}（库内累计 {con.execute('SELECT COUNT(*) FROM notes').fetchone()[0]} 条）")
         except Exception as e:  # noqa: BLE001
-            print(f"[xhs-leads][collect] → 第 {i+1} 条失败（{n.get('title','')[:16]}）: {e}，继续下一批")
+            log.warning(f"→ 第 {i+1} 条失败（{n.get('title','')[:16]}）: {e}，继续下一批")
             time.sleep(5)
     con.commit()
     ranked = rank_notes(todo)
-    print(f"[xhs-leads][collect] → 已完成落库，库内共 {con.execute('SELECT COUNT(*) FROM notes').fetchone()[0]} 条")
+    log.info(f"→ 已完成落库，库内共 {con.execute('SELECT COUNT(*) FROM notes').fetchone()[0]} 条")
     return ranked
 
 
@@ -338,10 +340,10 @@ async def _main_cli(args):
     notes = await _cli_search(args)
     ranked = await _cli_enrich(con, notes, args.keywords[0])
 
-    print("\n[xhs-leads][collect] === TOP 10 评分结果（本次新增） ===")
+    log.info("\n=== TOP 10 评分结果（本次新增） ===")
     for n in ranked[:10]:
         si = n["score_info"]
-        print(f"[xhs-leads][collect] [{si['tag']}] {si['score']:5.1f}分  赞{n.get('liked_count')} 粉{n.get('fans_count')}  {n.get('title','')[:24]}")
+        log.info(f"[{si['tag']}] {si['score']:5.1f}分  赞{n.get('liked_count')} 粉{n.get('fans_count')}  {n.get('title','')[:24]}")
     con.close()
 
 
