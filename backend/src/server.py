@@ -1399,6 +1399,7 @@ def _on_collect_progress(state: dict):
     return _cb
 
 
+@_log.tagged("worker:collect:round")
 async def _collect_round(state: dict, req, ctx: dict, account_id: str):
     """一轮「搜索 → 逐条补全入库」；撞墙抛 BrowserLoginRequiredError 给外层暂停。
 
@@ -1440,7 +1441,7 @@ def _finalize_paused(state: dict, req, account_id: str, reason: str) -> None:
     )
 
 
-@_log.tagged("worker:collect:round")
+@_log.tagged("worker:collect:retry")
 async def _collect_run_rounds(state: dict, req, ctx: dict, account_id: str):
     """多轮采集：撞墙 → 暂停等登录 → 扫码恢复后重新搜索续采（跳过已入库）。
 
