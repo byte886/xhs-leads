@@ -415,6 +415,7 @@ class WindowCoordinator:
             p = await ctx.new_page()
             self.register_collect_win(p)
             self.watch(p, is_shell=False)
+            _watch_collect_win_login(p)
             url = await _keeper_collect_target_url(config, engine_pool)
             await p.goto(url, wait_until="domcontentloaded", timeout=8000)
             log.info(f"右侧调试窗已重建（{url}）")
@@ -1359,6 +1360,89 @@ def _keeper_log_snapshot(ctx, coord, last):
     return last[0]
 
 
+# R-6.53z8k+ 扫码路径：右窗恒开登录页后，用户直接扫码、不再点「去登录」，
+# 守卫的 _LOGIN_GATE pending 事件永不触发 → 登录成功的 Cookie 没人导入 →
+# 后端命中「失效记忆」一直判未登录。这里挂采集窗导航事件补上这条路径
+# （事件驱动，30s 节流；只在页面已离开 /login 且持有 web_session 时触发）。
+_LOGIN_PROBE_LAST = [0.0]
+_LOGIN_PROBE_GAP = 30.0
+
+
+def _watch_collect_win_login(page) -> None:
+    """给采集窗挂导航监听：扫码成功后自动导入 Cookie（同一页只挂一次）。"""
+    if page is None or not hasattr(page, "on"):
+        return  # 测试替身 / 页已销毁
+    if getattr(page, "_xhs_login_probe", False):
+        return
+    try:
+        setattr(page, "_xhs_login_probe", True)
+        page.on("framenavigated",
+                lambda *_a: asyncio.create_task(_probe_collect_win_login(page)))
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"采集窗登录监听挂载失败: {e!r}")
+
+
+async def _probe_collect_win_login(page) -> None:
+    """页面离开 /login 且持有 web_session → 把 Cookie 导入引擎（幂等，30s 节流）。"""
+    now = time.monotonic()
+    if now - _LOGIN_PROBE_LAST[0] < _LOGIN_PROBE_GAP:
+        return
+    _LOGIN_PROBE_LAST[0] = now
+    xhs = await _login_cookies_on_browsing_page(page)
+    if not xhs:
+        return
+    await _post_import_cookies(xhs)
+
+
+async def _login_cookies_on_browsing_page(page) -> list:
+    """页面已离开 /login 时，返回带 web_session 的小红书 Cookie；否则空列表。"""
+    if not await _is_browsing_page(page):
+        return []
+    xhs = await _xhs_cookies(page)
+    if not any(c.get("name") == "web_session" for c in xhs):
+        return []
+    return xhs
+
+
+async def _is_browsing_page(page) -> bool:
+    """当前页是否小红书浏览页（已离开 /login）。"""
+    try:
+        u = page.url or ""
+    except Exception:  # noqa: BLE001
+        return False
+    return "xiaohongshu.com" in u and "/login" not in u
+
+
+async def _xhs_cookies(page) -> list:
+    """读当前上下文的小红书域 Cookie（读取失败返回空）。"""
+    try:
+        cs = await page.context.cookies()
+    except Exception:  # noqa: BLE001
+        return []
+    return [c for c in cs if "xiaohongshu" in (c.get("domain") or "")]
+
+
+async def _post_import_cookies(cookies) -> None:
+    """POST /api/auth/import_cookies（触发登录成功链路：解除失效记忆/唤醒续采/推事件）。"""
+    from src import config  # noqa: PLC0415
+
+    base = f"http://127.0.0.1:{config.front_port()}"
+    body = json.dumps({"cookies": cookies}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/auth/import_cookies", data=body,
+        headers={"Content-Type": "application/json"})
+
+    def _do() -> bytes:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read()
+
+    try:
+        await asyncio.to_thread(_do)
+        log.info("扫码成功——Cookie 已自动导入引擎（未点「去登录」路径）")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"扫码自动导入 Cookie 失败: {e!r}")
+
+
 @xlog.tagged("win:collect:calibrate")
 async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None:
     """R-6.37i 拆自 _keeper_setup_collect_win：复用残留 采集窗 时校准窗口并注册监听。
@@ -1375,6 +1459,7 @@ async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None
         await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
         coord.register_collect_win(t2)
         coord.watch(t2, is_shell=False)
+        _watch_collect_win_login(getattr(t2, "page", t2))
     except Exception as e:  # noqa: BLE001
         log.warning(f"采集窗 采集窗口复用校准失败: {e!r}")
 
@@ -1402,13 +1487,14 @@ async def _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config):
                 page = await open_collect_window(
                     ctx,
                     coord.shell(),
-                    url=_t2_url or f"http://127.0.0.1:{config.front_port()}/login-hint",
+                    url=_t2_url,
                     user_data_dir=eng.user_data_dir,
                     executable=_exec,
                 )
                 # open_collect_window 已内建 goto/login-hint、标题守护、窗口校准
                 coord.register_collect_win(page)
                 coord.watch(page, is_shell=False)
+                _watch_collect_win_login(page)
                 return
             except Exception as e:  # noqa: BLE001
                 if _attempt == 0:
@@ -1419,6 +1505,48 @@ async def _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config):
 
 
 @xlog.tagged("win:shell")
+@xlog.tagged("win:collect:sweep")
+async def _keeper_dedupe_xhs_pages(ctx, coord) -> None:
+    """启动期去重：强杀后 Chrome 会话恢复 + 应用窗口新建 会各留一个采集页。
+
+    R-6.53z8k+：右窗改恒开登录页后，重启实测右窗出现两个 explore 标签（用户红线
+    「禁止多窗口残留」）。只关 URL 完全相同、且不是 coord 已注册那页的多余副本。
+    """
+    keep = getattr(coord.collect_win(), "page", coord.collect_win())
+    dups = _duplicate_xhs_pages(ctx, keep)
+    n_xhs = len([p for p in ctx.pages if "xiaohongshu.com" in (getattr(p, "url", "") or "")])
+    log.info(f"采集页去重检查：小红书页 {n_xhs} 个，重复待关 {len(dups)} 个")
+    for p in dups:
+        try:
+            await p.close()
+            log.info(f"已关闭重复采集页（右窗只留一个）: {_page_key(p)[:50]}")
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"关闭重复采集页失败: {e!r}")
+
+
+def _duplicate_xhs_pages(ctx, keep) -> list:
+    """同 URL 的小红书页只留第一份（coord 已注册的 keep 优先保留）。"""
+    seen = {_page_key(keep)} - {""}
+    dups = []
+    for p in ctx.pages:
+        u = _page_key(p)
+        if p is keep or not u:
+            continue
+        if u in seen:
+            dups.append(p)
+            continue
+        seen.add(u)
+    return dups
+
+
+def _page_key(page) -> str:
+    """页 URL 归一（去 hash / 尾斜杠）；非小红书页返回空串。"""
+    u = getattr(page, "url", "") or ""
+    if "xiaohongshu.com" not in u:
+        return ""
+    return u.split("#")[0].rstrip("/")
+
+
 async def _keeper_init_pass(base, coord, config, engine_pool, last):
     """初始块：确保 Tab1 存在挂监听；采集窗 按开关初始创建一次；清理空白残留。"""
     eng = await engine_pool.pool.get("default")
@@ -1434,6 +1562,10 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
     if config.get_config().get("collect_tab_visible"):
         await _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config)
     await _keeper_sweep_blank(ctx, coord.shell())
+    await _keeper_dedupe_xhs_pages(ctx, coord)
+    # 会话恢复出来的页可能晚于 init 出现：2.5s 后再查一次（一次性延迟，非轮询）
+    asyncio.get_running_loop().call_later(
+        2.5, lambda: asyncio.ensure_future(_keeper_dedupe_xhs_pages(ctx, coord)))
 
 
 

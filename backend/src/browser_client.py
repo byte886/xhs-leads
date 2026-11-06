@@ -97,12 +97,17 @@ async def recover_collect_window(account_id: str = "default") -> int:
 
 
 def _is_purgeable_xhs_page(url: str) -> bool:
-    """R-6.53：是否为可清理的旧 xhs 页（登录墙 / 验证码页保留）。"""
-    return (
-        "xiaohongshu.com" in url
-        and "/website-login" not in url
-        and "captcha" not in url
-    )
+    """R-6.53 残留页判据：只清**搜索结果页 / 详情页 / 作者页**这类采集过程页。
+
+    R-6.53z8k+（Nov 6 实测）：原判据把 explore 首页也当残留，采集窗正停在该页时被
+    一起关掉 → keeper 判定「右窗被关闭」并重建 → 采集任务丢页直接终止。explore 首页
+    与登录页是采集窗的正常驻留页，必须保留；登录墙 / 验证码页同样保留。
+    """
+    if "xiaohongshu.com" not in url:
+        return False
+    if "/website-login" in url or "captcha" in url or "/login" in url:
+        return False
+    return "search_result" in url or "/explore/" in url or "/user/" in url
 
 
 async def _close_purgeable_pages(pages) -> int:
@@ -532,11 +537,19 @@ LOGIN_URL = "https://www.xiaohongshu.com/login"
 # 刷新页面——实测首页刷新/直连搜索页 URL 更容易被要求登录或弹风控。搜索、进详情、
 # 进作者页一律模拟真人操作（点搜索框 → 逐字键入 → 回车 / 点卡片）。登录态不确定时
 # 走登录页间接进入：登录页在已登录情况下会自己跳到 explore，我们不插手。
+# R-6.53z8k+（Nov 6 实测）：真登录态下可见搜索框是 #search-input-in-feeds（textarea，
+# 实测 rect≈245,79,580,24）；旧的 #search-input 是隐藏元素（rect 全 0），点它等于点 (0,0)
+# ——这是历史「点搜索框没反应」的代码层原因。按候选顺序取**有尺寸**的那个。
 _SEARCH_BOX_JS = """() => {
-  const el = document.querySelector('#search-input') || document.querySelector('input.search-input');
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+  const cands = ['#search-input-in-feeds', 'textarea.search-input', '#search-input', 'input.search-input'];
+  for (const sel of cands) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 20 || r.height < 10) continue;
+    return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+  }
+  return null;
 }"""
 
 _NEEDS_LOGIN_JS = """() => {
@@ -607,7 +620,55 @@ async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
     await cdp_call(page.keyboard.press("Enter"), timeout=CDP_QUICK, label="search.enter")
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
     _check_login_wall(account_id, wall)
-    return appeared
+    if not appeared:
+        return False
+    return await _is_on_search_result(page)
+
+
+async def _is_on_search_result(page) -> bool:
+    """是否真的进了搜索结果页。
+
+    R-6.53z8k+（Nov 6 实测）：搜索没生效时 explore 首页本来就有 30 张推荐卡片，
+    只看「有卡片」会误判成功，把推荐流当成关键词结果入库（实测采到与关键词无关的
+    笔记）。必须再核对 URL 已进入 search_result。
+    """
+    try:
+        return "search_result" in (page.url or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_LOGO_JS = """() => {
+  const el = document.querySelector('a.side-bar-logo-wrapper') || document.querySelector('.header-logo');
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 10 || r.height < 10) return null;
+  return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+}"""
+
+
+async def _back_to_feeds(page) -> bool:
+    """在搜索结果页时点左上 logo 回首页（模拟点击；不用 URL、不刷新）。
+
+    R-6.53z8k+（Nov 6 实测）：结果页顶部搜索区的位置与首页不同，同坐标命中的是
+    DIV、点下去焦点落在 BODY，直接点框不会聚焦输入框。回首页后搜索入口才是稳定
+    可点的 #search-input-in-feeds。
+    """
+    try:
+        url = page.url or ""
+    except Exception:  # noqa: BLE001
+        return False
+    if "search_result" not in url:
+        return True
+    pos = await cdp_call(page.evaluate(_LOGO_JS), timeout=CDP_EVAL, label="back.logo", skip=True)
+    if not pos:
+        return False
+    await cdp_call(page.mouse.click(pos["x"], pos["y"]), timeout=CDP_QUICK, label="back.click")
+    await asyncio.sleep(2.5)
+    try:
+        return "search_result" not in (page.url or "")
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _prepare_search_page(keyword: str, filters: dict | None = None,
@@ -622,6 +683,7 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     if not await _ensure_browse_page(page, account_id):
         raise BrowserLoginRequiredError(
             "小红书要求登录（请在采集窗完成扫码/人机验证后重试）")
+    await _back_to_feeds(page)
     appeared = await _search_by_typing(page, keyword, account_id)
     if not appeared:
         appeared = await _search_by_typing(page, keyword, account_id)
@@ -769,13 +831,16 @@ async def _search_loop(page, keyword: str, filters, account_id: str, items: list
 
 
 async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=None,
-                 filters: dict | None = None, account_id: str = "default") -> dict:
+                 filters: dict | None = None, account_id: str = "default",
+                 keep_page: bool = False) -> dict:
     """任务式采集：滚动平台搜索页逐批提取，支持去重合并、进度回调与中途停止。
 
     - on_progress(n, items)：每批提取后回调已采集数量与 items 引用
     - should_stop()：返回 True 时提前收尾（用户点「停止采集」）
     - filters：搜索筛选（排序/笔记类型/发布时间/搜索范围/位置距离）
     - account_id：使用哪个账号引擎采集（默认 default）
+    - keep_page：True 时保留搜索页并留在活动页登记，供随后逐条点开补详情；
+      False（默认）结束即登记清除并关页。配套释放走 release_search_page()。
     - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
     - R-6.53：渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
       最多 2 次；已采 items 保留。
@@ -789,12 +854,17 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     try:
         page, _stale = await _search_loop(page, keyword, filters, account_id,
                                           items, seen, limit, 0, should_stop, on_progress)
+        if page is not None:
+            # 崩溃重开会换成新页：同步登记，否则详情阶段拿着已崩的旧页
+            _remember_page(page, account_id)
+        log.info("搜索结束 url=%s cards=%d", _page_url_now(page), len(items))
         return {"keyword": keyword, "count": len(items), "items": items,
                 "stopped": bool(should_stop and should_stop())}
     finally:
-        _forget_page(account_id)
-        if page is not None:
-            await _close_page_safe(page, account_id)
+        if not keep_page:
+            _forget_page(account_id)
+            if page is not None:
+                await _close_page_safe(page, account_id)
 
 # ===========================================================================
 # 详情 / 作者 / 评论
@@ -804,27 +874,34 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
 # --------------------------------------------------------------------------
 _ACTIVE_PAGES: dict[str, object] = {}
 
-_CLICK_NOTE_JS = """(fid) => {
-  const links = [...document.querySelectorAll('section.note-item a')];
-  const hit = links.find(a => ((a.getAttribute('href') || '') + '').indexOf(fid) >= 0);
+_CARD_SCROLL_JS = """(fid) => {
+  const cards = [...document.querySelectorAll('section.note-item')];
+  const hit = cards.find(c => {
+    const a = c.querySelector('a');
+    return a && ((a.getAttribute('href') || '') + '').indexOf(fid) >= 0;
+  });
   if (!hit) return false;
-  hit.click();
+  hit.scrollIntoView({block: 'center', inline: 'nearest'});
   return true;
+}"""
+
+_CARD_POINT_JS = """(fid) => {
+  const cards = [...document.querySelectorAll('section.note-item')];
+  const hit = cards.find(c => {
+    const a = c.querySelector('a');
+    return a && ((a.getAttribute('href') || '') + '').indexOf(fid) >= 0;
+  });
+  if (!hit) return null;
+  const r = hit.getBoundingClientRect();
+  if (r.width < 50 || r.height < 50) return null;
+  const y = r.y + Math.min(100, r.height / 2);
+  if (y < 90 || y > 750) return null;
+  return {x: Math.round(r.x + r.width / 2), y: Math.round(y)};
 }"""
 
 _CLICK_AUTHOR_JS = """(uid) => {
   const links = [...document.querySelectorAll('a[href*="/user/profile/"]')];
   const hit = links.find(a => ((a.getAttribute('href') || '') + '').indexOf(uid) >= 0);
-  if (!hit) return false;
-  hit.click();
-  return true;
-}"""
-
-_BACK_JS = """() => {
-  const cands = [...document.querySelectorAll('div, span, button, [role="button"]')]
-    .filter(e => e.offsetWidth && (e.innerText || '').trim().length <= 4
-                 && /返回|关闭/.test((e.innerText || '').trim()));
-  const hit = cands[0];
   if (!hit) return false;
   hit.click();
   return true;
@@ -840,6 +917,25 @@ def _forget_page(account_id: str = "default") -> None:
     _ACTIVE_PAGES.pop(account_id, None)
 
 
+async def release_search_page(account_id: str = "default") -> None:
+    """释放 search(keep_page=True) 留下的搜索页：清登记并关页（补全结束后调用）。"""
+    page = _ACTIVE_PAGES.pop(account_id, None)
+    if page is None:
+        return
+    try:
+        await _close_page_safe(page, account_id)
+    except Exception:  # noqa: BLE001 释放失败不影响任务收尾
+        pass
+
+
+def _page_url_now(page) -> str:
+    """当前页 URL 摘要（诊断用，取不到返回 ?）。"""
+    try:
+        return str(page.url)[:90]
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
 def _active_page(account_id: str = "default"):
     """取活动搜索页；已关闭视为没有（调用方按缺数据降级，不回退到 URL）。"""
     page = _ACTIVE_PAGES.get(account_id)
@@ -852,16 +948,40 @@ def _active_page(account_id: str = "default"):
 
 
 async def _back_to_list(page) -> None:
-    """从详情页返回结果页：先点页面返回/关闭按钮，退化历史后退；不刷新、不输 URL。"""
-    clicked = await cdp_call(page.evaluate(_BACK_JS), timeout=CDP_QUICK,
-                             label="back.click", skip=True)
-    if clicked:
-        await asyncio.sleep(1.2)
-        return
+    """从详情页返回结果页：历史后退（实测详情页没有可见返回/关闭按钮）；不刷新、不输 URL。"""
     try:
         await cdp_call(page.go_back(), timeout=CDP_NAV, label="back.history", skip=True)
+        await asyncio.sleep(1.5)
     except Exception:  # noqa: BLE001
         pass
+
+
+async def _open_note_card(page, note_id: str) -> bool:
+    """在搜索页点开目标卡片：先滚到视口内，再取坐标用真鼠标点击。
+
+    R-6.53z8k+（Nov 6 实测）：卡片 <a href> 是裸链接（无 xsec_token），JS `a.click()`
+    走裸链接会被平台判非法直接跳 /404?source=/404/sec_...；真鼠标点击时平台自己补
+    xsec_token，正常进入详情页。
+    """
+    found = await cdp_call(page.evaluate(_CARD_SCROLL_JS, note_id),
+                           timeout=CDP_EVAL, label="note.scroll", skip=True)
+    if not found:
+        return False
+    await asyncio.sleep(0.4)
+    pt = await cdp_call(page.evaluate(_CARD_POINT_JS, note_id),
+                        timeout=CDP_EVAL, label="note.point", skip=True)
+    if not pt:
+        return False
+    await cdp_call(page.mouse.click(pt["x"], pt["y"]), timeout=CDP_QUICK, label="note.click")
+    return True
+
+
+async def _read_note_detail(page) -> dict:
+    """详情页提取：确认已进详情 → 重新注入提取脚本（导航后旧注入已失效）→ 取字段。"""
+    if "/explore/" not in (page.url or ""):
+        return {}  # 没跳进详情（广告位/点击落空），按缺数据降级
+    await injections.inject_once(page, "extract")
+    return await page.evaluate("() => xhsExtractNoteDetail()")
 
 
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
@@ -873,15 +993,21 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
     """
     page = _active_page(account_id)
     if page is None:
-        log.info("无活动搜索页，跳过详情 note_id=%s（规则禁止 URL 进详情页）", note_id)
+        cached = _ACTIVE_PAGES.get(account_id)
+        log.info("无活动搜索页，跳过详情 note_id=%s（规则禁止 URL 进详情页）keys=%s closed=%s",
+                 note_id, list(_ACTIVE_PAGES),
+                 "none" if cached is None else cached.is_closed())
         return {}
-    hit = await cdp_call(page.evaluate(_CLICK_NOTE_JS, note_id),
-                         timeout=CDP_EVAL, label="note.click")
-    if not hit:
+    if not await _open_note_card(page, note_id):
+        log.info("详情卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
         return {}
     await asyncio.sleep(wait_ms / 1000)
     try:
-        return await page.evaluate("() => xhsExtractNoteDetail()")
+        d = await _read_note_detail(page)
+        log.info("详情提取 note_id=%s url=%s fields=%s", note_id,
+                 _page_url_now(page),
+                 sorted(d) if isinstance(d, dict) else type(d).__name__)
+        return d
     finally:
         await _back_to_list(page)
 
@@ -896,10 +1022,18 @@ async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -
 
 
 async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
-    """作者主页数据：在详情页点作者链接进入（不用 URL、不刷新）；无活动页返回 {}。"""
+    """作者主页数据：在详情页点作者链接进入（不用 URL、不刷新）；无活动页返回 {}。
+
+    R-6.53z8k+（Nov 6 实测）：在搜索页上 JS 点作者链接 URL 不变、但历史栈里已经 push
+    了一条，随后 `go_back()` 会把整页退回 /explore 首页 —— 本轮后续所有详情补全都点
+    不到卡片。所以只在详情页里点作者，搜索页直接跳过（调用方按 fans=0 降级）。
+    """
     page = _active_page(account_id)
     if page is None:
         log.info("无活动搜索页，跳过作者页 uid=%s", uid)
+        return {}
+    if "/explore/" not in (page.url or ""):
+        log.info("作者页需在详情页内打开，当前页=%s 跳过 uid=%s", _page_url_now(page), uid)
         return {}
     hit = await cdp_call(page.evaluate(_CLICK_AUTHOR_JS, uid),
                          timeout=CDP_EVAL, label="user.click")
@@ -913,14 +1047,16 @@ async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> di
 
 
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default") -> dict:
-    """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。"""
+    """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。
+
+    点卡片与详情补全走同一条路径（真鼠标点可见卡片，平台才会补 xsec_token）。
+    """
     page = _active_page(account_id)
     if page is None:
         log.info("无活动搜索页，跳过评论采集 note_id=%s", note_id)
         return {}
-    hit = await cdp_call(page.evaluate(_CLICK_NOTE_JS, note_id),
-                         timeout=CDP_EVAL, label="clients.click")
-    if not hit:
+    if not await _open_note_card(page, note_id):
+        log.info("评论卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
         return {}
     await asyncio.sleep(4)
     try:
@@ -943,6 +1079,7 @@ async def _drain_comments(page) -> dict:
         else:
             await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
             await asyncio.sleep(2)
+    await injections.inject_once(page, "extract")  # 导航后旧注入失效，提取前重新注入
     return await page.evaluate("() => xhsExtractComments()")
 
 

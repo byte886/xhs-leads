@@ -1313,24 +1313,35 @@ def _on_collect_progress(state: dict):
 async def _collect_round(state: dict, req, ctx: dict, account_id: str):
     """一轮「搜索 → 逐条补全入库」；撞墙抛 BrowserLoginRequiredError 给外层暂停。
 
+    搜索页必须留到补全结束（keep_page）：详情只能在搜索页上点开，不能走 URL。
     返回搜索结果 dict；候选为空时已就地收尾并返回 None。
     """
     _collect_begin_round(state)
-    res = await search_via_browser(
-        req.keyword, req.limit,
-        # R-6.53v：回调携带 items 引用——任务级取消时已采数据从此处抢救
-        on_progress=_on_collect_progress(state),
-        should_stop=lambda: state["stop_event"],
-        filters={
-            "sort": req.sort, "note_type": req.note_type,
-            "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
-        },
-        account_id=account_id,
-    )
-    candidates = res["items"]
-    if not candidates:
-        _collect_finalize_empty(state, res)
-        return None
+    try:
+        res = await search_via_browser(
+            req.keyword, req.limit,
+            # R-6.53v：回调携带 items 引用——任务级取消时已采数据从此处抢救
+            on_progress=_on_collect_progress(state),
+            should_stop=lambda: state["stop_event"],
+            filters={
+                "sort": req.sort, "note_type": req.note_type,
+                "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
+            },
+            account_id=account_id,
+            keep_page=True,
+        )
+        candidates = res["items"]
+        if not candidates:
+            _collect_finalize_empty(state, res)
+            return None
+        await _collect_enrich_candidates(state, ctx, candidates)
+        return res
+    finally:
+        await browser_client.release_search_page(account_id)
+
+
+async def _collect_enrich_candidates(state: dict, ctx: dict, candidates: list) -> None:
+    """逐条补详情 → 评分 → 入库：跳过续采已入库，用户停止即中断剩余。"""
     seen = _collect_seen_ids(ctx["con"])
     state["phase"] = "enrich"
     for item in candidates:
@@ -1340,7 +1351,6 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
         if fid and fid in seen:
             continue  # 续采：跳过已入库，只补中断后缺的那些
         await _collect_one(item, state, ctx)
-    return res
 
 
 def _finalize_paused(state: dict, req, account_id: str, reason: str) -> None:

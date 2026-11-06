@@ -10,6 +10,7 @@
   4. 落 SQLite（notes 表 + 评分字段）
 """
 import argparse
+import html
 import json
 import random
 import re
@@ -62,12 +63,14 @@ def _parse_likes(s: str) -> int:
 
 
 async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, should_stop=None,
-                             filters: dict | None = None, account_id: str = "default") -> dict:
+                             filters: dict | None = None, account_id: str = "default",
+                             keep_page: bool = False) -> dict:
     """本地浏览器搜索（Playwright 复用账号引擎连接，DOM 层提取卡片）。
 
     任务式采集：支持进度回调 on_progress(n) 与中途停止 should_stop()。
     filters：搜索筛选（排序/笔记类型/发布时间/搜索范围/位置距离），透传浏览器应用。
     account_id：使用哪个账号引擎采集（默认 default；多账户下采集号/发布号分离）。
+    keep_page：True 时保留搜索页供随后逐条点开补详情（调用方负责 release_search_page）。
     返回 {"items": notes 列表, "stopped": bool}。
     """
     from src import browser_client
@@ -78,6 +81,7 @@ async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, sh
         should_stop=should_stop,
         filters=filters,
         account_id=account_id,
+        keep_page=keep_page,
     )
     items = data.get("items", [])[:limit]
     notes = []
@@ -156,9 +160,10 @@ async def get_note_detail_by_url(url: str, account_id: str = "default") -> dict:
 def _merge_detail_core(note: dict, d: dict) -> None:
     """标题/正文/类型 + 无标题兜底 + 作者 uid/昵称 + 详情图片。"""
     if d.get("title"):
-        note["title"] = d["title"]
+        # 详情 SSR 里标题带 HTML 实体（如「桃花玉&amp;和田玉」），入库前反转义
+        note["title"] = html.unescape(d["title"])
     if d.get("desc"):
-        note["desc"] = d["desc"]
+        note["desc"] = html.unescape(d["desc"])
     if d.get("type"):
         # 详情页视频判断更准：二次修正 note_type（搜索卡片 play-icon 可能漏判）
         note["note_type"] = d["type"]
@@ -172,7 +177,7 @@ def _merge_detail_core(note: dict, d: dict) -> None:
     if d.get("user_id"):
         note["user_id"] = d["user_id"]
     if d.get("author_nick"):
-        note["nickname"] = d["author_nick"]
+        note["nickname"] = html.unescape(d["author_nick"])
     note["detail_imgs"] = d.get("imgs", [])
     # 视频原地址（视频克隆下载用；图文笔记恒空）
     note["video_url"] = d.get("video_url", "")

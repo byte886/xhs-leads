@@ -121,8 +121,14 @@ class TestSearchByTyping:
         async def fake_wait(page, timeout_s=20):
             seen["cards"] = True
             return True, ""
+
+        async def fake_on_search(page):
+            seen["search_page"] = True
+            return True
         monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
+        monkeypatch.setattr(bc, "_is_on_search_result", fake_on_search)
         assert _run(bc._search_by_typing(p, "翡翠", "default")) is True
+        assert seen["search_page"] is True
         assert p.rec[0] == ("click", 480, 36)
         assert ("type", "翡翠") in p.rec
         assert ("press", "Enter") in p.rec
