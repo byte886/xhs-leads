@@ -52,7 +52,6 @@ describe('api 端点契约（表驱动）', () => {
     ['apiClientsAgg', '/api/clients_agg', 'GET', () => api.apiClientsAgg()],
     ['apiClone', '/api/clone', 'POST', () => api.apiClone('f1')],
     ['apiLogs', '/api/publish_logs', 'GET', () => api.apiLogs()],
-    ['apiQrcode', '/api/qrcode', 'GET', () => api.apiQrcode()],
     ['apiMirrorOpen', '/api/mirror/open', 'POST', () => api.apiMirrorOpen()],
     ['apiGetAppConfig', '/api/app_config', 'GET', () => api.apiGetAppConfig()],
     ['apiStatusNow', '/api/status_now', 'GET', () => api.apiStatusNow()],
@@ -68,10 +67,6 @@ describe('api 端点契约（表驱动）', () => {
     await fn()
     expect(captured.method).toBe(method)
     expect(captured.u).toContain(url)
-  })
-
-  it('apiMirrorScreenshotUrl 纯函数拼 URL', () => {
-    expect(api.apiMirrorScreenshotUrl('default')).toContain('/api/mirror/screenshot')
   })
 
   it('apiUploadImage 走 multipart FormData', async () => {
@@ -103,25 +98,6 @@ describe('api 请求体映射契约', () => {
     mockFetch(async (_u, init) => { body = JSON.parse(init!.body as string); return okRes({ ok: true }) })
     await api.apiCollectStop('t-1')
     expect(body).toEqual({ task_id: 't-1' })
-  })
-  it('apiSearch：POST /api/search，body 含关键字段', async () => {
-    let u = ''; let body: any = null
-    mockFetch(async (uu, init) => { u = String(uu); body = JSON.parse(init!.body as string); return okRes({ ok: true }) })
-    await api.apiSearch({ keyword: '翡翠', limit: 10, sort: '综合', noteType: '全部', interval: 1000, fast: false } as any)
-    expect(u).toBe('/api/search')
-    expect(body).toMatchObject({ keyword: '翡翠', note_type: '全部', fast: false })
-  })
-  it('apiPublish：payload 原样透传', async () => {
-    let body: any = null
-    mockFetch(async (_u, init) => { body = JSON.parse(init!.body as string); return okRes({ ok: true }) })
-    await api.apiPublish({ title: 't', desc: 'd', tags: ['a'], images: ['i'], visible: 'self' })
-    expect(body).toMatchObject({ title: 't', visible: 'self' })
-  })
-  it('apiMirrorEvent：account 默认 default 并展开进 body', async () => {
-    let body: any = null
-    mockFetch(async (_u, init) => { body = JSON.parse(init!.body as string); return okRes({ ok: true }) })
-    await api.apiMirrorEvent({ type: 'move', x: 1, y: 2 } as any)
-    expect(body).toMatchObject({ account: 'default', type: 'move', x: 1 })
   })
   it('apiAiGenerate：action+note 进 body', async () => {
     let u = ''; let body: any = null

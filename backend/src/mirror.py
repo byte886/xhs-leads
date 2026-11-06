@@ -1,20 +1,15 @@
-"""镜像层（R 批 v1.4 / R-6.15）：登录小窗 / 调试视图共用的画面与输入转发。
+"""引擎窗口控制（原「镜像层」，R-6.53z8p 收拢）。
 
-设计口径（用户对齐，见 docs/需求变更-App内呈现形态.md §三）：
-- 镜像 = 「CDP 截图流 + 事件转发」，**不是 AI 看图**；唯一必须显示画面的交互场景是登录（R3 小窗）。
-- 调试视图（R4）按需开启引擎实时画面，复用本模块；登录自动开 / 调试手动开 / 平时关。
-- R-6.15 用户需求变更：调试视图从「截图映射」改为「**实时引擎窗口**」——开关切换引擎
-  为有头小窗（headless=False + window-size=960,720），独立小窗实时可见采集/登录操作过程。
-- 与审计日志（logger.py 落盘）区分：镜像不落盘、不留痕。
+历史与现状：
+- R 批 v1.4 的设计是「截图流 + 事件转发」模拟远程桌面（左窗内嵌引擎截图、鼠标事件回传）。
+- R-6.15 用户改口径为「**实时引擎窗口**」——引擎开成有头小窗，人直接看真窗口操作。
+  旧的截图映射与事件转发随之失去意义，已于 R-6.53z8p 删除，避免留孤儿代码。
 
-原子能力（供 server.py 接口层调用）：
-- open_login(account)：确保引擎打开小红书 explore（触发登录弹窗），登录小窗打开时调用
-- screenshot_jpeg(account)：引擎镜像页截图 → JPEG bytes（登录小窗轮询显示）
-- send_event(account, evt)：事件转发 click / type / scroll / drag（坐标相对镜像视口 CSS 像素）
+现有能力：
+- open_login(account)：确保引擎里有一个小红书页（无则开 /login）；供起引擎的脚本调用
 - set_window(account, on)：调试实时窗口开关（有头小窗 ↔ 无头；引擎重启生效，登录态回注保留）
 
-页面目标：登录=小红书页（explore/登录页）；调试=当前活动小红书页。页面常驻引擎，
-登录态在引擎独立 profile 内（R2），镜像只读画面、转发输入。
+注意：登录页不再由本模块"驱动"——第二窗口（采集窗）自主打开与刷新，此处只保证页面存在。
 """
 import asyncio
 
@@ -76,51 +71,3 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
                detail=f"window={'on' if on else 'off'}")
     return {"ok": True, "window": on,
             "note": "引擎已重启，独立小窗已打开（实时可见操作）" if on else "已回无头模式"}
-
-
-async def screenshot_jpeg(account: str = "default") -> bytes:
-    """引擎镜像页截图 → JPEG bytes（登录小窗/调试视图画面；不落盘）。"""
-    page = await login_page(account)
-    shot = await page.screenshot(type="jpeg", quality=70)
-    return shot
-
-
-async def _perform_drag(page, evt: dict) -> None:
-    """R-6.37a 拆自 send_event：分段拖拽（模拟人手轨迹，5 段线性插值）。"""
-    x1, y1 = int(evt.get("x1", 0)), int(evt.get("y1", 0))
-    x2, y2 = int(evt.get("x2", 0)), int(evt.get("y2", 0))
-    await page.mouse.move(x1, y1)
-    await page.mouse.down()
-    for i in range(1, 6):  # 分段移动，模拟人手轨迹
-        await page.mouse.move(x1 + (x2 - x1) * i // 5, y1 + (y2 - y1) * i // 5)
-    await page.mouse.up()
-
-
-async def _apply_mirror_event(page, evt: dict, kind: str) -> dict | None:
-    """R-6.37i 拆自 send_event：按 kind 分发交互（不支持返回错误 dict，成功返回 None）。"""
-    if kind == "click":
-        await page.mouse.click(int(evt["x"]), int(evt["y"]))
-    elif kind == "type":
-        # 拟人节奏：30ms/字符（风控 friendly；前端先 click 聚焦输入框）
-        await page.keyboard.type(str(evt.get("text") or ""), delay=30)
-    elif kind == "scroll":
-        await page.mouse.wheel(int(evt.get("dx") or 0), int(evt.get("dy") or 0))
-    elif kind == "drag":
-        await _perform_drag(page, evt)
-    else:
-        return {"ok": False, "error": f"不支持的事件类型: {kind}"}
-    return None
-
-
-async def send_event(account: str, evt: dict) -> dict:
-    """转发用户交互到引擎镜像页（坐标相对视口 CSS 像素；type 前需先 click 聚焦）。
-
-    支持：click {x,y} / type {text} / scroll {dx,dy} / drag {x1,y1,x2,y2}
-    """
-    page = await login_page(account)
-    kind = (evt.get("type") or "").lower()
-    err = await _apply_mirror_event(page, evt, kind)
-    if err is not None:
-        return err
-    xlog.audit(account, action="mirror_event", ok=True, detail=f"type={kind}")
-    return {"ok": True}

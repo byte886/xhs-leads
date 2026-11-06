@@ -47,8 +47,8 @@ export const appState = reactive({
   // 采集配置（启动时从 localStorage 恢复用户上次条件）
   params: loadStoredParams() as SearchParams,
   collecting: false,
-  // R-6.53z8c：撞墙暂停等登录（任务仍存活，扫码后自动续采）
-  pausedNeedLogin: false,
+  // R-6.53z8p：本次采集因「需要登录」结束（任务已终止，要接着采就重新发起）
+  endedNeedLogin: false,
   // 搜索结果
   notes: [] as Note[],
   total: 0,

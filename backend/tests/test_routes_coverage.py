@@ -230,20 +230,6 @@ def test_collapse_debug_windows_no_engine(client):
     assert r["ok"] is True and r["closed"] == 0
 
 
-def test_qrcode_no_engine(client):
-    r = client.get("/api/qrcode").json()
-    assert "ok" in r
-
-
-def test_mirror_event_no_engine(client):
-    # 无引擎时行为依环境而异——只验证端点可调用不挂
-    try:
-        r = client.post("/api/mirror/event", json={"type": "click", "x": 1, "y": 1})
-        assert r.status_code in (200, 500, 503, 404)
-    except Exception:
-        pass
-
-
 def test_index_returns_html(client):
     r = client.get("/")
     assert r.status_code == 200 or r.status_code == 404  # WEB_DIR 可能无 index.html

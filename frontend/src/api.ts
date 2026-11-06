@@ -1,4 +1,4 @@
-import type { Author, ClientUser, ClientsAgg, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams, SearchResult } from './types'
+import type { Author, ClientUser, ClientsAgg, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams } from './types'
 
 const BASE = ''
 
@@ -91,39 +91,6 @@ export async function apiCollectStop(taskId: string): Promise<{ ok: boolean; not
   }))
 }
 
-export async function apiCollectResume(taskId: string): Promise<{ ok: boolean; note: string }> {
-  return j(await fetch(`${BASE}/api/collect_resume`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_id: taskId })
-  }))
-}
-
-export async function apiCollectGiveup(taskId: string): Promise<{ ok: boolean; note: string }> {
-  return j(await fetch(`${BASE}/api/collect_giveup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_id: taskId })
-  }))
-}
-
-export async function apiSearch(p: SearchParams): Promise<SearchResult> {
-  const body = { keyword: p.keyword, limit: p.limit, sort: p.sort, note_type: p.noteType, interval: p.interval, fast: !!p.fast }
-  // 90s 超时：平台 AI 搜索页渲染偶发慢/卡，超时后前端自动恢复按钮并提示，避免无限"搜索中"
-  const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), 90000)
-  try {
-    return await j(await fetch(`${BASE}/api/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ctl.signal
-    }))
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 export async function apiNotes(keyword = '', order = 'score'): Promise<{ total: number; notes: Note[] }> {
   const q = new URLSearchParams()
   if (keyword) q.set('keyword', keyword)
@@ -198,19 +165,7 @@ export async function apiPublishStats(logId: number, noteUrl: string): Promise<{
   }))
 }
 
-export async function apiQrcode(): Promise<{ ok: boolean; guide?: string; url?: string; expires_in?: number; error?: string }> {
-  return j(await fetch(`${BASE}/api/qrcode`))
-}
-
 // ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----
-export interface MirrorEventPayload {
-  type: 'click' | 'type' | 'scroll' | 'drag'
-  x?: number; y?: number
-  x1?: number; y1?: number; x2?: number; y2?: number
-  dx?: number; dy?: number
-  text?: string
-}
-
 /** 登录小窗/调试视图打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪） */
 export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string }> {
   return j(await fetch(`${BASE}/api/mirror/open?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
@@ -242,21 +197,6 @@ export async function apiSetAppConfig(patch: { collect_tab_visible: boolean }): 
   }))
 }
 
-/** 引擎镜像页画面（JPEG；带时间戳防缓存，<img> 轮询刷新显示） */
-export function apiMirrorScreenshotUrl(account = 'default'): string {
-  return `${BASE}/api/mirror/screenshot?account_id=${encodeURIComponent(account)}&t=${Date.now()}`
-}
-
-/** 事件转发：click/type/scroll/drag（坐标相对镜像视口；type 前需先 click 聚焦） */
-export async function apiMirrorEvent(payload: MirrorEventPayload, account = 'default'): Promise<{ ok: boolean; error?: string }> {
-  return j(await fetch(`${BASE}/api/mirror/event`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ account, ...payload }),
-  }))
-}
-
-/** 全局状态提示条（R 批 v1.4）：实时播报「正在干什么」，不落盘（区别于审计日志） */
 export async function apiStatusNow(): Promise<{
   action: string; detail: string; collecting: boolean
   collected?: number; limit?: number; keyword?: string

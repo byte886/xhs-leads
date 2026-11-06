@@ -1,4 +1,4 @@
-"""server 路由层批量补测：覆盖 qrcode/search/collect/notes/download/detail/clone/clients/
+"""server 路由层批量补测：覆盖 collect/notes/download/detail/clone/clients/
 cookie 全链路 + publish 护栏 + 图片代理（monkeypatch 浏览器依赖，纯逻辑验证）。"""
 import asyncio
 import datetime
@@ -88,64 +88,6 @@ class TestStartupCleanup:
         monkeypatch.setattr(browser_client, "cleanup_tabs", boom)
         monkeypatch.setattr(server, "_cleanup_orphan_images", lambda: (_ for _ in ()).throw(RuntimeError("x")))
         asyncio.run(_startup_cleanup())  # 双异常均吞掉
-
-
-class TestQrcode:
-    def test_qrcode_ok(self, client, monkeypatch):
-        # R 批 v1.4：登录引导改走 app 内镜像（引擎独立 profile），不再拉起外部 Chrome
-        from src import mirror
-
-        async def fake_open_login(account="default"):
-            return {"ok": True}
-
-        monkeypatch.setattr(mirror, "open_login", fake_open_login)
-        r = client.get("/api/qrcode")
-        assert r.json()["ok"] is True and "登录小窗" in r.json()["guide"]
-
-    def test_qrcode_sets_login_gate(self, client):
-        """R-6.53z8b 起 /api/qrcode 不再开 mirror 页，只置登录门（唯一入口是采集窗）。"""
-        from src import server
-
-        r = client.get("/api/qrcode")
-        body = r.json()
-        assert body["ok"] is True
-        assert "登录" in body["guide"]
-        assert server._LOGIN_GATE["pending"] is True
-
-
-class TestSearch:
-    def test_search_ok(self, client, monkeypatch):
-        async def fake_search(*a, **k):
-            return {"items": [{"feed_id": "x1", "title": "t", "liked_count": "100"}]}
-
-        monkeypatch.setattr(server, "search_via_browser", fake_search)
-        r = client.post("/api/search", json={"keyword": "翡翠", "limit": 20})
-        assert r.json()["added"] == 1 and r.json()["source"].startswith("关键词搜索")
-
-    def test_search_exception(self, client, monkeypatch):
-        async def boom(*a, **k):
-            raise RuntimeError("浏览器未连接")
-
-        monkeypatch.setattr(server, "search_via_browser", boom)
-        r = client.post("/api/search", json={"keyword": "x"})
-        assert r.json()["added"] == 0 and "浏览器未连接" in r.json()["note"]
-
-    def test_search_empty(self, client, monkeypatch):
-        async def empty(*a, **k):
-            return {"items": []}
-
-        monkeypatch.setattr(server, "search_via_browser", empty)
-        r = client.post("/api/search", json={"keyword": "x"})
-        assert r.json()["added"] == 0 and "未返回结果" in r.json()["note"]
-
-    def test_search_not_logged_in(self, client, monkeypatch):
-        # R 批 v1.5：登录态判定改引擎真实链路（login_status），未登录 → 403 引导登录小窗
-        async def fake_not_logged_in():
-            return {"status": "not_logged_in", "logged_in": False, "nickname": "", "raw": "engine-cdp 未登录"}
-
-        monkeypatch.setattr(server, "login_status", fake_not_logged_in)
-        r = client.post("/api/search", json={"keyword": "x"})
-        assert r.status_code == 403 and "登录态已失效" in r.json()["detail"]
 
 
 class TestCollect:

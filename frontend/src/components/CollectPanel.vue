@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
-import { apiCollectClear, apiCollectGiveup, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
+import { apiCollectClear, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { onAppEvent } from '../events'
 import { isLoginAbnormal } from '../lib/auth'
 
@@ -102,18 +102,10 @@ let offCollect: (() => void) | null = null
 // R-6.53z8c：取消进度轮询——改为订阅后端 SSE（collect 事件），状态变化才推。
 
 /** R-6.53z5：进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
-/** R-6.53z8c：等待登录时选择「就用这些」——放弃剩余，保留已采数据 */
-async function doGiveup() {
-  if (!collectTaskId) return
-  const r = await apiCollectGiveup(collectTaskId)
-  if (r.ok) toast(r.note || '已保留已采数据')
-}
-
 /** 采集收尾（done / stopped / error 三态共用）：按钮复位 + 拉最终列表。 */
 async function finalizeCollect(pr: any) {
   if (timer) { clearInterval(timer); timer = null }
   appState.collecting = false
-  appState.pausedNeedLogin = false
   if (pr.status === 'error') {
     appState.searchNote = pr.note || '采集失败'
     appState.status = '失败'
@@ -148,17 +140,20 @@ function scheduleListRefresh() {
 
 /** 收到一条采集状态：按状态分派（进行中只更新数字，终态统一收尾）。 */
 async function handleCollectUpdate(pr: any) {
-  if (pr.status === 'paused_need_login') {
-    // R-6.53z8c：撞墙暂停——任务仍存活，等扫码；按钮转「等待登录」不结束任务
-    appState.pausedNeedLogin = true
-    appState.collecting = true
-    appState.status = '等待登录'
-    appState.searchNote = pr.note || '需要登录：右侧窗口已打开登录页，请扫码后自动续采'
-    scheduleListRefresh()
+  if (pr.status === 'ended_need_login') {
+    // R-6.53z8p：撞到登录墙 = 本次采集就此结束（已采保留）。
+    // 必须让左窗知道，否则它会一直停在「正在采集」；同时弹登录引导，用户登录后可重新采集。
+    appState.endedNeedLogin = true
+    emit('open-login')
+    const note = pr.note || '需要登录，本次采集结束'
+    toast(note, 'error')
+    appState.searchNote = note
+    appState.status = '需要登录'
+    await finalizeCollect(pr)
     return
   }
   if (pr.status === 'running') {
-    appState.pausedNeedLogin = false
+    appState.endedNeedLogin = false
     appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
     scheduleListRefresh()
     return
@@ -186,7 +181,6 @@ function armProgressPolling(taskId: string) {
 
 // 任务式采集：开始采集 → 后台逐批提取（事件推送进度）→ 采满/平台不增长/用户停止后统一评分排序展示
 async function doCollect() {
-  if (appState.pausedNeedLogin) return  // 等待登录期间主按钮无效，避免误触停止/重启
   if (appState.collecting) {
     // 采集中再点 = 停止采集
     if (collectTaskId) {
@@ -205,6 +199,7 @@ async function doCollect() {
   }
   if (!appState.params.keyword.trim()) { toast('请先输入关键词', 'error'); return }
   appState.collecting = true
+  appState.endedNeedLogin = false
   appState.status = '正在采集'
   appState.selected = {}
   // R-6.53w：开始新采集先清空旧列表——采集窗口干净进入「正在采集」，
@@ -360,15 +355,11 @@ onMounted(async () => {
       <!-- 开始采集：独立整行 -->
       <button
         class="btn-search"
-        :class="{ stop: appState.collecting, waiting: appState.pausedNeedLogin }"
-        :disabled="appState.pausedNeedLogin"
+        :class="{ stop: appState.collecting }"
         @click="doCollect"
       >
-        <span v-if="appState.collecting && !appState.pausedNeedLogin" class="btn-spinner" />
-        {{ appState.pausedNeedLogin ? '等待登录…' : (appState.collecting ? '停止' : '开始采集') }}
-      </button>
-      <button v-if="appState.pausedNeedLogin" class="btn-giveup" @click="doGiveup">
-        就用已采 {{ appState.total }} 条
+        <span v-if="appState.collecting" class="btn-spinner" />
+        {{ appState.collecting ? '停止' : '开始采集' }}
       </button>
     </section>
   </aside>
@@ -577,23 +568,6 @@ onMounted(async () => {
   cursor: default;
 }
 /* R-6.53z8c：等待登录不是「不可用」，是「等用户扫码」——保持可见度，别看着像坏了 */
-.btn-search.waiting {
-  opacity: 1;
-  background: #8a6d1f;
-  cursor: default;
-}
-.btn-giveup {
-  width: 100%;
-  margin-top: 6px;
-  padding: 7px 0;
-  font-size: 12px;
-  color: #555;
-  background: #f3f3f3;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.btn-giveup:hover { background: #eaeaea; }
 .btn-spinner {
   display: inline-block;
   width: 12px;

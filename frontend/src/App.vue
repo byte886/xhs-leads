@@ -140,10 +140,10 @@ onMounted(async () => {
   apiCleanupImages().catch(() => {})
   // R-6.53z8c：登录守护改为事件驱动——不再每 60 秒主动查一次（主动查会触发页面扫描，
   // 与用户手动浏览叠加会加重平台风控判定）。只在两种真实信号到达时才响应：
-  //   ① collect 事件 paused_need_login（采集撞墙 = 确实需要登录）
+  //   ① collect 事件 need_login（采集撞墙即结束 = 确实需要登录）
   //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）
   offEvents = onAppEvent((ev) => {
-    if (ev.kind === 'collect' && ev.data.paused_need_login) {
+    if (ev.kind === 'collect' && ev.data.need_login) {
       appState.login = { logged_in: false, nickname: '', kicked: false }
       forceOpen.value = true
     }

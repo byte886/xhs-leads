@@ -8,10 +8,10 @@ import { onAppEvent } from '../events'
 const st = ref<{ action: string; detail: string; collecting: boolean; collected?: number; limit?: number; keyword?: string }>({ action: '空闲', detail: '', collecting: false })
 // R-6.53z8c：状态条改为事件驱动——后端在状态变化时推一次，不再每 2 秒查询。
 function apply(d: Record<string, any>) {
-  const busy = d.status === 'running' || d.status === 'paused_need_login' || d.status === 'resuming'
+  const busy = d.status === 'running' || d.status === 'resuming'
   st.value = busy
     ? {
-        action: d.status === 'paused_need_login' ? '等待登录' : '正在采集',
+        action: '正在采集',
         detail: d.note || '',
         collecting: true,
         collected: d.collected,

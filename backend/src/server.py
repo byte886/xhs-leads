@@ -6,7 +6,6 @@
 API:
   GET  /                    → 前端界面（frontend/dist/index.html）
   GET  /api/login_status    → 登录状态
-  POST /api/search          → 搜索+详情补全+评分+落库（同步返回新增数）
   GET  /api/notes           → 笔记列表（评分排序，支持关键词过滤）
   POST /api/clone           → 一键克隆：拉详情+下载图片，返回可编辑载荷
   POST /api/publish         → 发布（默认仅自己可见）
@@ -633,7 +632,6 @@ async def _refresh_engine_after_inject(eng) -> None:
 def _mark_login_ok() -> None:
     """登录验证通过后的统一收尾：解失效记忆、清登录门、唤醒续采、推事件。"""
     global _LOGIN_INVALID
-    _notify_login_ok()  # R-6.53z8c：唤醒等待登录的采集任务（扫码即自动续采）
     _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
     # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
     _LOGIN_INVALID = False
@@ -695,72 +693,11 @@ def _import_cookies_result(has_ws: bool, page_logged_in: bool, kicked: bool, log
 
 
 
-@app.get("/api/qrcode")
-async def qrcode():
-    """Cookie 失效时前端引导登录（R 批 v1.4）：登录在 app 内登录小窗完成（引擎独立 profile，
-    镜像=截图流+事件转发，途径不限）。本接口确保引擎打开小红书登录页并返回引导信息。
-    前端配合轮询 /api/login_status 直到登录成功。"""
-    # R-6.53z8b：不再走 mirror.new_page（会在壳窗之外多开一个登录 tab，实测与守卫那条
-    # 路径并存 → 窗口叠加）。统一置登录门，由守卫把壳窗导航到 /login，只有一条入口。
-    _LOGIN_GATE["pending"] = True
-    _LOGIN_GATE["force"] = True
-    evt = _LOGIN_GATE.get("evt")
-    if evt is not None:
-        evt.set()
-    try:
-        return {
-            "ok": True,
-            "guide": "app 内登录小窗已打开：请扫码、或手机号+验证码、或微信登录（任一途径），登录成功后自动继续。",
-            "url": "https://www.xiaohongshu.com/login",
-            "expires_in": 300,
-        }
-    except Exception as e:
-        return {"ok": False, "error": f"打开小红书登录页失败：{str(e)[:100]}"}
-
-
-# ================= 镜像层（R 批 v1.4：登录小窗 / 调试视图共用） =================
-# 后端 CDP 桥：截图流（captureScreenshot）+ 事件转发（click/type/drag/scroll）。
-# 口径（用户对齐）：镜像=「画面+输入转发」不是 AI 看图；登录自动开 / 调试手动开 / 平时关；
-# 不落盘（区别于审计日志）。前端实现见 R3/R4。
-
-class MirrorEventReq(BaseModel):
-    """事件转发请求：type 支持 click{ x,y } / type{ text } / scroll{ dx,dy } / drag{ x1,y1,x2,y2 }。"""
-    account: str = "default"
-    type: str
-    x: int = 0
-    y: int = 0
-    x1: int = 0
-    y1: int = 0
-    x2: int = 0
-    y2: int = 0
-    dx: int = 0
-    dy: int = 0
-    text: str = ""
-
-
 @app.post("/api/mirror/open")
 async def mirror_open(account_id: str = "default"):
     """登录小窗打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪）。"""
     from src import mirror
     return await mirror.open_login(account_id)
-
-
-@app.get("/api/mirror/screenshot")
-async def mirror_screenshot(account_id: str = "default"):
-    """登录小窗 / 调试视图画面：引擎镜像页 JPEG（轮询显示；不落盘）。"""
-    from src import mirror
-    data = await mirror.screenshot_jpeg(account_id)
-    return Response(
-        content=data, media_type="image/jpeg",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.post("/api/mirror/event")
-async def mirror_event(req: MirrorEventReq):
-    """事件转发：click/type/scroll/drag（坐标相对镜像视口 CSS 像素；type 前需先 click 聚焦）。"""
-    from src import mirror
-    return await mirror.send_event(req.account, req.model_dump())
 
 
 class MirrorWindowReq(BaseModel):
@@ -921,32 +858,6 @@ def _require_login_fast(account_id: str = "default") -> None:
         )
 
 
-@app.post("/api/search")
-async def search(req: SearchReq):
-    """搜索（同步版，兼容旧前端）：采集 → 评分 → 落库。返回新增条数与最新 TOP 评分。"""
-    await _require_login()
-    before = _db().execute("SELECT COUNT(*) FROM notes").fetchone()[0]
-    try:
-        res = await search_via_browser(
-            req.keyword, req.limit,
-            filters={
-                "sort": req.sort, "note_type": req.note_type,
-                "time_range": req.time_range, "scope": req.scope, "distance": req.distance,
-            },
-        )
-        notes = res.get("items", [])
-    except Exception as e:
-        _mark_collect_done()
-        return {"added": 0, "total": before, "top": [], "note": f"搜索未返回结果（{str(e)[:80]}），请确认 Chrome 已打开并登录小红书后重试"}
-    if not notes:
-        _mark_collect_done()
-        return {"added": 0, "total": before, "top": [], "note": "搜索未返回结果，请确认 Chrome 已打开并登录小红书后重试"}
-    notes = await _enrich_notes(notes, fast=req.fast)
-    saved, total, top = _persist_notes(req.keyword, notes)
-    _mark_collect_done()
-    return {"added": saved, "total": total, "top": top, "source": "关键词搜索（本地 Chrome）"}
-
-
 # ================= 任务式采集（开始采集 / 进度 / 停止） =================
 # 采集与展示分离：采集是后台异步任务（滚动平台搜索页逐批提取，支持中途停止），
 # 采满目标数 / 平台不再增长 / 用户停止 之后统一落库并评分排序，前端再展示。
@@ -974,7 +885,7 @@ def _state_snapshot(state: dict) -> dict:
         "limit": state.get("limit", 0),
         "keyword": state.get("keyword", ""),
         "note": state.get("note", ""),
-        "paused_need_login": state.get("status") == "paused_need_login",
+        "need_login": state.get("status") == "ended_need_login",
     }
 
 
@@ -1258,14 +1169,12 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
     state["phase"] = "done"
 
 
-# R-6.53z8c：撞墙暂停等登录的最长等待（用户不在也可回来续采，超时转部分完成）
-COLLECT_PAUSE_MAX = 600.0
-# 连续撞墙上限：达到即判账号受限，不再无限重试（风控累积效应）
-COLLECT_WALL_LIMIT = 3
+# R-6.53z8p（用户口径）：撞到登录墙即结束本次采集，不再挂起等登录、不再续采。
+# 「需要登录」与「采满」一样是终止条件；要接着采就重新发起一次采集。
 
 
 def _collect_seen_ids(con) -> set:
-    """已入库的笔记 ID 集合——断点事实源（不另存游标）。"""
+    """已入库的笔记 ID 集合——同批候选去重用。"""
     try:
         rows = con.execute("SELECT feed_id FROM notes").fetchall()
         return {r[0] for r in rows if r and r[0]}
@@ -1274,57 +1183,34 @@ def _collect_seen_ids(con) -> set:
 
 
 def _collect_begin_round(state: dict) -> None:
-    """每轮开始前的阶段重置；续采保留已采计数（否则界面数字归零）。"""
+    """采集开始前的阶段重置。"""
     state["phase"] = "search"
-    if not state.get("resumed"):
-        state["collected"] = 0
-        state["saved"] = 0
-        state["partial_items"] = []
+    state["collected"] = 0
+    state["saved"] = 0
+    state["partial_items"] = []
 
 
-async def _pause_for_login(state: dict, err: Exception) -> bool:
-    """撞墙暂停等登录。返回 True=继续采，False=用户放弃或超时。
+def _finalize_need_login(state: dict, account_id: str, err: Exception) -> None:
+    """撞到登录墙：本次采集就此结束（已采条数保留），并立刻推事件通知左窗。
 
-    事件驱动、零轮询：worker 挂在 resume_event 上，扫码成功由 import_cookies/
-    collect_resume 置位唤醒；超时则按「已采数据保留」收尾。
+    必须推的原因：左窗完全靠事件驱动更新状态，不推就只能一直停在「正在采集」。
+    不挂起等待、不续采——用户口径是「需要登录就重新采集」。
     """
-    state["status"] = "paused_need_login"
-    state["phase"] = "paused"
-    state["note"] = f"需要登录：{str(err)[:80]}"
-    state["paused_at"] = time.time()
-    emit_collect(state)  # 撞墙即推：左侧立即转「等待登录」，不用等下一次轮询
-    ev = state.get("resume_event")
-    if ev is None:
-        ev = asyncio.Event()
-        state["resume_event"] = ev
-    ev.clear()
-    try:
-        await asyncio.wait_for(ev.wait(), timeout=COLLECT_PAUSE_MAX)
-    except asyncio.TimeoutError:
-        state["note"] = "等待登录超时，已保留已采数据"
-        return False
-    return not state.get("giveup", False)
-
-
-def _notify_login_ok() -> int:
-    """登录成功：唤醒所有「等待登录」的采集任务（事件驱动，零轮询）。返回唤醒数。"""
-    n = 0
-    for st in list(_COLLECT_TASKS.values()):
-        if st.get("status") != "paused_need_login":
-            continue
-        ev = st.get("resume_event")
-        if ev is None:
-            continue
-        ev.set()
-        n += 1
-    return n
+    saved = state.get("saved", 0)
+    state["status"] = "ended_need_login"
+    state["phase"] = "done"
+    state["note"] = (
+        f"需要登录，本次采集结束（已采 {saved} 条保留）" if saved
+        else f"需要登录，本次采集结束（未采到数据）：{str(err)[:60]}"
+    )
+    emit_collect(state)
 
 
 def _on_collect_progress(state: dict):
     """进度回调→事件推送：每采到一条推一次（变化驱动，不是定时轮询）。"""
 
     def _cb(n: int, it=None) -> None:
-        state["collected"] = state.get("base_saved", 0) + n
+        state["collected"] = n
         if it is not None:
             state["partial_items"] = it
         emit_collect(state)
@@ -1376,38 +1262,17 @@ async def _collect_enrich_candidates(state: dict, ctx: dict, candidates: list) -
         await _collect_one(item, state, ctx)
 
 
-def _finalize_paused(state: dict, req, account_id: str, reason: str) -> None:
-    """暂停态收尾：先落通用状态，再把真实原因写回（否则用户只看到「已停止」）。"""
-    _finalize_stopped(state, req, account_id)
-    state["note"] = (
-        f"{reason}：已采集 {state['saved']} 条" if state["saved"] else reason
-    )
-
-
 @_log.tagged("worker:collect:retry")
 async def _collect_run_rounds(state: dict, req, ctx: dict, account_id: str):
-    """多轮采集：撞墙 → 暂停等登录 → 扫码恢复后重新搜索续采（跳过已入库）。
+    """采集一轮；撞到登录墙即收尾结束（不重试、不暂停等待）。
 
-    返回最终搜索结果 dict；已就地收尾（放弃/超时/空结果）时返回 None。
+    返回搜索结果 dict；已就地收尾（撞登录墙/空结果）时返回 None。
     """
-    while True:
-        try:
-            return await _collect_round(state, req, ctx, account_id)
-        except BrowserLoginRequiredError as e:
-            state["wall_count"] = state.get("wall_count", 0) + 1
-            if state["wall_count"] >= COLLECT_WALL_LIMIT:
-                _finalize_paused(
-                    state, req, account_id,
-                    f"连续 {state['wall_count']} 次需要登录，疑似账号受限",
-                )
-                return None
-            if not await _pause_for_login(state, e):
-                _finalize_paused(state, req, account_id, state.get("note") or "等待登录失败")
-                return None
-            state["resumed"] = True
-            state["base_saved"] = state["saved"]
-            state["status"] = "running"
-            state["note"] = "登录已恢复，继续采集"
+    try:
+        return await _collect_round(state, req, ctx, account_id)
+    except BrowserLoginRequiredError as e:
+        _finalize_need_login(state, account_id, e)
+        return None
 
 
 async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
@@ -1583,40 +1448,6 @@ def collect_progress(task_id: str = ""):
 
 class CollectStopReq(BaseModel):
     task_id: str
-
-
-@app.post("/api/collect_resume")
-async def collect_resume(req: CollectStopReq):
-    """R-6.53z8c：唤醒「等待登录」的采集任务（自动恢复之外的兜底入口）。
-
-    正常情况下扫码成功由 import_cookies 自动唤醒；本端点用于用户手动点「继续」。
-    """
-    st = _COLLECT_TASKS.get(req.task_id)
-    if not st:
-        return {"ok": False, "note": "任务不存在或已结束"}
-    if st.get("status") != "paused_need_login":
-        return {"ok": False, "note": f"任务当前状态为 {st.get('status')}，无需恢复"}
-    ev = st.get("resume_event")
-    if ev is None:
-        return {"ok": False, "note": "任务没有等待中的登录信号"}
-    ev.set()
-    return {"ok": True, "note": "已恢复，正在续采上次中断的部分"}
-
-
-@app.post("/api/collect_giveup")
-async def collect_giveup(req: CollectStopReq):
-    """R-6.53z8c：放弃剩余采集，保留已采数据（用户选择「就用这些」）。"""
-    st = _COLLECT_TASKS.get(req.task_id)
-    if not st:
-        return {"ok": False, "note": "任务不存在或已结束"}
-    if st.get("status") != "paused_need_login":
-        return {"ok": False, "note": f"任务当前状态为 {st.get('status')}，无需放弃"}
-    st["giveup"] = True
-    ev = st.get("resume_event")
-    if ev is None:
-        return {"ok": False, "note": "任务没有等待中的登录信号"}
-    ev.set()
-    return {"ok": True, "note": f"已放弃剩余，保留已采 {st.get('saved', 0)} 条"}
 
 
 @app.post("/api/collect_stop")
