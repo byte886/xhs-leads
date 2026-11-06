@@ -667,6 +667,58 @@ class TestPublishLinkFromCurrent:
         assert r.status_code == 404
 
 
+class TestPublishStatsRefresh:
+    """刷新数据：去「我」的主页按标题找到那条，点开抓一次。"""
+
+    @staticmethod
+    def _seed(tmp_path, title="AI游戏"):
+        _seed_notes(tmp_path)
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.execute(
+            "INSERT INTO publish_logs (feed_id, title, content, tags, visibility, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            ("", title, "", "", "公开可见", "success", "2026-11-06T10:00:00"),
+        )
+        con.commit()
+        con.close()
+
+    def test_refresh_writes_stats(self, client, monkeypatch, tmp_path):
+        self._seed(tmp_path)
+        from src import browser_client
+
+        async def fake_refresh(title, account_id="default"):
+            return {"views": "300", "liked_count": "12", "collected_count": "4",
+                    "comment_count": "2", "shared_count": "0",
+                    "_url": "https://www.xiaohongshu.com/explore/n1"}
+
+        monkeypatch.setattr(browser_client, "refresh_publish_note", fake_refresh)
+        r = client.post("/api/publish_stats_refresh", json={"log_id": 1})
+        j = r.json()
+        assert r.status_code == 200 and j["stats"]["views"] == "300"
+        con = sqlite3.connect(tmp_path / "test.db")
+        row = con.execute("SELECT note_url FROM publish_logs WHERE id=1").fetchone()
+        con.close()
+        assert "explore/n1" in row[0]
+
+    def test_refresh_note_not_found(self, client, monkeypatch, tmp_path):
+        self._seed(tmp_path)
+        from src import browser_client
+
+        async def fake_none(title, account_id="default"):
+            return {}
+
+        monkeypatch.setattr(browser_client, "refresh_publish_note", fake_none)
+        r = client.post("/api/publish_stats_refresh", json={"log_id": 1})
+        assert r.status_code == 400
+        assert "没在「我」的主页找到" in r.json()["detail"]
+
+    def test_refresh_without_title(self, client, monkeypatch, tmp_path):
+        self._seed(tmp_path, title="")
+        r = client.post("/api/publish_stats_refresh", json={"log_id": 1})
+        assert r.status_code == 400
+        assert "没有标题" in r.json()["detail"]
+
+
 class TestCollectClients:
     def test_clients_ok(self, client, monkeypatch, tmp_path):
         _seed_notes(tmp_path)

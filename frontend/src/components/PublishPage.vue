@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { appState, coverProxy, setStage, setTab, toast } from '../store'
-import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStats, apiPublishLinkFromCurrent } from '../api'
+import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStats, apiPublishLinkFromCurrent, apiPublishStatsRefresh } from '../api'
 import type { DraftItem } from '../api'
 import type { LogItem, Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -304,6 +304,25 @@ function parseStats(lg: LogItem): Record<string, string> | null {
   try { return JSON.parse(s) } catch { return null }
 }
 
+/** 刷新数据：去「我」的主页找到这条笔记点开抓一次（点击路径，不拼 URL）。 */
+async function refreshStats(lg: LogItem) {
+  const id = Number(lg.id)
+  logBusy.value = id
+  try {
+    const r = await apiPublishStatsRefresh(id)
+    if (r.ok && r.stats) {
+      toast('已刷新互动数据')
+      await loadLogs()
+    } else {
+      toast(`刷新失败：${r.detail || '未知原因'}`, 'error')
+    }
+  } catch (e) {
+    toast(`刷新失败：${(e as Error).message}`, 'error')
+  } finally {
+    logBusy.value = 0
+  }
+}
+
 /** 读右边窗口当前那条：用户手动发布完成后页面就停在笔记详情，省掉复制粘贴。 */
 async function readCurrent(lg: LogItem) {
   const id = Number(lg.id)
@@ -544,20 +563,27 @@ async function aiRun(action: string) {
           <span :style="{ color: lg.status === 'success' ? 'var(--green, #16a34a)' : '#b45309' }">{{ lg.status === 'success' ? '已发布' : '待手动发布' }}</span>
         </div>
         <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
-          <button :disabled="logBusy === lg.id" @click="readCurrent(lg)"
+          <button :disabled="logBusy === lg.id" @click="refreshStats(lg)"
                   style="border:1px solid var(--line);border-radius:6px;padding:5px 12px;font-size:12px;background:var(--bg);color:var(--ink-1);cursor:pointer">
-            {{ logBusy === lg.id ? '读取中…' : '读取右边窗口那条' }}
+            {{ logBusy === lg.id ? '刷新中…' : '刷新数据' }}
           </button>
-          <span class="dim" style="font-size:11px">发完后右边窗口停在你那条笔记上，点一下就抓，不用粘贴链接</span>
+          <span class="dim" style="font-size:11px">去「我」的主页找到这条，点开抓一次</span>
         </div>
         <details style="margin-top:4px">
-          <summary class="dim" style="font-size:11px;cursor:pointer">手动粘贴链接（兜底）</summary>
-          <div style="display:flex;gap:8px;margin-top:4px">
+          <summary class="dim" style="font-size:11px;cursor:pointer">其他方式</summary>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <button :disabled="logBusy === lg.id" @click="readCurrent(lg)"
+                    style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:11px;background:var(--bg);color:var(--ink-1);cursor:pointer">
+              读右边窗口当前页
+            </button>
+            <span class="dim" style="font-size:11px">刚发完、右边窗口还停在那条笔记上时用</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:6px">
             <input v-model="logUrlInput[lg.id as number]" placeholder="粘贴已发布笔记链接"
                    style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;color:var(--ink-1)" />
             <button :disabled="logBusy === lg.id" @click="writeback(lg)"
-                    style="border:1px solid var(--line);border-radius:6px;padding:5px 12px;font-size:12px;background:var(--bg);color:var(--ink-1);cursor:pointer">
-              {{ logBusy === lg.id ? '回写中…' : '回写数据' }}
+                    style="border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:11px;background:var(--bg);color:var(--ink-1);cursor:pointer">
+              {{ logBusy === lg.id ? '回写中…' : '粘贴链接回写' }}
             </button>
           </div>
         </details>

@@ -2392,6 +2392,32 @@ class PublishCurrentReq(BaseModel):
     log_id: int
 
 
+@app.post("/api/publish_stats_refresh")
+async def publish_stats_refresh(req: PublishCurrentReq):
+    """刷新数据：去「我」的主页按标题找到那条笔记，点开抓一次。
+
+    全程点击（进主页 → 定位卡片 → 点开），不构造 URL 进入页面；
+    用户明确指出主页清单里每条都能单独点进去，和拿链接打开是同一条详情页。
+    """
+    await _require_login()
+    con = _db()
+    row = con.execute("SELECT title FROM publish_logs WHERE id=?", (req.log_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "发布记录不存在")
+    title = (row["title"] or "").strip()
+    if not title:
+        raise HTTPException(400, "这条发布记录没有标题，无法在主页定位；请先补标题或手动填链接")
+    try:
+        d = await browser_client.refresh_publish_note(title)
+    except browser_client.BrowserLoginRequiredError as e:
+        raise HTTPException(400, f"需要登录：{e}")
+    if not d:
+        raise HTTPException(400, "没在「我」的主页找到这条笔记：可能已删除、改名，或右侧窗口当前停在不该停的地方")
+    url = (d.get("_url") or "").strip()
+    d.pop("_url", None)
+    return _write_stats(con, req.log_id, d, url)
+
+
 @app.post("/api/publish_link_from_current")
 async def publish_link_from_current(req: PublishCurrentReq):
     """不回粘贴：直接读右边窗口当前页。

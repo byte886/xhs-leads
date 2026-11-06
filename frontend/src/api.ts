@@ -165,6 +165,15 @@ export async function apiPublishStats(logId: number, noteUrl: string): Promise<{
   }))
 }
 
+/** 刷新数据：去「我」的主页按标题找到那条笔记，点开抓一次（全程点击，不拼 URL）。 */
+export async function apiPublishStatsRefresh(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
+  return j(await fetch(`${BASE}/api/publish_stats_refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ log_id: logId })
+  }))
+}
+
 /** 不回粘贴：直接读右边引擎窗口当前页（用户刚发布完，页面就停在那条笔记上）。 */
 export async function apiPublishLinkFromCurrent(logId: number): Promise<{ ok: boolean; stats?: Record<string, string>; detail?: string }> {
   return j(await fetch(`${BASE}/api/publish_link_from_current`, {
