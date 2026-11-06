@@ -1211,6 +1211,18 @@ def _finalize_need_login(state: dict, account_id: str, err: Exception) -> None:
     emit_collect(state)
 
 
+def _friendly_collect_error(e: Exception) -> str:
+    """把底层浏览器异常翻成用户能照着做的下一步，不把 Playwright 原文丢到界面上。"""
+    msg = str(e)
+    if "has been closed" in msg:
+        return "浏览器刚在重建（还在准备中），等十几秒再点一次「开始采集」"
+    if "timeout" in msg.lower():
+        return "等页面加载超时了：可能是网络慢，稍后再点一次「开始采集」"
+    if "login" in msg.lower() or "登录" in msg:
+        return "需要重新登录小红书：点右上角「登录」扫码后再采集"
+    return f"采集失败：{msg[:100]}"
+
+
 def _on_collect_progress(state: dict):
     """进度回调→事件推送：每采到一条推一次（变化驱动，不是定时轮询）。"""
 
@@ -1258,6 +1270,7 @@ async def _collect_enrich_candidates(state: dict, ctx: dict, candidates: list) -
     """逐条补详情 → 评分 → 入库：跳过续采已入库，用户停止即中断剩余。"""
     seen = _collect_seen_ids(ctx["con"])
     state["phase"] = "enrich"
+    emit_collect(state)  # 搜索转补全：立刻推一次，别让状态条卡在「已扫描 N 张」20 秒不动
     for item in candidates:
         if state["stop_event"]:
             break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
@@ -1330,7 +1343,7 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         raise
     except Exception as e:  # noqa: BLE001 任务不因单点异常悬挂在 running
         state["status"] = "error"
-        state["note"] = f"采集失败：{str(e)[:100]}"
+        state["note"] = _friendly_collect_error(e)
         state["phase"] = "done"
     finally:
         if con is not None:
