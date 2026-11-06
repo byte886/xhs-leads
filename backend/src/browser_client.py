@@ -1223,7 +1223,10 @@ _CREATOR_CARDS_JS = """() => {
       const sp = st.querySelector('span');
       return sp ? (sp.innerText || '').trim() : '';
     });
-    return { i, title: pick('.note-card__title'), time: pick('.note-card__time'), stats };
+    const imp = el.getAttribute('data-impression') || '';
+    const m = imp.match(/"noteId":"([^"]+)"/);
+    const note_id = m ? m[1] : '';
+    return { i, note_id, title: pick('.note-card__title'), time: pick('.note-card__time'), stats };
   });
 }"""
 

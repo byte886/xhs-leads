@@ -1,12 +1,17 @@
 """全量同步配对：标题优先、日期兜底、认不准就不硬凑；以及增量计算。"""
 import sqlite3
 
-from src.server import (_apply_creator_card, _delta_text, _match_by_title,
-                        _match_log, _ensure_stats_history)
+from src.server import (_apply_creator_card, _backfill_note_id, _delta_text,
+                        _match_by_note, _match_by_title, _match_log,
+                        _ensure_stats_history)
 
 
 def _logs(*rows):
-    return [{"id": i, "title": t, "created_at": c} for i, t, c in rows]
+    out = []
+    for r in rows:
+        out.append({"id": r[0], "title": r[1], "created_at": r[2],
+                    "note_id": r[3] if len(r) > 3 else None})
+    return out
 
 
 def test_match_by_title_exact():
@@ -62,3 +67,31 @@ def test_apply_card_stores_stats_and_marks_delta():
     assert second["deltas"]["liked_count"] == "+2"
     assert second["deltas"]["collected_count"] == ""
     assert con.execute("SELECT COUNT(*) FROM publish_stats_history").fetchone()[0] == 2
+
+
+# ---- A：笔记 id 精确匹配（不依赖标题是否存在） ----
+def test_match_by_note_exact():
+    logs = _logs((1, "", "2026-07-02 12:32", "6a45e9e0000000001702e578"))
+    assert _match_by_note(logs, "6a45e9e0000000001702e578") == 1
+
+
+def test_match_by_note_beats_title_conflict():
+    """id 最权威：标题对不上也照样认出来（用户改了标题 / 卡片标题被截断都能救）。"""
+    logs = _logs((1, "旧标题", "2025-02-03 14:42", "67a0653d0000000018012c40"))
+    assert _match_log(logs, "完全不同的标题", "2025-02-03 14:42", "67a0653d0000000018012c40") == 1
+
+
+def test_match_by_note_empty_falls_back_to_title():
+    logs = _logs((1, "AI游戏", "2025-02-03 14:42", None))
+    assert _match_by_note(logs, "") is None
+    assert _match_log(logs, "AI游戏", "2025-02-03 14:42", "") == 1
+
+
+def test_backfill_note_id_stores_first_time():
+    """第一次对上就把 id 记住，之后永久精确匹配。"""
+    con = sqlite3.connect(":memory:")
+    _ensure_stats_history(con)
+    con.execute("CREATE TABLE publish_logs (id INTEGER PRIMARY KEY, note_id TEXT)")
+    con.execute("INSERT INTO publish_logs (id, note_id) VALUES (1, NULL)")
+    _backfill_note_id(con, 1, {"note_id": "67a0653d0000000018012c40"})
+    assert con.execute("SELECT note_id FROM publish_logs WHERE id=1").fetchone()[0] == "67a0653d0000000018012c40"

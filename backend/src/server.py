@@ -191,6 +191,9 @@ def _init_tables(con):
     _add_column_if_missing(con, "publish_logs", "raw", "TEXT")
     # P1 数据回流：发布记录回写互动数据（浏览/赞/藏/评/转 + 抓取时间）
     _add_column_if_missing(con, "publish_logs", "stats_json", "TEXT")
+    # 笔记唯一 id（创作者中心卡片 data-impression 里的 noteId）：对上后永久精确匹配，
+    # 不依赖标题是否存在、也不依赖发布日期
+    _add_column_if_missing(con, "publish_logs", "note_id", "TEXT")
     # P4 采集客户：互动用户名单（评论用户）
     con.execute("""
         CREATE TABLE IF NOT EXISTS clients (
@@ -2380,6 +2383,17 @@ def _squash(t) -> str:
     return "".join((t or "").split())
 
 
+def _match_by_note(logs, note_id):
+    """按笔记唯一 id 认：最可靠，标题空不空、日期对不对都不影响。"""
+    want = (note_id or "").strip()
+    if not want:
+        return None
+    for lg in logs:
+        if (lg.get("note_id") or "") == want:
+            return lg["id"]
+    return None
+
+
 def _match_by_title(logs, title):
     want = _squash(title)
     if not want:
@@ -2390,14 +2404,24 @@ def _match_by_title(logs, title):
     return None
 
 
-def _match_log(logs, title, time_text):
-    """先按标题认（标题可能为空），再按发布日期认；认不准返回 None，不硬凑。"""
+def _match_log(logs, title, time_text, note_id=None):
+    """三级认：笔记 id → 标题（可能为空）→ 发布日期；认不准返回 None，不硬凑。"""
+    hit = _match_by_note(logs, note_id)
+    if hit is not None:
+        return hit
     hit = _match_by_title(logs, title)
     if hit is not None:
         return hit
     day = (time_text or "")[:10]
     same_day = [lg["id"] for lg in logs if day and (lg["created_at"] or "")[:10] == day]
     return same_day[0] if len(same_day) == 1 else None
+
+
+def _backfill_note_id(con, log_id: int, card: dict) -> None:
+    """第一次对上时把笔记 id 记住；之后每次同步都靠它精确认人。"""
+    nid = (card.get("note_id") or "").strip()
+    if nid:
+        con.execute("UPDATE publish_logs SET note_id=? WHERE id=?", (nid, log_id))
 
 
 def _apply_creator_card(con, log_id: int, card: dict) -> dict:
@@ -2417,6 +2441,7 @@ def _apply_creator_card(con, log_id: int, card: dict) -> dict:
     )
     con.execute("UPDATE publish_logs SET stats_json=? WHERE id=?",
                 (json.dumps(stats, ensure_ascii=False), log_id))
+    _backfill_note_id(con, log_id, card)
     return stats
 
 
@@ -2438,10 +2463,10 @@ async def publish_stats_sync():
         raise HTTPException(400, "没读到创作者中心的笔记列表：确认已登录，且右侧窗口能点开侧栏「发布」")
     con = _db()
     _ensure_stats_history(con)
-    logs = [dict(r) for r in con.execute("SELECT id,title,created_at FROM publish_logs")]
+    logs = [dict(r) for r in con.execute("SELECT id,title,created_at,note_id FROM publish_logs")]
     matched, unmatched = [], []
     for card in cards:
-        log_id = _match_log(logs, card.get("title"), card.get("time"))
+        log_id = _match_log(logs, card.get("title"), card.get("time"), card.get("note_id"))
         if log_id is None:
             unmatched.append({"title": card.get("title", ""), "time": card.get("time", "")})
             continue
