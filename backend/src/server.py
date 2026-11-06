@@ -675,19 +675,21 @@ async def _refresh_engine_after_inject(eng) -> None:
     """R-6.37a 拆自 import_cookies：注入后刷新引擎小红书页使登录态生效（无则开 explore）。"""
     from src import engine_pool  # noqa: PLC0415
     ctx = await eng.context()
-    page = None
+    # R-6.53z8：注入 cookie 后需要新文档才生效，但禁止 reload / URL 直进——
+    # 关掉旧的小红书页，新开 /login；已登录时平台自己跳 /explore。
     for p in ctx.pages:
         if not p.is_closed() and "xiaohongshu" in (p.url or ""):
-            page = p
+            try:
+                await p.close()
+            except Exception:  # noqa: BLE001
+                pass
             break
-    if page is None:
-        page = await eng.new_page()
-        await page.goto("https://www.xiaohongshu.com/explore",
-                        wait_until="domcontentloaded", timeout=30000)
-        # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
-        _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-        await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
-    await page.reload(wait_until="domcontentloaded", timeout=30000)
+    page = await eng.new_page()
+    await page.goto("https://www.xiaohongshu.com/login",
+                    wait_until="domcontentloaded", timeout=30000)
+    # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
+    _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
+    await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
     await asyncio.sleep(3)
 
 
@@ -759,7 +761,7 @@ async def qrcode():
         return {
             "ok": True,
             "guide": "app 内登录小窗已打开：请扫码、或手机号+验证码、或微信登录（任一途径），登录成功后自动继续。",
-            "url": "https://www.xiaohongshu.com/explore",
+            "url": "https://www.xiaohongshu.com/login",
             "expires_in": 300,
         }
     except Exception as e:
@@ -2539,7 +2541,7 @@ async def _ensure_tab2_skeleton(eng) -> None:
         page = await eng.new_page()
         try:
             await page.goto(
-                "https://www.xiaohongshu.com/explore",
+                "https://www.xiaohongshu.com/login",
                 wait_until="domcontentloaded", timeout=10000,
             )
             from src import shell_window  # noqa: PLC0415

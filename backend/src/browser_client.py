@@ -246,7 +246,7 @@ async def login_check(account_id: str = "default") -> dict:
         return await _login_check_headless()
     except Exception as e:  # noqa: BLE001
         log.warning("headless 判定失败，回退浏览器: %s", e)
-        page = await _load(_XHS + "/explore", 6000, account_id)
+        page = await _load(LOGIN_URL, 6000, account_id)
         try:
             return await page.evaluate(
                 "() => ({"
@@ -296,7 +296,7 @@ async def _headless_explore(cookies: list[dict]) -> dict:
                 pass
         page = await ctx.new_page()
         try:
-            await page.goto(_XHS + "/explore", wait_until="domcontentloaded", timeout=40000)
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=40000)
             # 等 SPA 重定向/登录跳转稳定后再注入（goto 期间注入会随旧文档丢失）；
             # add_init_script 仅对【新文档】生效，故在此手动补注一次（幂等）
             await asyncio.sleep(5)
@@ -384,7 +384,7 @@ async def _verify_profile(cookies_list: list[dict], account_id: str = "default")
         except Exception:  # noqa: BLE001
             await cdp.send("Network.setCookies", {"cookies": cookies_list})
         try:
-            await page.goto(_XHS + "/explore", wait_until="domcontentloaded", timeout=40000)
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=40000)
             # 同 _headless_explore：等 SPA 重定向稳定后再注入，避免函数随旧文档丢失
             await asyncio.sleep(5)
             await injections.inject_once(page, "extract")
@@ -526,69 +526,108 @@ def _check_login_wall(account_id: str, wall: str) -> None:
     raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
 
 
-async def _reload_until_appeared(page, account_id: str) -> bool:
-    """R-6.53u 空壳重载：页内 reload 最多 2 次；命中登录墙照样中止。
+LOGIN_URL = "https://www.xiaohongshu.com/login"
 
-    小红书搜索接口偶发空响应（连续搜索限流/接口延迟），页面停在空壳
-    （导航+页脚、无 note-item）；UI 实测手动 reload 后 5s 内恢复 42 卡片。
-    页内 reload 比关页重开成本低且保留会话。
+# R-6.53z8（用户拍板，Nov 6）：除登录页外**不允许用 URL 进入任何页面**，也不允许
+# 刷新页面——实测首页刷新/直连搜索页 URL 更容易被要求登录或弹风控。搜索、进详情、
+# 进作者页一律模拟真人操作（点搜索框 → 逐字键入 → 回车 / 点卡片）。登录态不确定时
+# 走登录页间接进入：登录页在已登录情况下会自己跳到 explore，我们不插手。
+_SEARCH_BOX_JS = """() => {
+  const el = document.querySelector('#search-input') || document.querySelector('input.search-input');
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+}"""
+
+_NEEDS_LOGIN_JS = """() => {
+  const ph = [...document.querySelectorAll('input')].map(i => i.placeholder || '');
+  const txt = document.body ? document.body.innerText : '';
+  return ph.some(p => p.indexOf('手机号') >= 0) || txt.indexOf('登录探索更多内容') >= 0;
+}"""
+
+
+async def _open_login_page(page, timeout_s: float = 30) -> bool:
+    """唯一允许的 URL 导航：打开 /login，等平台自己跳到 explore。返回是否已进浏览页。
+
+    已登录 → 登录页自己跳 explore（平台行为）；未登录 → 停在登录页，返回 False
+    （由调用方抛 BrowserLoginRequiredError 提示人工扫码/验证）。
     """
-    for _round in (1, 2):
-        if page.is_closed():
-            return False
+    await cdp_call(page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=20000),
+                   timeout=CDP_NAV, label="open_login")
+    for _ in range(max(1, int(timeout_s / 2))):
+        await asyncio.sleep(2)
         try:
-            await cdp_call(page.reload(timeout=20000),
-                           timeout=CDP_NAV, label="search_reload_retry")
-        except Exception:  # noqa: BLE001
+            url = page.url or ""
+        except Exception:  # noqa: BLE001（页面已毁：交给上层重试）
             return False
-        appeared, wall = await _wait_note_cards(page, timeout_s=15)
-        _check_login_wall(account_id, wall)
-        if appeared:
+        if "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url:
             return True
     return False
 
 
-async def _open_old_search_page(keyword: str, account_id: str):
-    """回退旧版搜索 URL（新版 AI 搜索页无 note-item 的空壳场景）。
+async def _page_needs_login(page) -> bool:
+    """页面是否处于未登录渲染态（有手机号输入框/「登录探索更多内容」）。
 
-    返回 (page, appeared)：appeared=False 时上层照常收尾（0 条由调用方提示
-    「未采集到数据」），不在此处重试。
+    Cookie 存在不代表页面已按登录态渲染：实测登录态页面滞后时会整页按游客渲染，
+    此时点搜索框不触发搜索（只会弹登录浮层）。
     """
-    page = await _load(build_url(_XHS, "/search_result", {"keyword": keyword}), 2500,
-                       account_id,
-                       show_front=config.get_config().get("collect_tab_visible", False))
+    try:
+        return bool(await cdp_call(page.evaluate(_NEEDS_LOGIN_JS),
+                                   timeout=CDP_EVAL, label="needs_login", skip=True))
+    except Exception:  # noqa: BLE001（页面未就绪：按需要登录处理）
+        return True
+
+
+async def _ensure_browse_page(page, account_id: str) -> bool:
+    """确保页面处于登录态浏览页；不确定就走 /login（唯一允许 URL 的页面）。"""
+    try:
+        url = page.url or ""
+    except Exception:  # noqa: BLE001
+        url = ""
+    on_browse = "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url
+    if on_browse and not await _page_needs_login(page):
+        return True
+    return await _open_login_page(page)
+
+
+async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
+    """模拟真人搜索：点搜索框 → 逐字输入 → 回车 → 等卡片。不碰 URL、不刷新。"""
+    box = await cdp_call(page.evaluate(_SEARCH_BOX_JS), timeout=CDP_EVAL, label="search.box")
+    if not box:
+        return False
+    await cdp_call(page.mouse.click(box["x"], box["y"]), timeout=CDP_QUICK, label="search.click")
+    await asyncio.sleep(0.8)
+    await cdp_call(page.keyboard.type(keyword, delay=90), timeout=CDP_EVAL, label="search.type")
+    await asyncio.sleep(0.5)
+    await cdp_call(page.keyboard.press("Enter"), timeout=CDP_QUICK, label="search.enter")
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
     _check_login_wall(account_id, wall)
-    return page, appeared
+    return appeared
 
 
 async def _prepare_search_page(keyword: str, filters: dict | None = None,
                                account_id: str = "default"):
-    """打开搜索页并等卡片渲染；新版 AI 搜索页（无 note-item）回退旧版 URL。返回可用 page。
+    """进入搜索页并等卡片渲染——只靠页面内交互，不用 URL、不刷新。
 
-    检测登录墙/风控验证：Cookie 在但页面要求登录或验证时，立即抛
-    BrowserLoginRequiredError（不空等、不空跑），由采集链路中止任务并提示人工处理。
-    **登录墙页面保留不关闭**：用户需要在这个页面上扫码/验证恢复。
-    R-6.53v：停止由框架级 task.cancel() 中断所有 await 点（含本函数内的等待/重载），
-    不再在各循环点插 should_stop 检查（避免散点补丁）。
+    路径：取新页 → 进 /login（已登录则平台自己跳 explore）→ 点搜索框输入关键词回车。
+    未登录/停在登录页 → 抛 BrowserLoginRequiredError（页面保留供扫码/验证）。
+    空结果重试一次（重新点框输入），仍空则按 0 条收尾，不再 reload。
     """
-    url = build_url(_XHS, "/search_result",
-                    {"keyword": keyword, "source": "web_search_result_notes"})
-    page = await _load(url, 2500, account_id,
-                       show_front=config.get_config().get("collect_tab_visible", False))
-    appeared, wall = await _wait_note_cards(page, timeout_s=20)
-    _check_login_wall(account_id, wall)
+    page = await _page(account_id)
+    if not await _ensure_browse_page(page, account_id):
+        raise BrowserLoginRequiredError(
+            "小红书要求登录（请在采集窗完成扫码/人机验证后重试）")
+    appeared = await _search_by_typing(page, keyword, account_id)
     if not appeared:
-        appeared = await _reload_until_appeared(page, account_id)
-    if not appeared:
-        await _close_page_safe(page, account_id)
-        page, appeared = await _open_old_search_page(keyword, account_id)
+        appeared = await _search_by_typing(page, keyword, account_id)
+    _remember_page(page, account_id)
     if appeared:
         await _apply_filters(page, filters or {})
         if filters:
             _, wall = await _wait_note_cards(page, timeout_s=20)
             _check_login_wall(account_id, wall)
     return page
+
 
 async def _drain_page(page, items: list, seen: set) -> int:
     """提取当前页可见卡片并入 items（广告卡过滤 + 去重）。返回新增条数。"""
@@ -748,28 +787,102 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
         return {"keyword": keyword, "count": len(items), "items": items,
                 "stopped": bool(should_stop and should_stop())}
     finally:
+        _forget_page(account_id)
         if page is not None:
             await _close_page_safe(page, account_id)
 
 # ===========================================================================
 # 详情 / 作者 / 评论
 # ===========================================================================
+# --------------------------------------------------------------------------
+# R-6.53z8：详情/作者/评论一律"点开→提取→返回"，禁止另行 URL 进入
+# --------------------------------------------------------------------------
+_ACTIVE_PAGES: dict[str, object] = {}
+
+_CLICK_NOTE_JS = """(fid) => {
+  const links = [...document.querySelectorAll('section.note-item a')];
+  const hit = links.find(a => ((a.getAttribute('href') || '') + '').indexOf(fid) >= 0);
+  if (!hit) return false;
+  hit.click();
+  return true;
+}"""
+
+_CLICK_AUTHOR_JS = """(uid) => {
+  const links = [...document.querySelectorAll('a[href*="/user/profile/"]')];
+  const hit = links.find(a => ((a.getAttribute('href') || '') + '').indexOf(uid) >= 0);
+  if (!hit) return false;
+  hit.click();
+  return true;
+}"""
+
+_BACK_JS = """() => {
+  const cands = [...document.querySelectorAll('div, span, button, [role="button"]')]
+    .filter(e => e.offsetWidth && (e.innerText || '').trim().length <= 4
+                 && /返回|关闭/.test((e.innerText || '').trim()));
+  const hit = cands[0];
+  if (!hit) return false;
+  hit.click();
+  return true;
+}"""
+
+
+def _remember_page(page, account_id: str = "default") -> None:
+    """记下当前采集搜索页：详情/作者/评论只能在这个页面上点开，不新开 URL。"""
+    _ACTIVE_PAGES[account_id] = page
+
+
+def _forget_page(account_id: str = "default") -> None:
+    _ACTIVE_PAGES.pop(account_id, None)
+
+
+def _active_page(account_id: str = "default"):
+    """取活动搜索页；已关闭视为没有（调用方按缺数据降级，不回退到 URL）。"""
+    page = _ACTIVE_PAGES.get(account_id)
+    try:
+        if page is not None and not page.is_closed():
+            return page
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+async def _back_to_list(page) -> None:
+    """从详情页返回结果页：先点页面返回/关闭按钮，退化历史后退；不刷新、不输 URL。"""
+    clicked = await cdp_call(page.evaluate(_BACK_JS), timeout=CDP_QUICK,
+                             label="back.click", skip=True)
+    if clicked:
+        await asyncio.sleep(1.2)
+        return
+    try:
+        await cdp_call(page.go_back(), timeout=CDP_NAV, label="back.history", skip=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                account_id: str = "default") -> dict:
-    url = (
-        build_url(_XHS, f"/search_result/{note_id}",
-                  {"xsec_token": xsec_token, "xsec_source": "pc_search"})
-        if xsec_token else f"{_XHS}/explore/{note_id}"
-    )
-    page = await _load(url, wait_ms, account_id)
+    """详情页数据：在采集搜索页里点开目标卡片提取（不用 URL、不刷新）。
+
+    没有活动搜索页（采集已结束/被关）时返回 {}，由调用方按缺字段降级——
+    绝不为了补字段另开 /explore/{id} 或 /search_result/{id}。
+    """
+    page = _active_page(account_id)
+    if page is None:
+        log.info("无活动搜索页，跳过详情 note_id=%s（规则禁止 URL 进详情页）", note_id)
+        return {}
+    hit = await cdp_call(page.evaluate(_CLICK_NOTE_JS, note_id),
+                         timeout=CDP_EVAL, label="note.click")
+    if not hit:
+        return {}
+    await asyncio.sleep(wait_ms / 1000)
     try:
         return await page.evaluate("() => xhsExtractNoteDetail()")
     finally:
-        await _close_page_safe(page, account_id)
+        await _back_to_list(page)
 
 
 async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
-    """按完整链接打开笔记页并提取详情（数据回流用：用户发布后的笔记链接）。"""
+    """按完整链接打开笔记页并提取详情（**唯一例外**：链接由用户本人提供，无页内入口可达）。"""
     page = await _load(url, wait_ms, account_id)
     try:
         return await page.evaluate("() => xhsExtractNoteDetail()")
@@ -778,57 +891,73 @@ async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -
 
 
 async def user(uid: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
-    page = await _load(build_url(_XHS, f"/user/profile/{uid}"), wait_ms, account_id)
+    """作者主页数据：在详情页点作者链接进入（不用 URL、不刷新）；无活动页返回 {}。"""
+    page = _active_page(account_id)
+    if page is None:
+        log.info("无活动搜索页，跳过作者页 uid=%s", uid)
+        return {}
+    hit = await cdp_call(page.evaluate(_CLICK_AUTHOR_JS, uid),
+                         timeout=CDP_EVAL, label="user.click")
+    if not hit:
+        return {}
+    await asyncio.sleep(wait_ms / 1000)
     try:
         return await page.evaluate("() => xhsExtractUser()")
     finally:
-        await _close_page_safe(page, account_id)
+        await _back_to_list(page)
 
 
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default") -> dict:
-    """采集笔记评论区互动用户名单：打开原作品页 → 等待评论区渲染 → DOM 提取。"""
-    url = (
-        build_url(_XHS, f"/search_result/{note_id}",
-                  {"xsec_token": xsec_token, "xsec_source": "pc_search"})
-        if xsec_token else f"{_XHS}/explore/{note_id}"
-    )
-    page = await _load(url, 6000, account_id)
+    """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。"""
+    page = _active_page(account_id)
+    if page is None:
+        log.info("无活动搜索页，跳过评论采集 note_id=%s", note_id)
+        return {}
+    hit = await cdp_call(page.evaluate(_CLICK_NOTE_JS, note_id),
+                         timeout=CDP_EVAL, label="clients.click")
+    if not hit:
+        return {}
+    await asyncio.sleep(4)
     try:
-        # 评论区懒加载：滚动到精确容器 .interaction-container 触发渲染
-        for _ in range(3):
-            await page.evaluate("""() => {
-              const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
-              if (c) c.scrollIntoView({ block: "center" });
-            }""")
-            await asyncio.sleep(1.2)
-        # 评论区默认折叠：尝试点击「展开/查看全部评论」类按钮；无按钮则滚动到底加载
-        for _ in range(2):
-            clicked = await page.evaluate("""() => {
-              const btns = [...document.querySelectorAll('button, [role="button"], div, span')].filter(e => {
-                const t = (e.innerText || '').trim();
-                return t.length < 20 && /(展开|查看)?全部评论|查看更多评论/.test(t);
-              });
-              for (const b of btns) {
-                if (b.tagName === 'BUTTON' || b.getAttribute('role') === 'button' || b.childElementCount === 0) {
-                  try { b.click(); return true; } catch (e) { return false; }
-                }
-              }
-              return false;
-            }""")
-            if clicked:
-                await asyncio.sleep(2.5)
-                await page.evaluate("""() => {
-                  const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
-                  if (c) c.scrollIntoView({ block: "center" });
-                }""")
-                await asyncio.sleep(2)
-            else:
-                await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
-        return await page.evaluate("() => xhsExtractComments()")
+        return await _drain_comments(page)
     finally:
-        await _close_page_safe(page, account_id)
+        await _back_to_list(page)
 
+
+async def _drain_comments(page) -> dict:
+    """评论区懒加载：滚动容器 + 点「展开/全部评论」，再提取（沿用原实现）。"""
+    for _ in range(3):
+        await page.evaluate(_COMMENT_SCROLL_JS)
+        await asyncio.sleep(1.2)
+    for _ in range(2):
+        clicked = await page.evaluate(_COMMENT_EXPAND_JS)
+        if clicked:
+            await asyncio.sleep(2.5)
+            await page.evaluate(_COMMENT_SCROLL_JS)
+            await asyncio.sleep(2)
+        else:
+            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(2)
+    return await page.evaluate("() => xhsExtractComments()")
+
+
+_COMMENT_SCROLL_JS = """() => {
+  const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
+  if (c) c.scrollIntoView({ block: "center" });
+}"""
+
+_COMMENT_EXPAND_JS = """() => {
+  const btns = [...document.querySelectorAll('button, [role="button"], div, span')].filter(e => {
+    const t = (e.innerText || '').trim();
+    return t.length < 20 && /(展开|查看)?全部评论|查看更多评论/.test(t);
+  });
+  for (const b of btns) {
+    if (b.tagName === 'BUTTON' || b.getAttribute('role') === 'button' || b.childElementCount === 0) {
+      try { b.click(); return true; } catch (e) { return false; }
+    }
+  }
+  return false;
+}"""
 
 
 # ===========================================================================

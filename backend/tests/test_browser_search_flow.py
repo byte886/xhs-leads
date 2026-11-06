@@ -204,89 +204,94 @@ def _passthrough_cdp(monkeypatch):
 
 
 class TestPrepareSearchPage:
-    """S2 首行：登录墙中止、空壳 reload 恢复、回退旧版 URL。"""
+    """R-6.53z8：新页 → /login（已登录由平台自跳 explore）→ 点搜索框输入回车。
 
-    def test_login_wall_raises_and_keeps_page(self, monkeypatch):
-        page, marks = _SearchPage(), []
+    三条守护：未登录直接抛错并保留页面；空壳只重试"再输入一次"，不 reload、
+    不回退旧版搜索 URL；筛选步骤命中登录墙照样抛错。
+    """
 
-        async def fake_load(*a, **k):
+    def test_not_logged_in_raises_and_keeps_page(self, monkeypatch):
+        page = _SearchPage()
+
+        async def fake_page(_a="default"):
             return page
 
-        async def fake_wait(p, timeout_s=45):
-            return False, "登录后查看"
+        async def fake_browse(p, acc):
+            return False
 
-        monkeypatch.setattr(bc, "_load", fake_load)
-        monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
-        monkeypatch.setattr(bc, "_handle_login_wall", lambda acc, wall: marks.append(wall))
-        _no_config(monkeypatch)
+        monkeypatch.setattr(bc, "_page", fake_page)
+        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
         with pytest.raises(bc.BrowserLoginRequiredError):
             _run(bc._prepare_search_page("翡翠"))
-        assert marks == ["登录后查看"]
-        assert page.closed is False  # 保留页面供扫码
+        assert page.closed is False  # 保留页面供扫码/验证
 
-    def test_empty_shell_reload_recovers(self, monkeypatch):
-        page, waits, applied = _SearchPage(), [(False, ""), (True, "")], []
+    def test_second_typing_recovers(self, monkeypatch):
+        page, waits, applied = _SearchPage(), [False, True], []
 
-        async def fake_load(*a, **k):
+        async def fake_page(_a="default"):
             return page
 
-        async def fake_wait(p, timeout_s=45):
+        async def fake_browse(p, acc):
+            return True
+
+        async def fake_type(p, kw, acc):
             return waits.pop(0)
 
         async def fake_filters(p, f):
             applied.append(f)
 
-        monkeypatch.setattr(bc, "_load", fake_load)
-        monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
+        monkeypatch.setattr(bc, "_page", fake_page)
+        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
-        _passthrough_cdp(monkeypatch)
-        _no_config(monkeypatch)
         got = _run(bc._prepare_search_page("翡翠"))
-        assert got is page and page.reloads == 1 and applied == [{}]
+        assert got is page and applied == [{}] and waits == []
 
-    def test_empty_after_two_reloads_falls_back(self, monkeypatch):
-        page, old, closed = _SearchPage(), _SearchPage(), []
-        pages = [page, old]
+    def test_empty_twice_returns_page_without_reload(self, monkeypatch):
+        page = _SearchPage()
 
-        async def fake_load(*a, **k):
-            return pages.pop(0)
-
-        async def fake_wait(p, timeout_s=45):
-            return False, ""
-
-        async def fake_close(p, acc=None):
-            closed.append(p)
-
-        async def fake_filters(p, f):
-            return None
-
-        monkeypatch.setattr(bc, "_load", fake_load)
-        monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
-        monkeypatch.setattr(bc, "_close_page_safe", fake_close)
-        monkeypatch.setattr(bc, "_apply_filters", fake_filters)
-        _passthrough_cdp(monkeypatch)
-        _no_config(monkeypatch)
-        got = _run(bc._prepare_search_page("翡翠"))
-        assert got is old
-        assert page.reloads == 2
-        assert closed == [page]  # 回退前关旧页，避免双页残留
-
-    def test_filter_step_wall_raises(self, monkeypatch):
-        page, waits = _SearchPage(), [(True, ""), (True, "完成验证")]
-
-        async def fake_load(*a, **k):
+        async def fake_page(_a="default"):
             return page
 
-        async def fake_wait(p, timeout_s=45):
+        async def fake_browse(p, acc):
+            return True
+
+        async def fake_type(p, kw, acc):
+            return False
+
+        async def fake_filters(p, f):
+            raise AssertionError("空壳不应进入筛选步骤")
+
+        monkeypatch.setattr(bc, "_page", fake_page)
+        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_search_by_typing", fake_type)
+        monkeypatch.setattr(bc, "_apply_filters", fake_filters)
+        got = _run(bc._prepare_search_page("翡翠"))
+        assert got is page and page.closed is False
+
+    def test_filter_step_wall_raises(self, monkeypatch):
+        page, waits = _SearchPage(), [(True, "完成验证")]
+
+        async def fake_page(_a="default"):
+            return page
+
+        async def fake_browse(p, acc):
+            return True
+
+        async def fake_type(p, kw, acc):
+            return True
+
+        async def fake_wait(p, timeout_s=20):
             return waits.pop(0)
 
         async def fake_filters(p, f):
             return None
 
-        monkeypatch.setattr(bc, "_load", fake_load)
+        monkeypatch.setattr(bc, "_page", fake_page)
+        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
         monkeypatch.setattr(bc, "_handle_login_wall", lambda acc, wall: None)
-        _no_config(monkeypatch)
         with pytest.raises(bc.BrowserLoginRequiredError):
             _run(bc._prepare_search_page("翡翠", {"sort": "综合"}))

@@ -17,3 +17,4 @@
 3. `constitution/engineering.prompt` — 工程规则
 4. `constitution/workflow.prompt` — 工作流规则
 5. 本角色 prompt：`roles/<你的角色>.prompt`
+6. `docs/project/小红书页面导航与登录硬性规则.md` — **小红书页面导航与登录硬性规则（强制）**：URL 只允许开 `/login`（浏览页 `/explore` 仅已确认登录时可用），其余页面只准靠模拟鼠标/键盘或 JS 点击进入，全场景禁止 `reload`；改任何小红书相关代码前必须先读

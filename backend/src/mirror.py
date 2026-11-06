@@ -23,6 +23,8 @@ from src import engine_pool, logger as xlog
 log = xlog.get("mirror")
 
 XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
+# R-6.53z8：登录小窗只允许 /login；已登录时平台自己会跳 /explore
+XHS_LOGIN = "https://www.xiaohongshu.com/login"
 
 
 async def login_page(account: str = "default"):
@@ -36,7 +38,7 @@ async def login_page(account: str = "default"):
         except Exception:  # noqa: BLE001
             continue
     page = await eng.new_page()
-    await page.goto(XHS_EXPLORE, wait_until="domcontentloaded", timeout=30000)
+    await page.goto(XHS_LOGIN, wait_until="domcontentloaded", timeout=30000)
     await asyncio.sleep(3)  # 等 SPA 登录弹窗渲染稳定
     return page
 
