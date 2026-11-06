@@ -57,6 +57,15 @@ function phStyle(note: Note): Record<string, string> {
   return { background: palette[h % palette.length] }
 }
 
+/** 正文是否只有话题标签：去掉 #话题 与标点空白后不剩文字 => 作者只勾了标签、没写正文。
+ *  这类笔记可评分、可看数据，但没有可克隆的文字内容。 */
+function descTagOnly(note: Note): boolean {
+  const d = (note.desc || '').replace(/[\r\n]+/g, ' ').trim()
+  if (!d) return false
+  const stripped = d.replace(/#[^#\s]+/g, '').replace(/[，。！？、,.!?\s@【】（）()]/g, '').trim()
+  return stripped.length === 0
+}
+
 function onCardClick(note: Note, ev: MouseEvent) {
   if (props.selectable) {
     // 勾选模式：点击卡片切换选中；点右上角勾选标记同样切换
@@ -284,7 +293,14 @@ function fmtPub(ts: string | number | null): string {
         </div>
       </div>
       <div class="meta">
-        <div class="title">{{ note.title || '（无标题）' }}</div>
+        <div class="title">
+          {{ note.title || '（无标题）' }}
+          <span
+            v-if="descTagOnly(note)"
+            class="tag-only"
+            title="这条笔记正文只有话题标签、没有文字内容：可评分选品，不适合克隆仿写"
+          >正文仅标签</span>
+        </div>
         <div class="row">
           <span class="author">
             <span class="avatar"></span>{{ note.nickname || '未知作者' }}
@@ -352,4 +368,19 @@ function fmtPub(ts: string | number | null): string {
 .sm-hint { color: #777; font-size: 11px; line-height: 1.5; }
 .sm-raw { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; color: #666; font-size: 12px; line-height: 1.6; }
 .sm-concl { margin-top: 10px; padding: 10px 12px; background: #FFF7E6; border-radius: 8px; color: #8a6a2f; font-size: 12px; line-height: 1.6; }
+
+/* 「正文仅标签」小标：提示这条笔记没有可克隆的文字内容 */
+.tag-only {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 15px;
+  color: #8a6d3b;
+  background: #fdf6e3;
+  border: 1px solid #f0e0bd;
+  border-radius: 3px;
+  vertical-align: middle;
+}
 </style>

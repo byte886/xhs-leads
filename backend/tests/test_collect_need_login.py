@@ -22,10 +22,10 @@ def _ctx(con):
     return {"req": _req(), "con": con, "cache": {}, "account_id": "default", "now": ""}
 
 
-def _state(saved: int = 0):
+def _state(saved: int = 0, limit: int = 3):
     return {
         "status": "running", "phase": "detail", "collected": saved, "saved": saved,
-        "partial_items": [], "keyword": "翡翠", "limit": 3,
+        "partial_items": [], "keyword": "翡翠", "limit": limit,
     }
 
 
@@ -53,8 +53,24 @@ def test_need_login_ends_task_and_keeps_saved():
     assert state["status"] == "ended_need_login"
     assert state["phase"] == "done"
     assert "需要登录" in state["note"]
-    assert "2 条保留" in state["note"]
+    assert "已采 2 条 / 目标 3 条" in state["note"]   # 分子 + 分母，看得出采了几成
     assert state["saved"] == 2
+
+
+def test_need_login_note_shows_goal_when_limit_known():
+    """目标条数不一定是 3：按实际 limit 显示分母。"""
+    state = _state(saved=3, limit=6)
+    server._finalize_need_login(state, "default", RuntimeError("小红书要求登录"))
+
+    assert "已采 3 条 / 目标 6 条" in state["note"]
+
+
+def test_need_login_note_without_goal_falls_back():
+    """拿不到目标条数时不硬塞「目标 0 条」，退回「保留」措辞。"""
+    state = _state(saved=2, limit=0)
+    server._finalize_need_login(state, "default", RuntimeError("小红书要求登录"))
+
+    assert "已采 2 条）" in state["note"]
 
 
 def test_need_login_without_data_says_so():

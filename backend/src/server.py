@@ -1197,11 +1197,13 @@ def _finalize_need_login(state: dict, account_id: str, err: Exception) -> None:
     不挂起等待、不续采——用户口径是「需要登录就重新采集」。
     """
     saved = state.get("saved", 0)
+    limit = state.get("limit", 0)
     state["status"] = "ended_need_login"
     state["phase"] = "done"
+    goal = f" / 目标 {limit} 条" if limit else ""
     state["note"] = (
-        f"需要登录，本次采集结束（已采 {saved} 条保留）" if saved
-        else f"需要登录，本次采集结束（未采到数据）：{str(err)[:60]}"
+        f"需要登录，本次采集结束（已采 {saved} 条{goal}）" if saved
+        else f"需要登录，本次采集结束（未采到数据{goal}）：{str(err)[:60]}"
     )
     emit_collect(state)
 
