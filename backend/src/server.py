@@ -624,17 +624,9 @@ async def login_begin(req: LoginBeginReq | None = None):
     evt = _LOGIN_GATE.get("evt")  # R-6.48q：事件驱动唤醒守卫（同进程同 loop，零轮询）
     if evt is not None:
         evt.set()
-    # R-6.22g：登录引导触发即收起采集调试窗（右窗关闭），壳窗（登录页所在）保留——
-    # 用户约定「触发需要登录时右侧要么关闭要么有提示」；扫码成功后 new_page 按登录态恢复。
-    try:
-        from src import engine_pool  # noqa: PLC0415
-
-        eng = await engine_pool.pool.get("default")
-        n = await eng.collapse_debug_windows()
-        if n:
-            log.info("登录引导：收起采集调试窗 %s 个", n)
-    except Exception:  # noqa: BLE001（收起失败不阻断登录导航）
-        pass
+    # R-6.53z8d：登录落点改为右侧调试窗——这里**不再收起**它。
+    # 右窗现在兼任登录页容器，收起它等于把登录入口关掉；守卫导航前会按需新开。
+    # 旧语义（R-6.22g「触发登录即收起右窗、登录页放壳窗」）已整体退役。
     return {"ok": True, "already_logged_in": False, "force": force}
 
 

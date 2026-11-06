@@ -186,7 +186,11 @@ def test_login_guard_event_driven_no_polling(monkeypatch):
     monkeypatch.setattr(sw, "_guard_startup_status", _noop)
     monkeypatch.setattr(sw, "_guard_announce_and_navigate", _noop)
     monkeypatch.setattr(sw, "_guard_monitor_loop", _fake_monitor)
-    monkeypatch.setattr(sw, "_guard_return_to_app", _noop)
+
+    async def _canvas(win):
+        return win  # 测试无窗口协调器：登录落点回退壳窗（生产走右侧调试窗）
+
+    monkeypatch.setattr(sw, "_guard_login_canvas", _canvas)
 
     win = _FakeWin(FakePage())
     stop = asyncio.Event()
@@ -280,3 +284,20 @@ def test_scan_signals_single_page():
     page, body, redirect = asyncio.run(server._scan_xhs_pages_for_signals(ctx))
     assert page is p1            # 首个小红书页
     assert "登录超限" not in body  # 只扫第一页（全局信号单页足够）
+
+
+def test_login_canvas_prefers_tab2(monkeypatch):
+    """R-6.53z8d：登录落点必须是右侧调试窗——左窗只显示 APP，不参与登录。"""
+    t2 = FakePage("https://www.xiaohongshu.com/login")
+
+    class _Coord:
+        @staticmethod
+        def tab2():
+            return t2
+
+    monkeypatch.setattr(sw, "get_coordinator", lambda: _Coord())
+    shell = _FakeWin(FakePage("http://127.0.0.1:8791/"))
+    shell.base_url = "http://127.0.0.1:8791"  # 真实 ShellWindow 必有；替身补齐
+    out = asyncio.run(sw._guard_login_canvas(shell))
+    assert out is not shell, "登录不应落在壳窗"
+    assert out.page is t2

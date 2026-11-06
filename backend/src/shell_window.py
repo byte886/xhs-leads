@@ -977,26 +977,6 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
         _guard_safe_remove(remove_nav_hook)
 
 
-async def _guard_return_to_app(win: "ShellWindow", base: str) -> None:
-    """真登录成功回前端（强制登录：失败/中途退出不回）。"""
-    for _attempt in range(3):
-        try:
-            await win.load_url(f"{base}/")
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            await win.evaluate_js("window.location.href = '%s'" % f"{base}/")
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            cur = await win.current_url()
-            if cur.startswith(base):
-                return  # 已切回 APP
-        except Exception:  # noqa: BLE001
-            pass
-        await asyncio.sleep(1.0)
-
-
 async def _guard_startup_status(base: str) -> None:
     """启动时按 login_status 判定三态。R-6.48p（用户最新拍板，覆盖 R-6.48i）：
     启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面，前端
@@ -1038,6 +1018,30 @@ async def _guard_next_force(gate, win, base, stop) -> bool | None:
         return bool(gate.get("force"))
     await asyncio.sleep(1.5)
     return await _guard_wait_pending(win, base, stop)
+
+
+async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
+    """登录落点：右侧调试窗（Tab2）。左窗只显示 APP，全程不参与登录。
+
+    R-6.53z8d：这是双窗口职责分离的入口——登录页只出现在右窗，壳窗永不被导航。
+    右窗缺失时现场开一个（登录必须有头有窗，headless 会被平台风控拦死）。
+    """
+    coord = get_coordinator()
+    p = coord.tab2()
+    if p is not None and not p.is_closed():
+        return ShellWindow(p, win.base_url)
+    try:
+        from src import engine_pool  # noqa: PLC0415
+
+        eng = await engine_pool.pool.get("default")
+        ctx = await eng.context()
+        p = await ctx.new_page()
+        coord.register_tab2(p)
+        print("[xhs-leads][guard] 右侧调试窗缺失，已新开一个作为登录落点", flush=True)
+        return ShellWindow(p, win.base_url)
+    except Exception as e:  # noqa: BLE001（极端场景：引擎未就绪，退回壳窗保底可用）
+        print(f"[xhs-leads][guard] 新开登录窗失败，回退壳窗: {e!r}", flush=True)
+        return win
 
 
 async def _guard_announce_and_navigate(win, base, force) -> None:
@@ -1083,12 +1087,14 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
             continue
         if in_login:
             continue  # 正在登录页（局部轮询控制）
-        await _guard_announce_and_navigate(win, base, force)
+        login_win = await _guard_login_canvas(win)
+        await _guard_announce_and_navigate(login_win, base, force)
         in_login = True
-        ok = await _guard_monitor_loop(win, base, stop, force)
+        ok = await _guard_monitor_loop(login_win, base, stop, force)
         in_login = False
         if ok:
-            await _guard_return_to_app(win, base)
+            # R-6.53z8d：壳窗全程未被导航，无需「回 APP」；登录页会自行跳转浏览页
+            print("[xhs-leads][guard] 登录完成——左窗保持 APP，右窗由平台自行跳转浏览页", flush=True)
 
 async def _coord_or_scan_shell_page(base: str):
     """R-6.37i 拆自 _rebind_if_closed：协调器壳引用；未就绪则回退 URL 扫描。"""

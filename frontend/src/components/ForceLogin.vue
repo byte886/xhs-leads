@@ -7,7 +7,7 @@
 // R-6.26 弹框重设计：结构按 Material/Carbon 对话框规范（标题→正文→主操作→辅助行），
 // 文案按 UX Writing 规范（平静、面向解决、去技术术语——不出现 Cookie/风控/强制等词）。
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { apiCollapseDebugWindows, apiLoginBegin, apiLoginStatus } from '../api'
+import { apiLoginBegin, apiLoginStatus } from '../api'
 import { onAppEvent } from '../events'
 import { appState, toast } from '../store'
 
@@ -95,9 +95,8 @@ watch(() => props.open, (v) => {
     stateText.value = '正在检查登录状态…'
     busy.value = false
     wentLogin.value = false
-    // R-6.22g：登录引导弹出即收起右窗采集调试窗（壳窗保留）——「需要登录时
-    // 右侧要么关闭要么有提示」；扫码成功后再点采集由后端按登录态恢复。
-    apiCollapseDebugWindows().catch(() => {})
+    // R-6.53z8d：不再收起右窗——右窗就是登录落点（双窗口职责分离后，
+    // 收起它等于把登录入口关掉）。旧 R-6.22g 语义已退役。
     startCheck()
   } else {
     stopTimer()
