@@ -1153,6 +1153,7 @@ async def _coord_or_scan_shell_page(base: str):
     return p
 
 
+@xlog.tagged("win:collect:login")
 async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
     """R-6.19：壳 tab 被 keeper 重建后，旧 page 已关闭——登录守卫重绑定新壳 page。
 
@@ -1213,6 +1214,7 @@ async def _keeper_find_shell(ctx, base, coord):
     return None
 
 
+@xlog.tagged("win:collect:find")
 def _match_collect_page(p, shell, coord):
     """R-6.37g 拆自 _keeper_find_collect_win：单页是否 采集窗（explore 或 login-hint）。"""
     if p is shell or p.is_closed():
@@ -1305,6 +1307,7 @@ async def _keeper_sweep_blank(ctx, shell) -> int:
 _BLANK_URLS = ("", "about:blank", "chrome://newtab", "chrome://newtab/")
 
 
+@xlog.tagged("win:collect:sweep")
 async def _close_if_blank(p, u: str) -> bool:
     """空白/新标签页才关闭（返回 True=已关闭）；/login 等正常页面一律保留。"""
     if u not in _BLANK_URLS:
@@ -1351,6 +1354,7 @@ def _keeper_log_snapshot(ctx, coord, last):
     return last[0]
 
 
+@xlog.tagged("win:collect:calibrate")
 async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None:
     """R-6.37i 拆自 _keeper_setup_collect_win：复用残留 采集窗 时校准窗口并注册监听。
 
@@ -1370,6 +1374,7 @@ async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None
         log.warning(f"采集窗 采集窗口复用校准失败: {e!r}")
 
 
+@xlog.tagged("win:collect:setup")
 async def _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config):
     """初始块 采集窗：复用残留 explore/login-hint 或新建采集窗（失败延迟重试 1 次）。"""
     async with engine_pool.COLLECT_WIN_GUARD_LOCK:
