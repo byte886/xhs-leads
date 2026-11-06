@@ -8,6 +8,7 @@
 // 文案按 UX Writing 规范（平静、面向解决、去技术术语——不出现 Cookie/风控/强制等词）。
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { apiCollapseDebugWindows, apiLoginBegin, apiLoginStatus } from '../api'
+import { onAppEvent } from '../events'
 import { appState, toast } from '../store'
 
 const props = defineProps<{ open: boolean }>()
@@ -17,10 +18,11 @@ const stateText = ref('正在检查登录状态…')
 const busy = ref(false)
 // R-6.22f：用户是否已主动点「去登录」——只有走完登录流程且复查真实有效才关窗
 const wentLogin = ref(false)
-let timer: ReturnType<typeof setInterval> | null = null
+// R-6.53z8c：登录复查改为事件驱动——后端在扫码成功时推 login 事件，不再每秒轮询。
+let offEvents: (() => void) | null = null
 
 function stopTimer() {
-  if (timer) { clearInterval(timer); timer = null }
+  if (offEvents) { offEvents(); offEvents = null }
 }
 
 // 打开即复查登录态（与登录成功回 APP 复查同一逻辑）：
@@ -36,29 +38,35 @@ function stopTimer() {
 //         被踢/未登录 → 对应文案。
 //       wentLogin=true（已点「去登录」，从登录页回 APP 复查）→ 仅真实有效登录
 //         （logged_in 且非 risk_verify）→ 关窗进工作台；仍风控/未登录 → 保持并提示。
+/** 应用一次登录态判定到弹窗（文案 + 是否允许关闭）。 */
+function applyState(lg: any) {
+  appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
+  const realOk = !!lg.logged_in && !lg.risk_verify
+  if (wentLogin.value && realOk) {
+    stopTimer()
+    appState.cookieRefreshTick += 1
+    emit('done')
+    return
+  }
+  if (lg.kicked) stateText.value = '登录状态已失效，请重新登录后继续'
+  else if (lg.risk_verify) stateText.value = '登录已失效，重新登录后才能继续采集'
+  else if (realOk) stateText.value = '登录状态正常，点「去登录」确认后继续'
+  else stateText.value = '尚未登录小红书，登录后才能开始采集'
+}
+
+/** 重新查一次（仅用于打开时对齐 + 收到 login 事件时复查，不构成轮询）。 */
+async function refreshState() {
+  try {
+    applyState(await apiLoginStatus())
+  } catch {
+    stateText.value = '服务未就绪，正在重试…'
+  }
+}
+
 function startCheck() {
   stopTimer()
-  // R-6.48q：登录复查降频 1s→3s——扫码登录本身秒级，1s 波动无意义；3s 足够感知
-  // 登录成功回 APP，同时减少弹框期间高频请求
-  timer = setInterval(async () => {
-    try {
-      const lg = await apiLoginStatus()
-      appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-      const realOk = !!lg.logged_in && !lg.risk_verify
-      if (wentLogin.value && realOk) {
-        stopTimer()
-        appState.cookieRefreshTick += 1
-        emit('done')
-        return
-      }
-      if (lg.kicked) stateText.value = '登录状态已失效，请重新登录后继续'
-      else if (lg.risk_verify) stateText.value = '登录已失效，重新登录后才能继续采集'
-      else if (realOk) stateText.value = '登录状态正常，点「去登录」确认后继续'
-      else stateText.value = '尚未登录小红书，登录后才能开始采集'
-    } catch {
-      stateText.value = '服务未就绪，正在重试…'
-    }
-  }, 1000)
+  refreshState()  // 打开即对齐一次
+  offEvents = onAppEvent((ev) => { if (ev.kind === 'login') refreshState() })
 }
 
 async function goLogin() {

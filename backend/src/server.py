@@ -754,6 +754,7 @@ async def import_cookies(req: ImportCookiesReq):
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
     if logged_in:
         _notify_login_ok()  # R-6.53z8c：唤醒等待登录的采集任务（扫码即自动续采）
+        _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
         # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
         _LOGIN_INVALID = False
         _LOGIN_GATE["pending"] = False
@@ -1027,6 +1028,41 @@ import asyncio
 import uuid
 
 _COLLECT_TASKS: dict = {}
+
+
+# R-6.53z8c：全局事件总线——所有状态变化「边沿触发」推给前端，取代轮询。
+# 只表达变化，不做周期采样；SSE 的 30s ping 属传输层保活，不承载业务状态。
+_EVENT_SUBS: list = []
+_EVENT_QUEUE_MAX = 200
+
+
+def _state_snapshot(state: dict) -> dict:
+    """采集任务的可推送快照（前端据此渲染按钮与进度）。"""
+    return {
+        "task_id": state.get("task_id", ""),
+        "status": state.get("status", ""),
+        "phase": state.get("phase", ""),
+        "collected": state.get("collected", 0),
+        "saved": state.get("saved", 0),
+        "limit": state.get("limit", 0),
+        "keyword": state.get("keyword", ""),
+        "note": state.get("note", ""),
+        "paused_need_login": state.get("status") == "paused_need_login",
+    }
+
+
+def _emit_event(kind: str, data: dict | None = None) -> None:
+    """广播一条事件给所有订阅者。只在状态真正变化时调用（无轮询）。"""
+    for q in list(_EVENT_SUBS):
+        try:
+            q.put_nowait({"kind": kind, "data": data or {}})
+        except asyncio.QueueFull:  # 订阅者积压：丢最旧语义，不阻塞生产者
+            pass
+
+
+def emit_collect(state: dict) -> None:
+    """推送采集状态（暂停/恢复/进度/收尾共用同一形状）。"""
+    _emit_event("collect", _state_snapshot(state))
 
 
 def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default") -> bool:
@@ -1331,6 +1367,7 @@ async def _pause_for_login(state: dict, err: Exception) -> bool:
     state["phase"] = "paused"
     state["note"] = f"需要登录：{str(err)[:80]}"
     state["paused_at"] = time.time()
+    emit_collect(state)  # 撞墙即推：左侧立即转「等待登录」，不用等下一次轮询
     ev = state.get("resume_event")
     if ev is None:
         ev = asyncio.Event()
@@ -1358,6 +1395,18 @@ def _notify_login_ok() -> int:
     return n
 
 
+def _on_collect_progress(state: dict):
+    """进度回调→事件推送：每采到一条推一次（变化驱动，不是定时轮询）。"""
+
+    def _cb(n: int, it=None) -> None:
+        state["collected"] = state.get("base_saved", 0) + n
+        if it is not None:
+            state["partial_items"] = it
+        emit_collect(state)
+
+    return _cb
+
+
 async def _collect_round(state: dict, req, ctx: dict, account_id: str):
     """一轮「搜索 → 逐条补全入库」；撞墙抛 BrowserLoginRequiredError 给外层暂停。
 
@@ -1367,10 +1416,7 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
     res = await search_via_browser(
         req.keyword, req.limit,
         # R-6.53v：回调携带 items 引用——任务级取消时已采数据从此处抢救
-        on_progress=lambda n, it=None: (
-            state.__setitem__("collected", state.get("base_saved", 0) + n),
-            state.__setitem__("partial_items", it if it is not None else state.get("partial_items", [])),
-        ),
+        on_progress=_on_collect_progress(state),
         should_stop=lambda: state["stop_event"],
         filters={
             "sort": req.sort, "note_type": req.note_type,
@@ -1482,6 +1528,7 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         if con is not None:
             con.close()  # _db() 每次新建连接，结束即释放
         _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
+        emit_collect(state)  # 收尾一次推送：done/stopped/error 统一从事件到前端
 
 
 @app.post("/api/collect_start")
@@ -1507,12 +1554,42 @@ async def collect_start(req: SearchReq):
         "account_id": account_id, "dedup_key": f"{req.keyword.strip()}|{account_id}",
         "started_ts": time.time(),
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "phase": "search",
+        "phase": "search", "task_id": tid,
     }
     _COLLECT_TASKS[tid] = state
     state["task"] = asyncio.create_task(_collect_worker(state, req, account_id))
     return {"ok": True, "task_id": tid, "keyword": req.keyword, "limit": req.limit,
             "account_id": account_id}
+
+
+@app.get("/api/events")
+async def events_stream():
+    """R-6.53z8c：SSE 事件流——前端从「定时问」改为「变化被通知」。
+
+    只承载状态变化（collect/login/status）；30s 一次注释心跳仅用于保持连接，
+    不携带业务状态，因此不构成业务轮询。
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=_EVENT_QUEUE_MAX)
+    _EVENT_SUBS.append(q)
+
+    async def gen():
+        try:
+            yield "retry: 3000\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=30)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # 传输层保活
+                    continue
+                yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+        finally:
+            if q in _EVENT_SUBS:
+                _EVENT_SUBS.remove(q)
+
+    return StreamingResponse(
+        gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/status_now")

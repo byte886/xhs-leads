@@ -1,21 +1,31 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { apiStatusNow } from '../api'
+import { onAppEvent } from '../events'
 
 // R 批 v1.4：全局状态提示条 = 实时播报「正在干什么」（不落盘，区别于审计日志）。
 // 数据源 GET /api/status_now（后端聚合采集任务注册表）；2s 轮询；空闲时隐藏。
 
 const st = ref<{ action: string; detail: string; collecting: boolean; collected?: number; limit?: number; keyword?: string }>({ action: '空闲', detail: '', collecting: false })
-let timer: ReturnType<typeof setInterval> | null = null
-
-async function poll() {
-  try {
-    st.value = await apiStatusNow()
-  } catch { /* 后端未就绪：保持旧值 */ }
+// R-6.53z8c：状态条改为事件驱动——后端在状态变化时推一次，不再每 2 秒查询。
+function apply(d: Record<string, any>) {
+  const busy = d.status === 'running' || d.status === 'paused_need_login' || d.status === 'resuming'
+  st.value = busy
+    ? {
+        action: d.status === 'paused_need_login' ? '等待登录' : '正在采集',
+        detail: d.note || '',
+        collecting: true,
+        collected: d.collected,
+        limit: d.limit,
+        keyword: d.keyword,
+      }
+    : { action: '空闲', detail: '', collecting: false }
 }
 
-onMounted(() => { poll(); timer = setInterval(poll, 2000) })
-onBeforeUnmount(() => { if (timer) { clearInterval(timer); timer = null } })
+let off: (() => void) | null = null
+onMounted(() => {
+  off = onAppEvent((ev) => { if (ev.kind === 'collect') apply(ev.data) })
+})
+onBeforeUnmount(() => { if (off) { off(); off = null } })
 </script>
 
 <template>

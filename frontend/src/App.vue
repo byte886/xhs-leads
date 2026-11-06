@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { onAppEvent } from './events'
 import { appState, setStage, setTab, toast } from './store'
 import type { Note } from './types'
 import FlowBar from './components/FlowBar.vue'
@@ -28,6 +29,8 @@ const menuPos = ref({ x: 0, y: 0 })
 // 信号时弹框（collectClients / CollectPanel / PublishPage 各失败分支统一 isLoginAbnormal）；
 // 启动/刷新时的 checkLogin / ensureLoginChecked 一次性判定保留。
 const forceOpen = ref(false)
+// R-6.53z8c：事件订阅句柄（组件卸载时释放）
+let offEvents: (() => void) | null = null
 
 function checkLogin() {
   apiLoginStatus(8000).then((lg) => {
@@ -135,23 +138,21 @@ onMounted(async () => {
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
-  // R-6.26 运行时登录守护：低频轮询，发现失效（未登录/被踢/风控需验证）即弹 ForceLogin
-  // R-6.53t：30s→60s 降频（login_status 每次可能触发引擎页面扫描/注入，与用户手动
-  // 浏览叠加会加重小红书风控判定「自动化特征」——用户实测「明明登录却要求登录」）
-  const loginGuardTimer = window.setInterval(async () => {
-    if (forceOpen.value) return  // 弹框已打开（ForceLogin 内部自行复查），不再重复触发
-    try {
-      const lg = await apiLoginStatus(6000)
-      // R-6.26：未登录 / 被踢 / 风控需人工验证 均视为"需要登录引导"（risk_verify 时
-      // ForceLogin 须保持打开引导扫码，见 R-6.22e）
-      const ok = !!(lg && lg.logged_in) && !lg.kicked && !lg.risk_verify
-      if (!ok) {
-        appState.login = { logged_in: false, nickname: '', kicked: !!(lg && lg.kicked) }
-        forceOpen.value = true
-      }
-    } catch { /* 后端未就绪/瞬时失败：静默，下轮再查 */ }
-  }, 60000)
-  onUnmounted(() => window.clearInterval(loginGuardTimer))
+  // R-6.53z8c：登录守护改为事件驱动——不再每 60 秒主动查一次（主动查会触发页面扫描，
+  // 与用户手动浏览叠加会加重平台风控判定）。只在两种真实信号到达时才响应：
+  //   ① collect 事件 paused_need_login（采集撞墙 = 确实需要登录）
+  //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）
+  offEvents = onAppEvent((ev) => {
+    if (ev.kind === 'collect' && ev.data.paused_need_login) {
+      appState.login = { logged_in: false, nickname: '', kicked: false }
+      forceOpen.value = true
+    }
+    if (ev.kind === 'login' && ev.data.logged_in) {
+      appState.login = { logged_in: true, nickname: '', kicked: false }
+      forceOpen.value = false
+    }
+  })
+  onUnmounted(() => { if (offEvents) { offEvents(); offEvents = null } })
   // 显式 ?stage=pick 调试入口：仅 dev 构建可用（生产 build 不加载历史笔记）；
   // 不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）
   const urlStage = new URLSearchParams(location.search).get('stage')

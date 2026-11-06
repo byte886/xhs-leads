@@ -917,21 +917,61 @@ async def _guard_monitor_step(win, base: str, cur_force: bool, state: dict) -> b
     return await step(win, base, cs, state)
 
 
+def _guard_attach_page_events(page, wake: "asyncio.Event", on_wake) -> None:
+    """给页面挂「导航/关闭」监听：状态可能变化时才唤醒守卫（事件源，非轮询）。"""
+    wake.clear()
+    if page is None or not hasattr(page, "on"):
+        return  # 测试替身/页已销毁：无事件源，仅靠进入时的验证
+    page.on("framenavigated", lambda *_a: on_wake())
+    page.on("close", lambda *_a: on_wake())
+
+
+async def _guard_verify_burst(win, base: str, cur_force: bool, state: dict) -> bool | None:
+    """事件到达后的短验证（最多 3 次）：把一次导航引发的状态收敛掉，不是周期轮询。"""
+    for _ in range(3):
+        result = await _guard_monitor_step(win, base, cur_force, state)
+        if result is not None:
+            return result
+        await asyncio.sleep(0.6)
+    return None
+
+
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
-    """小红书页内监视循环：强制=锁死拉回；主动=可关闭。返回 ok（登录成功回 APP）。"""
+    """小红书页内监视：由页面导航/关闭事件驱动，只在可能变化时读 Cookie。
+
+    R-6.53z8c：取消「每 1 秒读一次 Cookie」的轮询（用户拍板：轮询一律去掉）。
+    现在只在 page 触发 framenavigated/close 时唤醒并做一次短验证；无事件期间
+    不产生任何平台访问，从根本上减少登录页期间的自动化痕迹。
+    """
     state = {"import": 0.0, "inject": 0.0}
-    # R-6.48h：强制登录挂事件级导航拦截（离开 /login 立即拉回）；退出时移除。
     remove_nav_hook = _guard_hook_forced_nav(win, stop) if cur_force else None
+    wake = asyncio.Event()
+
+    def _on_wake(*_a) -> None:
+        try:
+            wake.set()
+        except Exception:  # noqa: BLE001（事件循环关闭中：忽略）
+            pass
+
+    _guard_attach_page_events(win.page, wake, _on_wake)
     try:
+        # 进入即验证一次（守卫可能在已登录态被拉起）
+        result = await _guard_verify_burst(win, base, cur_force, state)
+        if result is not None:
+            return result
         while not stop.is_set():
-            if await _rebind_if_closed(win, base):
+            try:
+                # 超时仅用于让 stop 及时生效：不读 Cookie、不判登录，不构成业务轮询
+                await asyncio.wait_for(wake.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
                 continue
-            result = await _guard_monitor_step(win, base, cur_force, state)
+            wake.clear()
+            if await _rebind_if_closed(win, base):
+                _guard_attach_page_events(win.page, wake, _on_wake)  # 重绑后事件源换成新页
+                continue
+            result = await _guard_verify_burst(win, base, cur_force, state)
             if result is not None:
                 return result
-            # R-6.48q：登录成功检测降频 0.3→1s（扫码登录本身秒级，0.3s 精度无意义，
-            # 减少登录页期间高频 cookies 读取）
-            await asyncio.sleep(1.0)
         return False
     finally:
         _guard_safe_remove(remove_nav_hook)
