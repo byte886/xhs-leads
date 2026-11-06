@@ -1438,12 +1438,11 @@ def collect_progress(task_id: str = ""):
     st = _COLLECT_TASKS.get(task_id)
     if not st:
         return {"ok": False, "note": "任务不存在或已过期"}
-    return {
-        "ok": True, "task_id": task_id, "status": st["status"],
-        "keyword": st["keyword"], "limit": st["limit"],
-        "collected": st["collected"], "note": st["note"],
-        "account_id": st.get("account_id", "default"),
-    }
+    # R-6.53z8q：与事件流共用同一份快照——手工拼字段会漏 need_login，
+    # SSE 断线重连后补拉进度就识别不出「需要登录」。
+    snap = _state_snapshot(st)
+    snap.update({"ok": True, "account_id": st.get("account_id", "default")})
+    return snap
 
 
 class CollectStopReq(BaseModel):

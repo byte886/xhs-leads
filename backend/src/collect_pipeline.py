@@ -124,6 +124,8 @@ async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id:
         if cmd == "user":
             return (await browser_client.user(arg, account_id=account_id)) or None
         return None
+    except browser_client.BrowserLoginRequiredError:
+        raise  # R-6.53z8q：登录墙必须上抛，否则被吞成「详情补全失败」，空跑完还报成功
     except Exception:  # noqa: BLE001
         return None
 

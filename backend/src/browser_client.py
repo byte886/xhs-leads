@@ -596,6 +596,22 @@ async def _page_needs_login(page) -> bool:
         return True
 
 
+async def _session_cookie_alive(page) -> bool:
+    """会话 cookie（web_session）还在不在。
+
+    R-6.53z8q 实测盲区：被踢下线 / cookie 失效后，页面 DOM 仍停在登录态渲染（旧画面
+    没刷新），只看渲染态会判成「已登录」，采集继续空跑到结束、最后当成「平台数据不足」
+    正常收尾——正好与「需要登录就立刻结束本次采集」相反。故再核一次会话 cookie。
+    读不到 cookie 时返回 True（不误杀，交给渲染态与后续请求兜底）。
+    """
+    try:
+        cookies = await cdp_call(page.context.cookies(), timeout=CDP_EVAL,
+                                 label="login.session_cookie", skip=True)
+    except Exception:  # noqa: BLE001
+        return True
+    return any(c.get("name") == "web_session" and c.get("value") for c in (cookies or []))
+
+
 async def _ensure_browse_page(page, account_id: str) -> bool:
     """确保页面处于登录态浏览页；不确定就走 /login（唯一允许 URL 的页面）。"""
     try:
@@ -603,7 +619,7 @@ async def _ensure_browse_page(page, account_id: str) -> bool:
     except Exception:  # noqa: BLE001
         url = ""
     on_browse = "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url
-    if on_browse and not await _page_needs_login(page):
+    if on_browse and not await _page_needs_login(page) and await _session_cookie_alive(page):
         return True
     return await _open_login_page(page)
 
@@ -1092,6 +1108,19 @@ async def _read_author_fans(page, account_id: str = "default") -> str:
     return fans
 
 
+async def _assert_logged_in(page, account_id: str) -> None:
+    """采集动作前的最小登录自检（R-6.53z8q）。
+
+    详情提取原本没有任何登录闸：会话失效后点不开卡片，只返回空 dict，调用方按
+    「缺字段降级」处理——整批空跑完还报「采集完成」，与「需要登录就结束本次采集」
+    正好相反。这里补一道闸，命中即抛 BrowserLoginRequiredError，由上层收尾并通知左窗。
+    """
+    if await _page_needs_login(page):
+        _check_login_wall(account_id, "小红书要求登录（页面已回落游客态）")
+    if not await _session_cookie_alive(page):
+        _check_login_wall(account_id, "小红书要求登录（会话 cookie 已失效）")
+
+
 async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                account_id: str = "default", with_author: bool = False) -> dict:
     """详情页数据：在采集搜索页里点开目标卡片提取（不用 URL、不刷新）。
@@ -1107,6 +1136,7 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                  note_id, list(_ACTIVE_PAGES),
                  "none" if cached is None else cached.is_closed())
         return {}
+    await _assert_logged_in(page, account_id)  # R-6.53z8q：撞登录墙立刻抛，不空跑
     before = {id(p) for p in page.context.pages}
     if not await _open_note_card(page, note_id):
         log.info("详情卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
