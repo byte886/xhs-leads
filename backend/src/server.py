@@ -2411,6 +2411,9 @@ async def publish_stats_refresh(req: PublishCurrentReq):
         d = await browser_client.refresh_publish_note(title)
     except browser_client.BrowserLoginRequiredError as e:
         raise HTTPException(400, f"需要登录：{e}")
+    except Exception as e:  # noqa: BLE001
+        # 引擎崩溃/重建会打断页面操作：给一句人话，而不是甩一个 500
+        raise HTTPException(400, f"右边窗口中断了（会自动重建），等几秒再点一次：{type(e).__name__}")
     if not d:
         raise HTTPException(400, "没在「我」的主页找到这条笔记：可能已删除、改名，或右侧窗口当前停在不该停的地方")
     url = (d.get("_url") or "").strip()
