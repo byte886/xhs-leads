@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1440px; min-height: 100vh; background: #F6F7F9;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    color: #111;
+  }
+  /* ---------- 顶栏 ---------- */
+  .flow-wrap { background: #fff; border-bottom: 1px solid #ececec; padding: 10px 22px 8px; display: flex; align-items: center; gap: 10px; }
+  .brand { font-size: 12px; font-weight: 700; color: #b05a1f; letter-spacing: .3px; margin-right: 14px; }
+  .flow { display: flex; align-items: center; gap: 2px; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: #888; padding: 8px 16px; border-radius: 9px; }
+  .tab.cur { background: #fff1e6; color: #b05a1f; }
+  .dot { width: 20px; height: 20px; border-radius: 50%; background: #eee; color: #999; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .tab.cur .dot { background: #e0b36b; color: #fff; }
+  .arrow { color: #ccc; font-size: 14px; padding: 0 2px; }
+
+  .hint { background: #EAF0FF; color: #3A55C8; font-size: 11.5px; padding: 7px 22px; border-bottom: 1px solid #DDE5FA; }
+  .hint b { font-weight: 700; }
+
+  /* ---------- 主体 ---------- */
+  .main { display: flex; gap: 16px; padding: 16px 22px 24px; align-items: flex-start; }
+  .left { width: 340px; flex: none; display: flex; flex-direction: column; gap: 12px; }
+  .right { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+
+  .panel { background: #fff; border-radius: 12px; border: 1px solid #EDEEF1; overflow: hidden; }
+  .ph { padding: 12px 14px; border-bottom: 1px solid #F2F3F5; display: flex; align-items: center; gap: 8px; }
+  .ph-t { font-size: 12.5px; font-weight: 700; }
+  .ph-c { margin-left: auto; font-size: 11px; color: #9AA3AF; }
+
+  /* 搜索 */
+  .search { padding: 12px 14px; display: flex; gap: 8px; }
+  .inp { flex: 1; border: 1px solid #E3E6EB; border-radius: 8px; padding: 7px 10px; font-size: 12px; color: #9AA3AF; }
+  .btn { border: 1px solid #E3E6EB; background: #fff; color: #4A5260; padding: 6px 12px; border-radius: 7px; font-size: 11.5px; font-weight: 600; }
+  .btn.go { background: #4059DB; border-color: #4059DB; color: #fff; }
+  .btn.line { color: #4059DB; border-color: #C9D3F5; background: #F6F8FF; }
+
+  /* 作者列表 */
+  .au { display: flex; gap: 10px; padding: 11px 14px; border-bottom: 1px solid #F5F6F8; align-items: center; }
+  .au:last-child { border-bottom: none; }
+  .au.on { background: #F7F9FF; }
+  .ava { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg,#DCE3F0,#EDEFF3); flex: none; }
+  .au-n { font-size: 13px; font-weight: 600; }
+  .au-m { font-size: 11px; color: #8A93A0; margin-top: 3px; }
+  .au-m b { color: #3D4653; font-weight: 600; }
+  .au-arrow { margin-left: auto; color: #C6CCD6; font-size: 13px; }
+
+  /* 详情头部 */
+  .hero { padding: 16px; display: flex; align-items: center; gap: 14px; }
+  .big-ava { width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg,#DCE3F0,#EDEFF3); flex: none; }
+  .hero-n { font-size: 17px; font-weight: 700; }
+  .hero-m { font-size: 11.5px; color: #8A93A0; margin-top: 5px; }
+  .hero-b { margin-left: auto; display: flex; gap: 8px; }
+
+  /* 设置块 */
+  .set { padding: 14px 16px 16px; }
+  .set-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #3D4653; margin-bottom: 10px; }
+  .sel { border: 1px solid #E3E6EB; border-radius: 6px; padding: 4px 8px; font-size: 12px; color: #222; background: #fff; }
+  .warn { background: #FFF9EC; border: 1px solid #F7E4B8; color: #8a6a2f; border-radius: 8px; padding: 9px 11px; font-size: 11.5px; line-height: 1.6; margin-bottom: 11px; }
+  .warn b { color: #7a5a1c; }
+  .two { display: flex; gap: 8px; }
+  .opt { flex: 1; border: 1px solid #E3E6EB; border-radius: 9px; padding: 10px 11px; }
+  .opt.main { border-color: #4059DB; background: #F6F8FF; }
+  .opt-t { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .tag { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+  .t-fast { color: #0E9F6E; background: #E7F7F0; }
+  .t-deep { color: #B07B22; background: #FFF6E5; }
+  .opt-c { margin-left: auto; font-size: 10.5px; color: #9AA3AF; font-weight: 400; }
+  .opt-d { font-size: 10.5px; color: #7B8492; margin-top: 5px; line-height: 1.55; }
+
+  /* 历史 */
+  .run { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid #F5F6F8; font-size: 11.5px; }
+  .run:last-child { border-bottom: none; }
+  .run-t { color: #9AA3AF; width: 86px; flex: none; }
+  .run-k { font-weight: 600; color: #3D4653; width: 70px; flex: none; }
+  .run-d { color: #6B7280; }
+  .plus { margin-left: auto; color: #4059DB; font-weight: 700; }
+
+  /* 客户 */
+  .cl { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #F5F6F8; }
+  .cl:last-child { border-bottom: none; }
+  .cl-av { width: 26px; height: 26px; border-radius: 50%; background: #E8ECF5; color: #8A94A6; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .cl-n { font-size: 12.5px; font-weight: 600; }
+  .badge { font-size: 10.5px; font-weight: 700; color: #fff; padding: 1px 6px; border-radius: 3px; }
+  .b-h { background: #FF2442; } .b-m { background: #F79009; } .b-l { background: #9AA5B1; }
+  .cl-c { font-size: 11.5px; color: #6B7280; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cl-f { font-size: 10.5px; color: #9AA3AF; flex: none; }
+  .cl-f b { color: #4059DB; }
+</style>
+</head>
+<body>
+
+<div class="flow-wrap">
+  <div class="flow">
+    <span class="tab"><span class="dot">1</span>采集</span><span class="arrow">›</span>
+    <span class="tab cur"><span class="dot">2</span>作者</span><span class="arrow">›</span>
+    <span class="tab"><span class="dot">3</span>创作</span><span class="arrow">›</span>
+    <span class="tab"><span class="dot">4</span>客户</span><span class="arrow">›</span>
+    <span class="tab"><span class="dot">5</span>设置</span>
+  </div>
+</div>
+
+<div class="hint">
+  <b style="background:#fff; padding:1px 6px; border-radius:4px; margin-right:8px">设计说明</b>
+  <b>作者</b>是独立功能：独立页面、独立作者档案、独立客户视图。<b>采集</b>页的关键词搜索一点不动，两边互不影响。
+</div>
+
+<div class="main">
+  <!-- 左：搜索 + 已采作者 -->
+  <div class="left">
+    <div class="panel">
+      <div class="search">
+        <div class="inp">输入博主昵称，或粘贴主页链接</div>
+        <button class="btn go">搜索</button>
+      </div>
+      <div class="ph"><span class="ph-t">已采作者</span><span class="ph-c">3 位</span></div>
+      <div class="au on">
+        <div class="ava"></div>
+        <div>
+          <div class="au-n">小宝说翡翠</div>
+          <div class="au-m"><b>10</b> 篇 · <b>31</b> 位客户 · 3 天前</div>
+        </div>
+        <span class="au-arrow">›</span>
+      </div>
+      <div class="au">
+        <div class="ava"></div>
+        <div>
+          <div class="au-n">荷花姐姐</div>
+          <div class="au-m"><b>10</b> 篇 · <b>19</b> 位客户 · 昨天</div>
+        </div>
+        <span class="au-arrow">›</span>
+      </div>
+      <div class="au">
+        <div class="ava"></div>
+        <div>
+          <div class="au-n">玉润天成</div>
+          <div class="au-m"><b>5</b> 篇 · <b>6</b> 位客户 · 20 天前</div>
+        </div>
+        <span class="au-arrow">›</span>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:11px 14px; font-size:11px; color:#7B8492; line-height:1.7">
+      两个入口都落到这一页：<br>
+      ① 采集页卡片 hover 点<b style="color:#111">「按作者采」</b> → 带着这个博主跳过来<br>
+      ② 这一页左上角自己搜昵称/主页链接 → 找到人再采
+    </div>
+  </div>
+
+  <!-- 右：作者详情 -->
+  <div class="right">
+    <div class="panel">
+      <div class="hero">
+        <div class="big-ava"></div>
+        <div>
+          <div class="hero-n">小宝说翡翠</div>
+          <div class="hero-m">小红书号 676a7509 · 主页现有 12 篇笔记 · 上次采 3 天前</div>
+        </div>
+        <div class="hero-b">
+          <button class="btn line">在平台打开主页</button>
+          <button class="btn go">更新采集</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><span class="ph-t">采集设置</span><span class="ph-c">只采这个博主的评论区</span></div>
+      <div class="set">
+        <div class="set-row">
+          采最近
+          <select class="sel"><option>5 篇</option><option selected>10 篇</option><option>20 篇</option></select>
+          的评论区，跨篇按人去重
+        </div>
+        <div class="warn">
+          主页现在有 <b>12</b> 篇。其中 <b>2</b> 篇是上次之后新发的，<b>10</b> 篇上次采过（共 91 条评论已在库，不会重复入库）。
+        </div>
+        <div class="two">
+          <div class="opt main">
+            <div class="opt-t">只采新发的 2 篇 <span class="tag t-fast">快</span><span class="opt-c">约 40 秒</span></div>
+            <div class="opt-d">跳过已经采过的笔记。老笔记后来涨的评论这次不采。</div>
+          </div>
+          <div class="opt">
+            <div class="opt-t">连老笔记一起查 <span class="tag t-deep">全</span><span class="opt-c">约 2 分钟</span></div>
+            <div class="opt-d">打开 10 篇老笔记各看一眼评论数，涨了的才滚到底采。主页卡片看不到评论数，只能进去才知道。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><span class="ph-t">采集历史</span><span class="ph-c">3 次</span></div>
+      <div class="run">
+        <span class="run-t">今天 14:20</span><span class="run-k">查更新</span>
+        <span class="run-d">检查 10 篇，3 篇有新评论 · 跳过 7 篇</span>
+        <span class="plus">+8 人</span>
+      </div>
+      <div class="run">
+        <span class="run-t">11-05 10:12</span><span class="run-k">首次采集</span>
+        <span class="run-d">10 篇 · 91 条评论</span>
+        <span class="plus">+31 人</span>
+      </div>
+      <div class="run">
+        <span class="run-t">11-01 09:30</span><span class="run-k">首次采集</span>
+        <span class="run-d">6 篇 · 43 条评论</span>
+        <span class="plus">+14 人</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph"><span class="ph-t">这位作者的客户</span><span class="ph-c">31 位 · 高意向 4</span></div>
+      <div class="cl">
+        <div class="cl-av">木</div>
+        <div class="cl-n">木木</div>
+        <span class="badge b-h">高意向</span>
+        <div class="cl-c">“四哥！我也想淘一条同款！预算500！”</div>
+        <div class="cl-f">2 篇下说过 3 次 · <b>2 天前</b></div>
+      </div>
+      <div class="cl">
+        <div class="cl-av">贺</div>
+        <div class="cl-n">贺新郎金玉行</div>
+        <span class="badge b-m">中意向</span>
+        <div class="cl-c">“我要了”</div>
+        <div class="cl-f">1 篇下说过 1 次 · <b>3 天前</b></div>
+      </div>
+      <div class="cl">
+        <div class="cl-av">君</div>
+        <div class="cl-n">君生未</div>
+        <span class="badge b-l">低意向</span>
+        <div class="cl-c">“卧槽！好富贵！！！！！！”</div>
+        <div class="cl-f">1 篇下说过 1 次 · <b>5 天前</b></div>
+      </div>
+      <div style="padding:9px 16px; font-size:11px; color:#8A93A0; background:#FAFBFC">
+        点一个人 → 展开他在这个博主几篇笔记下的每一句原话（单篇采集只看得到一句）
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
