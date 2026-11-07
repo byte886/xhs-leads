@@ -1060,6 +1060,40 @@ async def _back_to_list(page) -> bool:
     return True
 
 
+def _detail_url(feed_id: str, xsec_token: str) -> str:
+    """详情页直开链接：token 取自采集时落地详情页的 URL（采集已入库）。"""
+    return (f"https://www.xiaohongshu.com/explore/{feed_id}"
+            f"?xsec_token={xsec_token}&xsec_source=pc_search")
+
+
+async def _open_detail_page(feed_id: str, xsec_token: str, account_id: str = "default"):
+    """凭库里的 token 新开独立详情页；打不开则关页返回 None（调用方回退搜索页）。
+
+    R-6.56（2026-11-08 实测）：旧结论"详情页只能真鼠标点卡片、直链必 404"只对手工
+    拼的 URL 成立。用库里 xsec_token 拼回 feed_id 直开，新开 tab 实测正常——落地 URL
+    未被重定向、`.note-scroller` 在、评论已渲染、无「当前笔记暂时无法浏览」。
+    因此「采评论」不必再依赖采集留下的搜索页：开始采集与采集客户彻底解耦。
+    """
+    if not xsec_token:
+        return None
+    try:
+        page = await (await _ctx(account_id)).new_page()
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        await cdp_call(page.goto(_detail_url(feed_id, xsec_token),
+                                 wait_until="domcontentloaded"),
+                       timeout=CDP_NAV, label="detail.direct", skip=True)
+        await asyncio.sleep(5)  # 等 SPA 渲染出评论区
+        if _page_position(page) == "detail":
+            return page
+        log.info("token 直开未进详情页 url=%s", _page_url_now(page))
+    except Exception as exc:  # noqa: BLE001
+        log.info("token 直开失败 %s", str(exc)[:80])
+    await _close_page_safe(page, account_id)
+    return None
+
+
 async def _open_note_card(page, note_id: str) -> bool:
     """在搜索页点开目标卡片：先滚到视口内，再取坐标用真鼠标点击。
 
@@ -1437,7 +1471,19 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     filters：重开搜索页时必须带上原采集用的筛选条件（排序/类型/时间/范围/距离）。
     不带条件重开得到的是综合排序的混合结果，原卡片多半不在里面，于是误报"笔记已不在
     搜索结果里"（2026-11-08 真机踩到：采集用「图文+最新」，重开无筛选 → 卡片未命中）。
+
+    R-6.56：首选凭入库 token **新开独立详情页**（不碰采集页，两个功能解耦）；
+    直开失败才回退到"活动搜索页点卡片 / 按关键词重开"的老路径。
     """
+    if xsec_token:
+        direct = await _open_detail_page(note_id, xsec_token, account_id)
+        if direct is not None:
+            try:
+                return await _drain_comments(direct)
+            finally:
+                await _close_page_safe(direct, account_id)
+        log.info("token 直开未成功，回退搜索页 note_id=%s", note_id)
+
     page = _active_page(account_id)
     if page is None and keyword:
         log.info("无活动搜索页，按关键词重开 note_id=%s kw=%s filters=%s", note_id, keyword, filters)
