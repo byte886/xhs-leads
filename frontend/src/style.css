@@ -146,7 +146,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 12px; }
 .card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  overflow: hidden; cursor: pointer; position: relative; transition: box-shadow .15s;
+  overflow: hidden; cursor: default; position: relative; transition: box-shadow .15s;
 }
 .card:hover { box-shadow: 0 4px 16px rgba(0, 0, 0, .08); border-color: #D5D5D5; }
 .card .cover { aspect-ratio: 3 / 4; position: relative; background: #F0F0F0; overflow: hidden; }
@@ -157,7 +157,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 }
 .card .badge-note { position: absolute; top: 8px; left: 8px; font-size: 10px; background: rgba(0,0,0,.55); color: #fff; border-radius: 4px; padding: 2px 6px; }
 .card .check {
-  position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 5px;
+  flex: none; width: 20px; height: 20px; border-radius: 5px;
   background: rgba(255,255,255,.9); border: 1.5px solid #BBB; display: none;
   align-items: center; justify-content: center; font-size: 12px; color: #fff;
 }
@@ -295,19 +295,17 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 /* 卡片评分徽标：在 .score-wrap（已绝对定位到封面右上角）内作为 flex 项，
    自身不再绝对定位，避免相对错误祖先错位 */
 .card .score-badge {
+  display: inline-flex; align-items: center; gap: 4px;
   font-size: 15px; font-weight: 800;
   background: rgba(0, 0, 0, .6); color: #FFD666; border-radius: 6px; padding: 2px 8px;
   letter-spacing: .5px;
   cursor: pointer;
-  transform-origin: top right;
-  transition: background .15s ease, color .15s ease, transform .15s ease, box-shadow .15s ease;
+  transition: background .15s ease;
 }
-.card .score-badge:hover {
-  background: #FFD666; color: #1A1A1A; transform: scale(1.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
-}
+.card .score-badge .score-ico { flex: none; opacity: .92; }
+.card .score-badge:hover { background: rgba(0, 0, 0, .82); }
 .card .score-badge.hot { background: var(--red); color: #fff; }
-.card .score-badge.hot:hover { background: #FFD666; color: #1A1A1A; }
+.card .score-badge.hot:hover { background: #E51F3A; }
 
 /* 卡片排名标签（最值得模仿 / 高评分候选） */
 .card .flags .tag {

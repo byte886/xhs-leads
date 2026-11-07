@@ -257,15 +257,22 @@ function fmtPub(ts: string | number | null): string {
         />
         <div v-else class="ph" :style="phStyle(note)">{{ (note.title || '图')[0] }}</div>
         <span class="badge-note">{{ note.note_type === 'video' ? '视频' : '图文' }}</span>
-        <span v-if="note.score != null" class="score-wrap">
-          <span class="score-badge" :class="{ hot: note.score >= 90 }" @click.stop="openScore(note)">{{ note.score.toFixed(1) }}</span>
+        <span class="score-wrap">
+          <span class="check">✓</span>
+          <span v-if="note.score != null" class="score-badge" :class="{ hot: note.score >= 90 }" @click.stop="openScore(note)">
+            <svg class="score-ico" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="3" y="13" width="4" height="8" rx="1"/>
+              <rect x="10" y="8" width="4" height="13" rx="1"/>
+              <rect x="17" y="4" width="4" height="17" rx="1"/>
+            </svg>
+            {{ note.score.toFixed(1) }}
+          </span>
         </span>
         <button class="open-link" title="打开原作品（新窗口）" @click.stop="openOrigin(note)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4">
             <path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <span class="check">✓</span>
         <!-- 悬停浮层：单条操作（一键克隆仅图文，采集客户图文+视频均可） -->
         <div class="hover-actions">
           <button
