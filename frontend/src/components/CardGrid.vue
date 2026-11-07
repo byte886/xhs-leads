@@ -288,19 +288,19 @@ function fmtPub(ts: string | number | null): string {
         </div>
       </div>
       <div class="meta">
-        <div class="title">
-          {{ note.title || '（无标题）' }}
+        <div class="title">{{ note.title || '（无标题）' }}</div>
+        <div class="flags">
           <span
             v-if="descIsOnlyTags(note.desc)"
             class="tag-only"
             title="这条笔记正文只有话题标签、没有文字内容：可评分选品，不适合克隆仿写"
           >正文仅标签</span>
+          <span class="tag" :class="{ hot: (note.score ?? 0) >= 90 }">{{ (note.score ?? 0) >= 90 ? '最值得模仿' : '高评分候选' }}</span>
         </div>
         <div class="row">
           <span class="author">
             <span class="avatar"></span>{{ note.nickname || '未知作者' }}
           </span>
-          <span class="tag" :class="{ hot: (note.score ?? 0) >= 90 }">{{ (note.score ?? 0) >= 90 ? '最值得模仿' : '高评分候选' }}</span>
           <span class="interact">
             <svg width="11" height="11" viewBox="0 0 24 24" :fill="(note.liked_count || 0) > 10000 ? '#FF2442' : '#888'">
               <path d="M12 21s-7.5-4.6-10-9.2C.4 8.6 2.8 5 6.4 5c2 0 3.6 1 4.8 2.6C12.4 6 14 5 16 5c3.6 0 6 3.6 4.4 6.8C18.9 16.4 12 21 12 21z" />
@@ -368,10 +368,11 @@ function fmtPub(ts: string | number | null): string {
 .sm-raw { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; color: #666; font-size: 12px; line-height: 1.6; }
 .sm-concl { margin-top: 10px; padding: 10px 12px; background: #FFF7E6; border-radius: 8px; color: #8a6a2f; font-size: 12px; line-height: 1.6; }
 
+/* 状态标签行：正文仅标签 + 评分标签并排，可换行，不挤压作者名 */
+.flags { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 /* 「正文仅标签」小标：提示这条笔记没有可克隆的文字内容 */
 .tag-only {
   display: inline-block;
-  margin-left: 6px;
   padding: 0 5px;
   font-size: 10px;
   font-weight: 400;
@@ -380,6 +381,5 @@ function fmtPub(ts: string | number | null): string {
   background: #fdf6e3;
   border: 1px solid #f0e0bd;
   border-radius: 3px;
-  vertical-align: middle;
 }
 </style>
