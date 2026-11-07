@@ -292,9 +292,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
   .float-bar { bottom: 14px; right: 14px; }
 }
 
-/* 卡片评分徽标（一页式：筛选结果=评分徽标卡片） */
+/* 卡片评分徽标：在 .score-wrap（已绝对定位到封面右上角）内作为 flex 项，
+   自身不再绝对定位，避免相对错误祖先错位 */
 .card .score-badge {
-  position: absolute; top: 8px; right: 8px; font-size: 15px; font-weight: 800;
+  font-size: 15px; font-weight: 800;
   background: rgba(0, 0, 0, .6); color: #FFD666; border-radius: 6px; padding: 2px 8px;
   letter-spacing: .5px;
 }
