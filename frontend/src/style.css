@@ -289,19 +289,19 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 }
 .card .row .tag.hot { color: var(--red); background: #FFF1F3; border-color: #F5C9D1; }
 
-/* 卡片「打开原作品」外链按钮（右下角，点击不触发勾选） */
+/* 卡片「打开原作品」外链按钮（右下角，点击不触发勾选）。z-index 高于悬停浮层，悬停时仍可点 */
 .card .open-link {
   position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, .55); border: none; border-radius: 6px;
-  cursor: pointer; z-index: 2;
+  cursor: pointer; z-index: 4;
 }
 .card .open-link:hover { background: rgba(0, 0, 0, .8); }
 
-/* 卡片悬停浮层：单条操作（一键克隆/采集客户） */
+/* 卡片悬停浮层：单条操作（一键克隆/采集客户）。右侧留 40px 给外链按钮，并排不重叠 */
 .card .hover-actions {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 6px;
-  padding: 8px; background: linear-gradient(180deg, transparent, rgba(0,0,0,.62));
+  padding: 8px 40px 8px 8px; background: linear-gradient(180deg, transparent, rgba(0,0,0,.62));
   opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 3;
 }
 .card:hover .hover-actions, .card.sel .hover-actions { opacity: 1; pointer-events: auto; }

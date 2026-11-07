@@ -73,3 +73,30 @@ class TestUpsertNote:
         assert row[0] == now  # 时间列存时间，不与评分 JSON 错位
         assert json.loads(row[1])["score"] == 70.0
         con.close()
+
+    def test_origin_persisted(self, tmp_path):
+        con = cp.init_db(tmp_path / "n.db")
+        origin = "https://www.xiaohongshu.com/explore/f3?xsec_token=tok"
+        n = {"feed_id": "f3", "origin": origin,
+             "score_info": {"score": 60.0, "tag": "低粉", "fan_ratio": 1.0},
+             "liked_count": 1, "fans_count": 1, "publish_time": 1}
+        cp._upsert_note(con, n, "翡翠", "2026-01-01T00:00:00")
+        assert con.execute("SELECT origin FROM notes WHERE feed_id='f3'").fetchone()[0] == origin
+        con.close()
+
+
+class TestBuildOrigin:
+    def test_prefers_real_href(self):
+        href = "https://www.xiaohongshu.com/search_result/abc?xsec_token=tok"
+        assert cp._build_origin(href, "abc", "tok") == href  # 有真实 href 直接用
+
+    def test_fallback_explore_when_no_href(self):
+        url = cp._build_origin("", "abc123", "tok")
+        assert url == "https://www.xiaohongshu.com/explore/abc123?xsec_token=tok"
+
+    def test_fallback_without_token(self):
+        url = cp._build_origin(None, "abc123", "")
+        assert url == "https://www.xiaohongshu.com/explore/abc123"  # 无 token 不拼参数
+
+    def test_no_feed_id_returns_empty(self):
+        assert cp._build_origin("", "", "tok") == ""

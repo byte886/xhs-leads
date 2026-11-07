@@ -24,6 +24,7 @@ log = xlog.get("collect")
 # 允许从任意 cwd 导入 score 模块
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.score import rank_notes, _to_int  # noqa: E402
+from src.urls import build_url  # noqa: E402
 
 REQUEST_INTERVAL = (1.0, 1.8)  # 真人浏览节奏：请求间随机 1-1.8s（用户拍板合理像人档，勿再调快）
 SESSION_MAX_NOTES = 20        # 单次采集会话最多 20 条（真人一次浏览的量级，勿一次拉太多）
@@ -62,6 +63,19 @@ def _parse_likes(s: str) -> int:
     return int(v)
 
 
+def _build_origin(href: str | None, feed_id, xsec_token) -> str:
+    """原作品链接：优先用搜索页真实 href（含平台前缀/token）；缺失则用 explore 兜底拼。
+
+    feed_id 为空则无法定位，返回空串（调用方不打开）。
+    """
+    if href:
+        return href
+    if not feed_id:
+        return ""
+    params = {"xsec_token": xsec_token} if xsec_token else None
+    return build_url("https://www.xiaohongshu.com", f"/explore/{feed_id}", params)
+
+
 async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, should_stop=None,
                              filters: dict | None = None, account_id: str = "default",
                              keep_page: bool = False) -> dict:
@@ -97,6 +111,7 @@ async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, sh
         notes.append({
             "feed_id": it.get("id"),
             "xsec_token": xsec,
+            "origin": _build_origin(href, it.get("id"), xsec),
             "title": it.get("title", ""),
             "type": it.get("type", ""),
             "user_id": None,
@@ -261,9 +276,15 @@ def init_db(path: Path) -> sqlite3.Connection:
             fan_ratio REAL,
             fetched_at TEXT,
             score_info TEXT,
-            video_url TEXT
+            video_url TEXT,
+            origin TEXT
         )
     """)
+    # 老库（23 列）幂等补 origin，保证全列 INSERT 列数一致
+    try:
+        con.execute("ALTER TABLE notes ADD COLUMN origin TEXT")
+    except sqlite3.OperationalError:
+        pass  # 列已存在
     return con
 
 
@@ -281,7 +302,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
     """CLI 落库单条（评分字段来自 n['score_info']）。"""
     si = n["score_info"]
     con.execute(
-        "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
             n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -291,6 +312,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
             _to_int(n.get("fans_count")), n.get("publish_time"),
             si["score"], si["tag"], si["fan_ratio"],
             now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
+            n.get("origin", ""),
         ),
     )
     con.commit()

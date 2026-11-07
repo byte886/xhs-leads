@@ -792,6 +792,15 @@ class TestFetchedAtSwap:
         assert "score" in json.loads(row["score_info"])  # 评分列存合法 JSON
         con.close()
 
+    def test_insert_persists_origin(self, tmp_path):
+        con = self._db(tmp_path)
+        origin = "https://www.xiaohongshu.com/explore/f9?xsec_token=tok"
+        assert _rank_and_insert(con, {"feed_id": "f9", "origin": origin},
+                                "翡翠", datetime.datetime.now().isoformat(timespec="seconds"))
+        row = con.execute("SELECT origin FROM notes WHERE feed_id='f9'").fetchone()
+        assert row["origin"] == origin  # 原作品链接随入库持久化
+        con.close()
+
     def test_repair_swap_fixes_legacy_rows(self, tmp_path):
         con = self._db(tmp_path)
         now = datetime.datetime.now().isoformat(timespec="seconds")

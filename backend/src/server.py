@@ -228,6 +228,8 @@ def _init_tables(con):
             con.execute(f"ALTER TABLE {_tbl} ADD COLUMN account_id TEXT DEFAULT 'default'")
         except sqlite3.OperationalError:
             pass  # 列已存在
+    # 原作品链接（打开原作品跳转）：ALTER 补到末尾，保证新老库列序一致（INSERT 用全列 VALUES）
+    _add_column_if_missing(con, "notes", "origin", "TEXT")
     _repair_fetched_at_swap(con)  # 历史错位数据迁移（幂等）
     con.commit()
 
@@ -939,7 +941,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                   "dimensions": {"like_fan_ratio": 0.0, "low_fan": 0.0,
                                  "interaction_health": 0.0, "freshness": 0.0}}
         con.execute(
-            "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
                 n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -950,7 +952,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 _to_int(n.get("fans_count")), n.get("publish_time"),
                 si["score"], si["tag"], si["fan_ratio"],
                 now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
-                account_id or "default",
+                account_id or "default", n.get("origin", ""),
             ),
         )
         return True
