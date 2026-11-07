@@ -1291,7 +1291,11 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
         await _collect_enrich_candidates(state, ctx, candidates)
         return res
     finally:
-        await browser_client.release_search_page(account_id)
+        # R-6.55（2026-11-08 真机）：采集结束**不关**搜索页——用户采完一批的下一步
+        # 就是点卡片上的「采集客户」，而点开卡片只认这个搜索页。关掉后只能按关键词
+        # 重开，平台每次返回不同批次（实测重开 27 张卡里找不到原笔记），直接 409
+        # 「笔记已不在搜索结果里」。残留页由下次采集前 _cleanup_stale_xhs_pages 清理。
+        pass
 
 
 async def _collect_enrich_candidates(state: dict, ctx: dict, candidates: list) -> None:

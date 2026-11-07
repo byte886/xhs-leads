@@ -1467,26 +1467,53 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
 
 
 async def _drain_comments(page) -> dict:
-    """评论区懒加载：滚动容器 + 点「展开/全部评论」，再提取（沿用原实现）。"""
-    for _ in range(3):
-        await page.evaluate(_COMMENT_SCROLL_JS)
-        await asyncio.sleep(1.2)
-    for _ in range(2):
-        clicked = await page.evaluate(_COMMENT_EXPAND_JS)
-        if clicked:
-            await asyncio.sleep(2.5)
-            await page.evaluate(_COMMENT_SCROLL_JS)
-            await asyncio.sleep(2)
-        else:
-            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(2)
+    """评论区懒加载：滚到底 + 展开折叠回复，再提取。
+
+    R-6.55（2026-11-08 真机取证）：详情页评论在 `.note-scroller` 内部滚动
+    （clientHeight 606 / scrollHeight 2931 起）。旧实现只把评论容器
+    `scrollIntoView` 挪进视口、从不滚内部，懒加载永不触发——首屏仅渲染 20 条，
+    66 条评论的笔记点「采集客户」只采到 4 个新人，用户看到的是"这篇没人评论"。
+    实测滚 .note-scroller 到底：评论条 20→40→58→62、profile 链接 68→152。
+    """
+    if await page.evaluate(_COMMENT_EXPAND_JS):      # 先展开「查看更多评论」类入口
+        await asyncio.sleep(1.5)
+    await _scroll_comments_to_end(page)
+    if await page.evaluate(_COMMENT_EXPAND_JS):      # 到底后再展开一轮折叠回复
+        await asyncio.sleep(1.5)
+        await _scroll_comments_to_end(page, max_rounds=4)
     await injections.inject_once(page, "extract")  # 导航后旧注入失效，提取前重新注入
     return await page.evaluate("() => xhsExtractComments()")
 
 
+async def _scroll_comments_to_end(page, max_rounds: int = 10) -> int:
+    """把评论容器滚到底；连续两轮高度不变即判定到底（返回最终 scrollHeight）。"""
+    prev = -1
+    same = 0
+    for _ in range(max_rounds):
+        h = await cdp_call(page.evaluate(_COMMENT_SCROLL_JS),
+                           timeout=CDP_EVAL, label="comment.scroll", skip=True)
+        await asyncio.sleep(2.2)
+        cur = (h or {}).get("height", 0)
+        if cur and cur == prev:
+            same += 1
+            if same >= 2:
+                return cur
+        else:
+            same = 0
+            prev = cur
+    return prev
+
+
+# 评论容器滚动：.note-scroller 是详情页真实滚动体；缺失时退回把评论区挪进视口
 _COMMENT_SCROLL_JS = """() => {
-  const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
-  if (c) c.scrollIntoView({ block: "center" });
+  const s = document.querySelector('.note-scroller');
+  if (!s) {
+    const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
+    if (c) c.scrollIntoView({ block: "end" });
+    return { height: 0, top: 0 };
+  }
+  s.scrollTop = s.scrollHeight;
+  return { height: s.scrollHeight, top: s.scrollTop };
 }"""
 
 _COMMENT_EXPAND_JS = """() => {
