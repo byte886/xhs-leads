@@ -673,8 +673,8 @@ async def ensure_shell(base_url: str):
     """强制引擎有头启动，打开前端 tab 并置前（壳窗口 = CFT 引擎窗口）。R-6.36e：逻辑块拆至上方三个助手。"""
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
 
-    if config.get_config().get("headless"):
-        config.set_config("headless", False)  # 壳必须有头（A 路径常态）
+    if config.account_headless("default"):
+        config.set_account_headless("default", False)  # 壳必须有头（A 路径常态）
     eng = await engine_pool.pool.get("default")
     ctx = await eng.context()
     base = base_url.rstrip("/")

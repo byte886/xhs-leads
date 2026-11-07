@@ -359,6 +359,31 @@ def update_account(account_id: str, **fields) -> dict | None:
     return acc
 
 
+def account_headless(account_id: str = "default") -> bool:
+    """该账号是否以无头启动（R-6.58）。
+
+    优先读账号自己的 headless 字段；从未设置过才回退全局 config.headless。
+    为什么不用全局：切某个账号的无头会顺手把全局改成 true，default 下次重启就
+    没窗口了——多账号下每个账号的窗口形态必须各管各的。
+    """
+    acc = get_account(account_id) or {}
+    v = acc.get("headless")
+    return bool(v) if isinstance(v, bool) else bool(get_config().get("headless", True))
+
+
+def set_account_headless(account_id: str, headless: bool) -> bool:
+    """只改该账号的无头设置，不动全局默认值；账号不存在返回 False。"""
+    acc = get_account(account_id)
+    if acc is None:
+        return False
+    if update_account(account_id, headless=bool(headless)) is None:
+        add_account(account_id, role=acc.get("role", "mixed"),
+                    user_data_dir=acc.get("user_data_dir", ""),
+                    status=acc.get("status", "ok"))
+        update_account(account_id, headless=bool(headless))
+    return True
+
+
 def remove_account(account_id: str) -> bool:
     """删除账号（default 不可删）。"""
     if account_id == "default":

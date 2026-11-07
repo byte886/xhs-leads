@@ -56,14 +56,25 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
     from src import config
     from src.server import _COLLECT_TASKS
 
+    # R-6.58：default 账号的引擎同时承载 APP 壳窗口与采集窗，关掉引擎 = 两个窗口一起消失，
+    # launcher 会判定用户关闭了应用并退出整个进程（实测：API 先返回 200，随后应用自己退出，
+    # 表现为「点了一下，整个程序没了」）。所以这里必须拒绝，不能静默放行。
+    if account == "default" and not on:
+        return {"ok": False, "error": (
+            "default 账号承载 APP 壳窗口与采集窗，运行中切无头会关闭整个应用；"
+            "如需后台运行请用其他账号，或以无头模式整体启动"
+        )}
+
     for _st in list(_COLLECT_TASKS.values()):
         if _st.get("status") == "running" and _st.get("account_id", "default") == account:
             return {"ok": False, "error": "有采集任务进行中，请先停止再切换调试窗口"}
-    cfg = config.get_config()
     want_headless = not on
-    if bool(cfg.get("headless", True)) == want_headless:
+    # R-6.58：按账号记 headless，不写全局——否则切 A 账号的无头会把 B 账号
+    # 下次启动也变成无头（default 因此丢窗口），多账号必须各管各的。
+    if config.account_headless(account) == want_headless:
         return {"ok": True, "window": on, "note": "已是目标模式，无需切换"}
-    config.set_config("headless", want_headless)
+    if not config.set_account_headless(account, want_headless):
+        return {"ok": False, "error": f"账号 {account} 不在注册表中，无法切换窗口"}
     await engine_pool.pool.close(account)          # 优雅关闭：落盘登录态
     eng = await engine_pool.pool.get(account)       # 重新启动（读新 headless + 回注 cookie）
     await eng.context()

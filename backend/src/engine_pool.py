@@ -104,7 +104,7 @@ _pw_lock: asyncio.Lock | None = None
 # 升级 Chrome 时顺手更新版本号即可。
 _HEADLESS_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
 )
 
 # 防自动化检测 stealth 注入脚本已收敛到 injections 注册表（R-6.30a）：
@@ -501,7 +501,7 @@ class AccountEngine:
         self._kill_stale_processes()
         # R-6.48s：启动前清会话恢复文件，避免「启动先闪现小红书页再导航 APP」。
         _clear_session_restore(self.user_data_dir)
-        headless = bool(config.get_config().get("headless", True))
+        headless = config.account_headless(self.account_id)
         launch_kwargs = self._launch_kwargs_base(headless, self.debug_port)
         if not headless:
             self._launch_apply_shell_window(launch_kwargs)
@@ -525,7 +525,7 @@ class AccountEngine:
         geo = account_window_geometry(self.account_id)
         if geo is None or self._context is None:
             return
-        if bool(config.get_config().get("headless", True)):
+        if config.account_headless(self.account_id):
             return  # 无头模式没有窗口，定位无意义
         win_w, win_h, left, top = geo
         try:
