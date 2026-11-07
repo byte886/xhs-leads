@@ -475,6 +475,12 @@ async def _apply_filters(page, filters: dict):
 
     跳过默认值（综合 / 全部 / 不限）：只在用户明确选择非默认条件时点击对应选项。
     点击条件后页面会刷新，每项点击后等待结果重新加载。
+
+    R-6.54（2026-11-08 实测）：平台每个筛选选项有两层 `div.tags`——可见层，以及一层
+    `data-hp-kind="xhs-filter-tag-<值>"` 的透明热区代理层。两层 innerText 都是
+    「值\\n值」（可见层+代理层拼接），旧代码用 `.trim() === 值` 精确比较永远不命中，
+    于是"选了图文/最新"实际一个筛选都没应用（用户看到 chips 变了、结果仍是视频）。
+    现在优先按 data-hp-kind 精确锁定、用真鼠标点坐标；取不到坐标再退回首段文本比较。
     """
     wanted = [
         (label, val)
@@ -490,25 +496,71 @@ async def _apply_filters(page, filters: dict):
     if not wanted:
         return
     for _label, val in wanted:
-        await page.evaluate("""() => {
-            const el = [...document.querySelectorAll('span, div')].find(x => (x.innerText || '').trim() === '筛选');
-            if (el) el.click();
-        }""")
+        await page.evaluate(_FILTER_OPEN_JS)
         await asyncio.sleep(1.2)
-        await page.evaluate(
-            f"""() => {{
-                const els = [...document.querySelectorAll('div.tags, div.channel')];
-                const t = els.find(x => (x.innerText || '').trim() === {json.dumps(val, ensure_ascii=False)});
-                if (t) {{ t.click(); return true; }}
-                return false;
-            }}"""
-        )
+        # 点完上一项后页面会重渲染面板，选项可能还没出来：轮询最多 ~3s 再放弃
+        pt = None
+        for _ in range(4):
+            pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
+            if pt:
+                break
+            await asyncio.sleep(0.8)
+        if pt:
+            await page.mouse.click(pt["x"], pt["y"])
+        else:
+            log.info("筛选选项未找到 val=%s，跳过该项", val)
         await asyncio.sleep(2.5)
-    await page.evaluate("""() => {
-        const el = [...document.querySelectorAll('span, div')].find(x => (x.innerText || '').trim() === '收起');
-        if (el) el.click();
-    }""")
+    await page.evaluate(_FILTER_CLOSE_JS)
     await asyncio.sleep(1.2)
+
+
+# 「筛选」是开关：面板已展开时再点会收起，导致后面找不到选项。
+# 判据直接看「可见选项是否已渲染」（>5 个即已展开）——锚点在页面重渲染后会消失，不可靠。
+# 按钮文案在有筛选条件时是「已筛选」，所以按 div.filter 类定位（2026-11-08 实测），
+# 再退回「文本含筛选且长度≤4」的兜底（注意别匹配到"筛选条件"这类大容器）。
+_FILTER_OPEN_JS = """() => {
+    const vis = [...document.querySelectorAll('div.tags')]
+        .filter(e => Number(getComputedStyle(e).opacity) > 0.01).length;
+    if (vis > 5) return true;
+    const byClass = document.querySelector('div.filter');
+    if (byClass) { byClass.click(); return true; }
+    const el = [...document.querySelectorAll('div, span, button')].find(x => {
+        const t = (x.innerText || '').trim();
+        return t.length <= 4 && t.includes('筛选');
+    });
+    if (el) { el.click(); return true; }
+    return false;
+}"""
+
+_FILTER_CLOSE_JS = """() => {
+    const op = [...document.querySelectorAll('[data-hp-kind]')]
+        .find(e => e.getAttribute('data-hp-kind') === 'xhs-filter-op-收起');
+    if (op) { op.click(); return; }
+    const el = [...document.querySelectorAll('div, span, button')].find(x => {
+        const t = (x.innerText || '').trim();
+        return t.length <= 4 && t.includes('收起');
+    });
+    if (el) el.click();
+}"""
+
+# 按 data-hp-kind 锚点取选项坐标（属性值精确比较，不做选择器拼接，免注入/转义问题）；
+# 找不到锚点时退回「首段文本等于目标值」的可见 tags 元素。
+_FILTER_TAG_POINT_JS = """(val) => {
+  const want = 'xhs-filter-tag-' + val;
+  let el = [...document.querySelectorAll('[data-hp-kind]')]
+    .find(e => e.getAttribute('data-hp-kind') === want);
+  if (!el) {
+    el = [...document.querySelectorAll('div.tags')].find(x => {
+      const t = ((x.innerText || '').trim().split(/\\s+/)[0] || '');
+      return t === val && Number(getComputedStyle(x).opacity) > 0.01;
+    });
+  }
+  if (!el) return null;
+  el.scrollIntoView({block: 'center', inline: 'nearest'});
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+}"""
 
 
 def _handle_login_wall(account_id: str, wall: str) -> None:
@@ -1365,18 +1417,48 @@ async def user(uid: str, account_id: str = "default") -> dict:
     return u
 
 
-async def clients(note_id: str, xsec_token: str = "", account_id: str = "default") -> dict:
+class ClientCollectError(RuntimeError):
+    """评论采集前置条件不满足（无搜索页 / 卡片不在结果里），带用户可读原因。
+
+    与「采集成功但 0 条评论」区分开：后者返回空列表，前者必须让界面说清为什么。
+    """
+
+
+async def clients(note_id: str, xsec_token: str = "", account_id: str = "default",
+                  keyword: str = "", filters: dict | None = None) -> dict:
     """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。
 
     点卡片与详情补全走同一条路径（真鼠标点可见卡片，平台才会补 xsec_token）。
+
+    R-6.54：搜索页是"点卡片采评论"的唯一入口。采集完/被关掉/重启后没有活动搜索页时，
+    过去是静默返回空，用户会误以为"这条笔记没人评论"。现在按库里关键词重开一次搜索页
+    （仅搜索、不采集，keep_page 留页），仍失败则抛 ClientCollectError 交界面明说。
+
+    filters：重开搜索页时必须带上原采集用的筛选条件（排序/类型/时间/范围/距离）。
+    不带条件重开得到的是综合排序的混合结果，原卡片多半不在里面，于是误报"笔记已不在
+    搜索结果里"（2026-11-08 真机踩到：采集用「图文+最新」，重开无筛选 → 卡片未命中）。
     """
     page = _active_page(account_id)
+    if page is None and keyword:
+        log.info("无活动搜索页，按关键词重开 note_id=%s kw=%s filters=%s", note_id, keyword, filters)
+        await search(keyword, limit=1, account_id=account_id, keep_page=True,
+                     filters=filters or {})
+        page = _active_page(account_id)
     if page is None:
-        log.info("无活动搜索页，跳过评论采集 note_id=%s", note_id)
-        return {}
+        raise ClientCollectError("当前没有打开的搜索结果页，无法进入评论区。请先在左侧点「开始采集」打开搜索结果，再点「采集客户」。")
     if not await _open_note_card(page, note_id):
-        log.info("评论卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
-        return {}
+        # 搜索结果可能还没渲染全、或目标卡在后面几屏：再滚屏找几次，仍找不到才判定真的不在。
+        # （平台每次搜索结果是不同批次，笔记可能已漂走——那种情况只能让用户重新采集。）
+        for _ in range(3):
+            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(2.5)
+            if await _open_note_card(page, note_id):
+                break
+        else:
+            log.info("评论卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
+            raise ClientCollectError(
+                "这条笔记已不在当前搜索结果里（平台每次搜索结果会变化，尤其按「最新」排序）。"
+                "请重新采集一批笔记后再点「采集客户」。")
     await asyncio.sleep(4)
     try:
         return await _drain_comments(page)

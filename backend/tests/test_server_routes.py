@@ -564,23 +564,47 @@ class TestCollectClients:
     def test_clients_ok(self, client, monkeypatch, tmp_path):
         _seed_notes(tmp_path)
         from src import browser_client
+        seen: dict = {}
 
-        async def fake_clients(feed_id, token):
+        async def fake_clients(feed_id, token, keyword="", filters=None):
+            seen.update(keyword=keyword, filters=filters)
             return [{"uid": "u1", "nickname": "n1", "comment": "c1", "profile": "p1"}]
+
+        # 采集时用的筛选条件落到 collect_ctx，采客户时必须原样透传给重开搜索页
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.execute("INSERT OR REPLACE INTO collect_ctx (keyword, params, ts) VALUES (?,?,?)",
+                    ("翡翠", '{"note_type": "图文", "sort": "最新"}', "t"))
+        con.commit()
+        con.close()
 
         monkeypatch.setattr(browser_client, "clients", fake_clients)
         r = client.post("/api/clients", json={"feed_id": "a1"})
         j = r.json()
         assert j["total"] == 1 and j["new"] == 1
+        assert seen["keyword"] == "翡翠"
+        assert seen["filters"] == {"note_type": "图文", "sort": "最新"}
         con = sqlite3.connect(tmp_path / "test.db")
         cnt = con.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
         con.close()
         assert cnt == 1
 
+    def test_clients_no_search_page(self, client, monkeypatch, tmp_path):
+        """无搜索页/卡片不在结果里 → 409 并原话回传原因，不伪装成「没人评论」。"""
+        _seed_notes(tmp_path)
+        from src import browser_client
+
+        async def no_page(feed_id, token, keyword="", filters=None):
+            raise browser_client.ClientCollectError("当前没有打开的搜索结果页")
+
+        monkeypatch.setattr(browser_client, "clients", no_page)
+        r = client.post("/api/clients", json={"feed_id": "a1"})
+        assert r.status_code == 409
+        assert "搜索结果页" in r.json()["detail"]
+
     def test_clients_fail(self, client, monkeypatch):
         from src import browser_client
 
-        async def boom(feed_id, token):
+        async def boom(feed_id, token, keyword="", filters=None):
             raise RuntimeError("浏览器失败")
 
         monkeypatch.setattr(browser_client, "clients", boom)

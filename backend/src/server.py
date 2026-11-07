@@ -89,6 +89,7 @@ def _reset_collection_data() -> int:
     con = _db()
     con.execute("DELETE FROM notes")
     con.execute("DELETE FROM clients")
+    con.execute("DELETE FROM collect_ctx")
     con.commit()
     removed = 0
     if IMAGES_DIR.exists():
@@ -222,6 +223,13 @@ def _init_tables(con):
         con.execute("ALTER TABLE drafts ADD COLUMN images TEXT")
     except sqlite3.OperationalError:
         pass  # 列已存在
+    # 最近一次采集的筛选条件（按关键词）：供「采集客户」无活动页时按同样条件重开搜索页，
+    # 否则重开得到综合排序的另一批结果，原卡片多半不在里面。
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS collect_ctx (
+            keyword TEXT PRIMARY KEY, params TEXT, ts TEXT
+        )
+    """)
     # 架构改造 P1：多账户维度 —— 各表补 account_id（默认 default，老数据兼容）
     for _tbl in ("notes", "publish_logs", "clients", "drafts"):
         try:
@@ -1411,6 +1419,25 @@ async def collect_start(req: SearchReq):
         "phase": "search", "task_id": tid,
     }
     _COLLECT_TASKS[tid] = state
+    # 记下本次筛选条件：点「采集客户」需要重开搜索页时必须带同样条件，否则原卡片不在结果里
+    try:
+        con = _db()
+        con.execute(
+            "INSERT OR REPLACE INTO collect_ctx (keyword, params, ts) VALUES (?,?,?)",
+            (
+                req.keyword.strip(),
+                json.dumps(
+                    {k: getattr(req, k, "") for k in
+                     ("sort", "note_type", "time_range", "scope", "distance")},
+                    ensure_ascii=False,
+                ),
+                datetime.datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        con.commit()
+        con.close()
+    except sqlite3.Error as e:  # noqa: BLE001 记录失败不影响采集启动
+        log.warning("collect_ctx 写入失败：%s", e)
     state["task"] = asyncio.create_task(_collect_worker(state, req, account_id))
     return {"ok": True, "task_id": tid, "keyword": req.keyword, "limit": req.limit,
             "account_id": account_id}
@@ -1878,20 +1905,33 @@ async def collect_clients(req: ClientsReq):
     风控处理：触发验证码/风险页时返回 429（已采部分保留，前端提示停用 ≥24h，绝不自动重试）。
     """
     await _require_login()
+    from src import browser_client  # 提前导入：except 分支要用 ClientCollectError
     try:
-        from src import browser_client
-        # xsec_token 兜底：调用方未传时从本地库自动补查（explore/{id} 直链会 404，必须带 token）
+        # xsec_token / keyword 兜底：调用方未传 token 时从本地库补查（explore/{id} 直链会 404，
+        # 必须带 token）；keyword 供无活动搜索页时按原关键词重开搜索页。
         token = req.xsec_token
-        if not token:
-            con = _db()
-            row = con.execute("SELECT xsec_token FROM notes WHERE feed_id=?", (req.feed_id,)).fetchone()
-            con.close()
-            if row and row[0]:
-                token = row[0]
-        users = await browser_client.clients(req.feed_id, token)
+        keyword = ""
+        filters: dict = {}
+        con = _db()
+        row = con.execute("SELECT xsec_token, keyword FROM notes WHERE feed_id=?", (req.feed_id,)).fetchone()
+        if row:
+            token = token or (row[0] or "")
+            keyword = row[1] or ""
+        ctx = con.execute("SELECT params FROM collect_ctx WHERE keyword=?", (keyword,)).fetchone()
+        con.close()
+        if ctx and ctx[0]:
+            try:
+                filters = json.loads(ctx[0]) or {}
+            except ValueError:
+                filters = {}
+        users = await browser_client.clients(
+            req.feed_id, token, keyword=keyword, filters=filters)
     except HTTPException as e:
         # 风控风险页：已采部分保留（历史入库记录不动），明确提示停用窗口，不自动重试
         raise HTTPException(429, "触发平台风险拦截，建议停用 ≥24h，人工确认后再恢复采集") from e
+    except browser_client.ClientCollectError as e:
+        # 前置条件不满足（无搜索页 / 卡片已不在结果里）：409 让界面照原话提示，不伪装成"没人评论"
+        raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"浏览器采集失败：{e}") from e
     from src.intent import grade_batch
