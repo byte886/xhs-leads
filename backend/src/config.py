@@ -17,6 +17,7 @@
 import json
 import os
 import pathlib
+import re
 import socket
 import sys
 import time
@@ -35,7 +36,11 @@ CONFIG_FILE = DATA_DIR / "config.json"
 
 # 默认账号目录（R 批 v1.4：归一为数据目录内 profile；历史 ~/.xhs-leads-profile 保留兼容）
 DEFAULT_ACCOUNT_DIR_NAME = "profile"
-# 多账户统一根目录
+# 多账户统一根目录（R-6.59）：<数据目录>/accounts，注册表存相对路径。
+# 跨平台由 DATA_DIR 决定（macOS 打包态在 Application Support，Windows 打包态在 %APPDATA%），
+# 搬数据目录或换平台都不用改注册表。
+ACCOUNTS_DIR_NAME = "accounts"
+# 历史多账户根目录：早期账号落在这里，仅保留读取与进程扫描兼容，不再作为新账号默认位置。
 ACCOUNTS_ROOT = "~/.xhs-leads/accounts"
 
 
@@ -62,6 +67,28 @@ def expand(p: str | None) -> str:
     if not p:
         return ""
     return os.path.expanduser(p)
+
+
+def accounts_dir() -> pathlib.Path:
+    """账号 profile 统一根：<数据目录>/accounts（跨平台随 DATA_DIR 走）。"""
+    return DATA_DIR / ACCOUNTS_DIR_NAME
+
+
+def resolve_account_dir(raw: str | None) -> str:
+    """注册表里的 user_data_dir → 绝对路径（空值返回空串）。
+
+    兼容三种写法，新账号一律用第三种：
+    - 绝对路径（/Users/... 或 C:\\Users\\...）：原样返回 —— 自定义位置、老账号
+    - ~ 开头：按当前用户家目录展开 —— 早期写法（~/.xhs-leads/accounts/x）
+    - 其他相对路径：相对数据目录解析 —— 新写法（accounts/x），搬目录/换平台不用改注册表
+    """
+    if not raw:
+        return ""
+    if raw.startswith("~"):
+        return os.path.expanduser(raw)
+    if os.path.isabs(raw):
+        return raw
+    return str(DATA_DIR / raw)
 
 
 # ---------------------------------------------------------------------------
@@ -291,10 +318,10 @@ def active_account() -> str:
 
 
 def default_user_data_dir() -> str:
-    """default 账号的 user_data_dir：XHS_PROFILE_DIR > 旧 cdp_config > 默认目录。
+    """default 账号的 user_data_dir：XHS_PROFILE_DIR > 旧 cdp_config > accounts/default（相对数据目录）。
 
-    R 批（v1.4）归一：默认 = 数据目录内 profile（打包态 ~/Library/Application Support/xhs-leads/data/profile，
-    开发态 ROOT/data/profile）；历史 ~/.xhs-leads-profile 数据保留不动（登录态已失效，R 批重扫走新目录）。
+    R-6.59 归一：所有账号 profile 统一放 <数据目录>/accounts/<账号名>，default 不再特殊；
+    历史 data/profile 由迁移搬到 accounts/default，登录态随目录一起走。
     """
     env = os.environ.get("XHS_PROFILE_DIR")
     if env:
@@ -302,7 +329,7 @@ def default_user_data_dir() -> str:
     old = _read_json(DATA_DIR / "cdp_config.json").get("profile_dir")
     if old:
         return expand(old)
-    return str(DATA_DIR / "profile")
+    return f"{ACCOUNTS_DIR_NAME}/default"
 
 
 def get_account(account_id: str) -> dict | None:
@@ -320,17 +347,30 @@ def get_account(account_id: str) -> dict | None:
     return None
 
 
+# 账号 id 同时是目录名，必须跨平台安全：小写字母/数字/下划线/短横线，不以符号开头，≤32 字符。
+# 排除中文（路径编码）、空格、点、盘符与路径分隔符（Windows 非法字符）。
+_ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def valid_account_id(account_id: str) -> bool:
+    """账号 id 是否可安全用作目录名（macOS/Windows 通用）。"""
+    return bool(_ACCOUNT_ID_RE.match(account_id or ""))
+
+
 def add_account(account_id: str, role: str = "mixed",
                 user_data_dir: str = "", status: str = "ok") -> dict:
-    """新增账号。user_data_dir 缺省 = ~/.xhs-leads/accounts/<account_id>（~ 相对）。
+    """新增账号。user_data_dir 缺省 = accounts/<account_id>（相对数据目录，搬目录/换平台不用改）。
 
     role：collect（采集号）/ publish（发布号）/ mixed（通用）。
     """
     if not account_id or account_id.strip() in ("", "."):
         raise ValueError("account_id 不能为空")
     account_id = account_id.strip()
+    if not valid_account_id(account_id):
+        raise ValueError(
+            f"账号 id 只能用 小写字母/数字/下划线/短横线（≤32 字符，不能中文或空格）：{account_id!r}")
     if not user_data_dir:
-        user_data_dir = home_relative(os.path.join(os.path.expanduser(ACCOUNTS_ROOT), account_id))
+        user_data_dir = f"{ACCOUNTS_DIR_NAME}/{account_id}"
     data = _accounts_data()
     data.setdefault("accounts", {})
     data["accounts"][account_id] = {

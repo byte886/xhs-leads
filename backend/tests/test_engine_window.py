@@ -27,8 +27,15 @@ def test_set_window_noop_when_already_target_mode(monkeypatch):
 
 
 def test_set_window_noop_for_headless_target(monkeypatch):
-    """反向：要回无头但本来就是无头。"""
-    monkeypatch.setattr(config, "get_config", lambda: {"headless": True})
-    r = asyncio.run(engine_window.set_window("default", on=False))
+    """反向：要回无头但本来就是无头（default 已禁止切无头，此处用普通账号）。"""
+    monkeypatch.setattr(config, "account_headless", lambda _aid: True)
+    r = asyncio.run(engine_window.set_window("acc_x", on=False))
     assert r["ok"] is True
     assert r["note"] == "已是目标模式，无需切换"
+
+
+def test_set_window_refuses_default_to_headless():
+    """R-6.58：default 承载 APP 壳窗与采集窗，运行中切无头会把整个应用带走。"""
+    r = asyncio.run(engine_window.set_window("default", on=False))
+    assert r["ok"] is False
+    assert "default 账号" in r["error"]

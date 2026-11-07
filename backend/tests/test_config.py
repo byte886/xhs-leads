@@ -110,7 +110,7 @@ def test_mode_prod(monkeypatch):
 
 def test_accounts_crud(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ACCOUNTS_FILE", tmp_path / "acc.json")
-    monkeypatch.setattr(config, "ACCOUNTS_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     assert config.list_accounts() == {}
     config.add_account("acc1", role="collector")
     assert "acc1" in config.list_accounts()

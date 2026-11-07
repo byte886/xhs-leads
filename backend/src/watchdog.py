@@ -42,9 +42,9 @@ def default_markers() -> list[str]:
     try:
         from src import config  # noqa: PLC0415
 
-        root = os.path.expanduser(config.ACCOUNTS_ROOT)
-        if root:
-            marks.append(root)
+        # 新统一根（数据目录内）+ 历史根（早期账号）：两个都要认，否则老账号进程会漏管
+        roots = [str(config.accounts_dir()), os.path.expanduser(config.ACCOUNTS_ROOT)]
+        marks.extend([r for r in roots if r])
     except Exception:  # noqa: BLE001
         pass
     return [m for m in marks if m]

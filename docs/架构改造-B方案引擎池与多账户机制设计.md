@@ -267,3 +267,75 @@ cooldown ──(人工确认/到期)────► ok
 - [ ] 连续 3 次 `mark_soft` → 冷却 4 分钟（指数退避），非 24h
 - [x] `mark_manual` 后扫码成功 → `login_status` 判有效且 `risk.state` 回 ok（原 refresh_cookie 端点已删）
 - [ ] 任务结束引擎窗口保留（不反复开关）；`cleanup_tabs` 仅清理非 APP/空白页
+
+## 九、账号目录设计（R-6.59，2026-11-08 补充）
+
+### 9.1 改之前的状态（问题）
+
+同一个东西散在两个互不相干的根：
+
+| 东西 | 位置 |
+|---|---|
+| 注册表、库、图片、日志 | `~/Library/Application Support/xhs-leads/data/` |
+| default 的 profile | `data/profile/`（81M） |
+| 其他账号的 profile | `~/.xhs-leads/accounts/<账号名>/` 另一个根，藏在 home 下 |
+| default 的 cookie | `data/cookies.json` 特例 |
+| 其他账号的 cookie | `data/cookies/<账号名>.json` |
+
+后果：代码到处特判 default（cookie 路径、profile 路径、端口）；搬数据目录要动两处；换平台要改注册表里的绝对路径；`~/.xhs-leads/accounts/` 下的 `acc_test1` / `verify_b` / dev `default` 看着像真账号。
+
+### 9.2 目标结构
+
+```
+<数据目录>/
+├── accounts.json               注册表
+├── accounts/<账号名>/          所有账号 profile 统一在这里
+└── cookies/<账号名>.json       导出 cookie 按账号（default 不再特例）
+```
+
+### 9.3 命名规则
+
+- **目录名 = 账号 id**：一份数据一个名字，不再维护「id → 目录名」映射表。
+- 只允许 `小写字母 / 数字 / 下划线 / 短横线`，首字符必须是字母或数字，≤32 字符。
+- 禁止中文（路径编码）、空格、点号、`/` 与 `\`（Windows 非法字符）、大写（Windows 大小写不敏感会撞名）。
+- 新增自动 `acc_<6位hex>`（`new_account_id()`），允许手动起名如 `zhubao_main`。
+- 实现：`config._ACCOUNT_ID_RE` + `valid_account_id()`，`add_account()` 前置校验。
+
+### 9.4 跨平台关键：注册表存相对路径
+
+注册表 `user_data_dir` 存**相对数据目录的路径**（`accounts/default`），不存 `~/...` 也不存 `/Users/...`。
+
+数据根由 launcher 注入 `XHS_LEADS_DATA` 决定：
+- macOS 打包态：`~/Library/Application Support/xhs-leads/data`
+- Windows 打包态：`%APPDATA%\xhs-leads\data`（规划中）
+
+搬数据目录、换平台、换机器，注册表一个字都不用改。
+
+`config.resolve_account_dir()` 兼容三种写法：
+
+| 写法 | 例子 | 解析 |
+|---|---|---|
+| 相对数据目录 | `accounts/default` | `DATA_DIR / raw`（新账号一律这种） |
+| `~` 开头 | `~/.xhs-leads/accounts/verify_c` | `expanduser`（早期账号） |
+| 绝对路径 | `/Applications/X`、`C:\Users\X` | 原样（自定义位置） |
+
+### 9.5 迁移与兼容
+
+- `ACCOUNTS_ROOT = "~/.xhs-leads/accounts"` 降级为**历史根**：只用于读取与进程扫描，不再写入新账号。
+- `watchdog._marks()` 同时认新根 `config.accounts_dir()` 与历史根，避免老账号进程漏管。
+- 迁移用 `ditto`（macOS 保留 xattr/ACL）。Windows 等价手段为 `robocopy /COPYALL` 或 `shutil.copytree`，后续实现时补。
+- **迁移后必须验登录态，不能只看文件数对得上**（profile 拷贝成功 ≠ 登录态还在）。
+
+### 9.6 本次迁移实测
+
+| 项 | 结果 |
+|---|---|
+| default：`data/profile` → `accounts/default` | 424 文件一致，81M→79M |
+| default 引擎实际参数 | `--user-data-dir=.../data/accounts/default` |
+| default 登录态 | `{"status":"logged_in","logged_in":true}` 保住 |
+| verify_c：`~/.xhs-leads/accounts/verify_c` → `accounts/verify_c` | 494 文件一致 |
+| verify_c 引擎实际参数 | `--user-data-dir=.../data/accounts/verify_c`，9224 正常 |
+| 旧目录 | 移到 `/tmp/xhs_migrated_backup_1108`（2.5G，不删，可回滚） |
+| 历史根 `~/.xhs-leads/accounts/` | 已清空 |
+| 单测 | `test_account_paths.py` 20 例 + 四件合计 52 例、含 engine_window 共 56 例全过 |
+| 后端全量 | 全绿（排除 llm_service / real_login） |

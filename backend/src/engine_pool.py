@@ -226,7 +226,7 @@ class AccountEngine:
     def __init__(self, account_id: str):
         self.account_id = account_id
         acc = config.get_account(account_id) or config.add_account(account_id)
-        self.user_data_dir = config.expand(acc.get("user_data_dir", ""))
+        self.user_data_dir = config.resolve_account_dir(acc.get("user_data_dir", ""))
         self.role = acc.get("role", "mixed")
         # R-6.57：每账号独占 CDP 端口（default=9223，其余 9224 起）。
         # 共用端口时 Chromium 绑定失败静默跳过 → 测试连到的永远是先起的账号。

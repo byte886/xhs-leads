@@ -58,7 +58,7 @@ def cmd_list(args):
     # default 的 profile 以注册表登记值为准（引擎实际用它）；缺登记才回退默认目录
     default_dir = (accounts.get("default") or {}).get("user_data_dir") \
         or config.home_relative(config.default_user_data_dir())
-    print(f"{'账号':<16}{'角色':<10}{'端口':<8}{'状态':<8}profile")
+    print(f"{'账号':<16}{'角色':<10}{'端口':<8}{'状态':<8}profile（相对数据目录）")
     print("-" * 90)
     print(f"{'default':<16}{'mixed':<10}{port_map.get('default', '-'):<8}{'ok':<8}{default_dir}")
     for aid, acc in accounts.items():
@@ -76,7 +76,7 @@ def cmd_add(args):
     acc = config.add_account(args.account_id, role=args.role)
     port = config.account_debug_port(args.account_id)
     print(f"已创建账号 {args.account_id}")
-    print(f"  profile: {acc.get('user_data_dir')}")
+    print(f"  profile: {config.resolve_account_dir(acc.get('user_data_dir'))}")
     print(f"  CDP 端口: {port}")
     print("  下一步：启动后端后打开该账号窗口扫码登录")
     return 0
@@ -94,7 +94,7 @@ def cmd_remove(args):
         print("删除失败")
         return 1
     print(f"已从注册表移除 {args.account_id}")
-    print(f"  profile 目录保留（不自动删）: {config.expand(acc.get('user_data_dir', ''))}")
+    print(f"  profile 目录保留（不自动删）: {config.resolve_account_dir(acc.get('user_data_dir'))}")
     return 0
 
 
