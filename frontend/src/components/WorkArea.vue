@@ -107,7 +107,7 @@ function pickAuthor(a: Author) {
             <button class="vs-btn" :class="{ on: view === 'notes' }" @click="showNotes">笔记 {{ appState.notes.length }}</button>
             <button class="vs-btn" :class="{ on: view === 'authors' }" @click="showAuthors">作者榜</button>
           </div>
-          <input v-model="filterText" placeholder="请选标题,作者或UID" class="toolbar-filter" />
+          <input v-model="filterText" placeholder="搜索标题或作者名，多个词用空格分隔" class="toolbar-filter" />
           <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
         </div>
         <!-- 批量条挂载点：CardGrid 用 Teleport 把「全选图文」等批量操作送进吸顶工具栏 -->

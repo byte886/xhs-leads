@@ -5,6 +5,7 @@ import type { Note } from '../types'
 import { coverProxy } from '../store'
 import { appState, selectedCount, toast } from '../store'
 import { descIsOnlyTags } from '../tagOnly'
+import { filterNotes } from '../lib/noteFilter'
 import { saveTextToPath, saveZipToPath, shortPath } from '../lib/saveApi'
 import SaveDialog from './SaveDialog.vue'
 
@@ -20,16 +21,7 @@ const emit = defineEmits<{
   (e: 'clients', note: Note): void
 }>()
 
-const filtered = computed(() => {
-  const q = (props.filterText || '').trim().toLowerCase()
-  if (!q) return props.notes
-  // 多字段筛选：标题 / 作者昵称 / 笔记ID（feed_id），任一命中即显示
-  return props.notes.filter(n =>
-    (n.title || '').toLowerCase().includes(q) ||
-    (n.nickname || '').toLowerCase().includes(q) ||
-    (n.feed_id || '').toLowerCase().includes(q)
-  )
-})
+const filtered = computed(() => filterNotes(props.notes, props.filterText))
 
 function fmt(n: number | null | undefined): string {
   const v = n || 0
@@ -295,7 +287,7 @@ function fmtPub(ts: string | number | null): string {
       </div>
     </div>
   </div>
-  <div v-if="!filtered.length" style="text-align:center;color:#AAA;padding:40px 0">暂无笔记（{{ props.filterText ? '无匹配结果（标题/作者/UID）' : '先点「开始采集」' }}）</div>
+  <div v-if="!filtered.length" style="text-align:center;color:#AAA;padding:40px 0">暂无笔记（{{ props.filterText ? '无匹配结果（标题/作者名）' : '先点「开始采集」' }}）</div>
 
   <!-- 评分说明弹窗 -->
   <div v-if="scoreModal" class="score-modal-mask" @click.self="closeScore">
