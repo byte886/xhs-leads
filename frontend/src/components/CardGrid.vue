@@ -5,6 +5,8 @@ import type { Note } from '../types'
 import { coverProxy } from '../store'
 import { appState, selectedCount, toast } from '../store'
 import { descIsOnlyTags } from '../tagOnly'
+import { saveTextToPath, saveZipToPath, shortPath } from '../lib/saveApi'
+import SaveDialog from './SaveDialog.vue'
 
 const props = defineProps<{
   notes: Note[]
@@ -97,98 +99,65 @@ function clearSelect() {
   toast('已清空选择')
 }
 
-// 下载图片包（P3）：后端把选中笔记的本地封面打包 zip 落盘到 ~/Downloads 并返回
-// 路径（R-6.23 改后端直写文件——CFT 测试浏览器无下载 UI，浏览器 blob 下载
-// 无法定位产物）；前端提示路径 + 「打开文件夹」按钮在 Finder 中定位。
-const lastZip = ref<{ path: string; name: string } | null>(null)
-
+// 下载图片包 / 导出 JSON / 导出 CSV 统一流程：
+// ① 应用内「保存位置」对话框让用户选定目录与文件名 → ② 后端直接把文件写过去。
+// 不用浏览器下载：CFT 外壳里系统保存对话框不弹（实测会静默落到默认下载目录）。
 async function downloadImages() {
   const ids = Object.keys(appState.selected)
   if (!ids.length) { toast('请先勾选笔记', 'error'); return }
-  let resp
+  const path = await saveDialog.value?.open(`xhs_images_${Date.now()}.zip`)
+  if (!path) return
   try {
-    resp = await fetch('/api/download_images', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feed_ids: ids }),
-    })
-  } catch {
-    toast('打包失败：网络错误', 'error')
-    return
-  }
-  if (!resp.ok) {
-    toast('打包失败：' + ((await resp.text()) || resp.status).toString().slice(0, 80), 'error')
-    return
-  }
-  const data = await resp.json().catch(() => null)
-  if (!data || !data.ok) { toast('打包失败：响应异常', 'error'); return }
-  lastZip.value = { path: data.path, name: data.name }
-  const missing = (data.missing || []).length
-  toast(
-    missing > 0
-      ? `已打包 ${ids.length - missing} 张图片（${missing} 张缺失），已保存：下载/${data.name}`
-      : `已打包 ${ids.length} 张图片，已保存：下载/${data.name}`,
-  )
-}
-
-async function openFolder() {
-  if (!lastZip.value) { toast('请先下载图片包', 'error'); return }
-  try {
-    const resp = await fetch('/api/open_folder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: lastZip.value.path }),
-    })
-    const data = await resp.json().catch(() => null)
-    if (!resp.ok || !data?.ok) { toast('打开文件夹失败：' + ((data?.detail) || resp.status), 'error'); return }
-    toast('已在 Finder 中打开，双击 zip 即可查看图片')
-  } catch {
-    toast('打开文件夹失败：网络错误', 'error')
+    const r = await saveZipToPath(ids, path)
+    const base = `已保存 ${r.count} 张图片到 ${shortPath(r.path)}`
+    const extra = [r.missing.length ? `${r.missing.length} 张缺失` : '', r.overwrote ? '覆盖了同名文件' : '']
+      .filter(Boolean).join('，')
+    toast(extra ? `${base}（${extra}）` : base)
+  } catch (e) {
+    toast('打包失败：' + (e as Error).message, 'error')
   }
 }
 
-function exportJSON() {
+async function exportJSON() {
   const data = props.notes.map(n => ({
     feed_id: n.feed_id, title: n.title, nickname: n.nickname,
     liked_count: n.liked_count, collected_count: n.collected_count,
     comment_count: n.comment_count, desc: n.desc, cover_url: n.cover_url,
     origin: noteUrl(n.feed_id, n.xsec_token)
   }))
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `xhs_notes_${Date.now()}.json`
-  document.body.appendChild(a)   // 必须挂载 DOM 才会真正触发下载
-  a.click()
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href) }, 1000)  // 延迟 revoke，等下载启动
-  toast(`已导出 ${data.length} 条 JSON，文件已保存到浏览器下载目录`)
+  const path = await saveDialog.value?.open(`xhs_notes_${Date.now()}.json`)
+  if (!path) return
+  try {
+    const r = await saveTextToPath(path, JSON.stringify(data, null, 2))
+    toast(`已导出 ${data.length} 条 JSON 到 ${shortPath(r.path)}${r.overwrote ? '（覆盖了同名文件）' : ''}`)
+  } catch (e) {
+    toast('导出失败：' + (e as Error).message, 'error')
+  }
 }
 
-function exportCSV() {
+async function exportCSV() {
   const rows = props.notes.map(n => [
     n.title || '', n.nickname || '', n.liked_count || 0,
     n.collected_count || 0, n.comment_count || 0,
     n.desc ? n.desc.replace(/[\r\n]+/g, ' ') : ''
   ])
   const csv = ['标题,作者,点赞,收藏,评论,正文摘要', ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `xhs_notes_${Date.now()}.csv`
-  document.body.appendChild(a)   // 必须挂载 DOM 才会真正触发下载
-  a.click()
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href) }, 1000)  // 延迟 revoke
-  toast(`已导出 ${dataCount()} 条 CSV，文件已保存到浏览器下载目录`)
-}
-
-function dataCount() {
-  return props.notes.length
+  const path = await saveDialog.value?.open(`xhs_notes_${Date.now()}.csv`)
+  if (!path) return
+  try {
+    // BOM 让 Excel 正确识别 UTF-8 中文
+    const r = await saveTextToPath(path, '\ufeff' + csv)
+    toast(`已导出 ${props.notes.length} 条 CSV 到 ${shortPath(r.path)}${r.overwrote ? '（覆盖了同名文件）' : ''}`)
+  } catch (e) {
+    toast('导出失败：' + (e as Error).message, 'error')
+  }
 }
 
 const selCount = computed(() => selectedCount())
 
 // ============ 分数可解释：点击分数弹「评分说明」 ============
 const scoreModal = ref<Note | null>(null)
+const saveDialog = ref<{ open: (name: string) => Promise<string | null> } | null>(null)
 const DIMS = [
   { key: 'like_fan_ratio', label: '点赞粉丝比', max: 40, weight: '权重 40%', hint: '赞/粉比越高，内容穿透粉丝圈层的能力越强（赞/粉 > 3 为爆款级）' },
   { key: 'low_fan', label: '低粉权重', max: 25, weight: '权重 25%', hint: '粉丝越少得分越高——专挖被低估的小博主（<500 满分，5000 归零）' },
@@ -237,7 +206,6 @@ function fmtPub(ts: string | number | null): string {
         <button class="b-btn" @click="selectAll">全选图文</button>
         <button class="b-btn" @click="clearSelect">清空选择</button>
         <button class="b-btn" @click="downloadImages">下载图片包</button>
-        <button v-if="lastZip" class="b-btn" @click="openFolder">打开文件夹</button>
         <button class="b-btn" @click="exportJSON">导出 JSON</button>
         <button class="b-btn" @click="exportCSV">导出 CSV</button>
       </div>
@@ -352,6 +320,9 @@ function fmtPub(ts: string | number | null): string {
       <div class="sm-concl">{{ tagConclusion(scoreModal.tag) }}</div>
     </div>
   </div>
+
+  <!-- 导出/下载共用：应用内「保存位置」对话框 -->
+  <SaveDialog ref="saveDialog" />
 </template>
 
 <style scoped>

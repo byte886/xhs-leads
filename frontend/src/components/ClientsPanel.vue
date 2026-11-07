@@ -4,10 +4,14 @@
 import { onMounted, ref } from 'vue'
 import type { ClientUser, ClientsAgg } from '../types'
 import { apiClientsList, apiClientsAgg } from '../api'
+import { saveTextToPath, shortPath } from '../lib/saveApi'
+import SaveDialog from './SaveDialog.vue'
+import { toast } from '../store'
 
 const clients = ref<ClientUser[]>([])
 const agg = ref<ClientsAgg | null>(null)
 const clTab = ref<'all' | 'high' | '7d'>('all')
+const saveDialog = ref<{ open: (name: string) => Promise<string | null> } | null>(null)
 
 // O1-3 意向档位展示映射（与后端 intent.py 一致）
 const INTENT_META: Record<string, { label: string; cls: string }> = {
@@ -73,19 +77,23 @@ function clSummary() {
   return { total: clients.value.length, high, contact }
 }
 
-/** O1-3 导出线索 CSV（昵称/主页链接/评论原文/命中词/IP属地/意向） */
-function exportClientsCsv() {
+/** O1-3 导出线索 CSV（昵称/主页链接/评论原文/命中词/IP属地/意向）
+ *  体验与卡片页三条导出一致：先在应用内「保存位置」对话框选目录与文件名，再落盘 */
+async function exportClientsCsv() {
   const head = ['昵称', '主页链接', '评论原文', '命中词', 'IP属地', '意向', '采集时间']
   const rows = clients.value.map((c) => [
     c.nickname || '', c.profile || '', (c.sample_comment || '').replace(/"/g, '""'),
     c.matched_word || '', c.ip_location || '', intentLabel(c), (c.created_at || '').slice(0, 10),
   ])
   const csv = '\ufeff' + [head, ...rows].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n')
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-  a.download = `线索导出_${new Date().toISOString().slice(0, 10)}.csv`
-  a.click()
-  URL.revokeObjectURL(a.href)
+  const path = await saveDialog.value?.open(`线索导出_${new Date().toISOString().slice(0, 10)}.csv`)
+  if (!path) return
+  try {
+    const r = await saveTextToPath(path, csv)
+    toast(`已导出 ${rows.length} 条线索到 ${shortPath(r.path)}${r.overwrote ? '（覆盖了同名文件）' : ''}`)
+  } catch (e) {
+    toast('导出失败：' + (e as Error).message, 'error')
+  }
 }
 
 /** O1-5 去联系：跳转用户主页，由用户自行沟通（工具不代写话术、不自动发送） */
@@ -203,6 +211,9 @@ defineExpose({ refresh })
       </div>
     </template>
   </div>
+
+  <!-- 与卡片页导出一致：应用内「保存位置」对话框 -->
+  <SaveDialog ref="saveDialog" />
 </template>
 
 <style scoped>

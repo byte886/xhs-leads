@@ -433,22 +433,21 @@ class TestDownloadImages:
         assert r.status_code == 400
 
     def test_download_mixed(self, client, tmp_path):
-        # R-6.23 契约：zip 落盘 ~/Downloads，missing 列表在 JSON body（不再发 X-Missing 头）
+        # 契约：返回 zip 流，缺失项走 X-Missing 响应头（yy 缺失、zz 命中）
         (tmp_path / "images" / "zz_cover.jpg").write_bytes(b"img")
         r = client.post("/api/download_images", json={"feed_ids": ["zz", "yy"]})
-        j = r.json()
-        assert j["ok"] is True and "yy" in j["missing"] and "zz" not in j["missing"]
+        missing = r.headers.get("X-Missing", "")
+        assert r.status_code == 200 and "yy" in missing and "zz" not in missing
 
-    def test_download_zip(self, client, tmp_path, monkeypatch):
-        # R-6.23 契约：响应为 JSON（path/size/missing），zip 产物落盘后读文件验 PK 魔数；
-        # Path.home 指向 tmp 防测试污染真实 ~/Downloads
+    def test_download_zip(self, client, tmp_path):
+        # 契约：响应为 application/zip 文件流，body 以 PK 魔数开头，带文件名
         (tmp_path / "images" / "zz_cover.jpg").write_bytes(b"img")
-        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         r = client.post("/api/download_images", json={"feed_ids": ["zz"]})
-        j = r.json()
-        assert r.status_code == 200 and j["ok"] is True and j["size"] > 0 and j["missing"] == []
-        data = Path(j["path"]).read_bytes()
-        assert data.startswith(b"PK")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/zip"
+        assert "filename=" in r.headers.get("content-disposition", "")
+        assert "X-Missing" not in r.headers
+        assert r.content.startswith(b"PK")
 
 
 

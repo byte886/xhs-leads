@@ -16,7 +16,6 @@ import datetime
 import io
 import json
 import os
-import subprocess
 import sys
 import random
 import sqlite3
@@ -33,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
+from src import save_dialog as _save_dialog  # 原生「另存为」面板（导出统一走它）
 from src import shell_window as _shell_window  # noqa: E402（R-6.22 窗口校准：模块级导入，避免各函数重复延迟导入）
 
 log = _log.get("server")
@@ -1605,10 +1605,43 @@ def authors():
 # ================= 下载图片包（P3） =================
 class DownloadImgsReq(BaseModel):
     feed_ids: list[str]
+    save_path: str | None = None  # 用户在应用内「保存位置」对话框选定，非空则直接写盘
 
 
-class OpenFolderReq(BaseModel):
+class SaveTextReq(BaseModel):
     path: str
+    content: str
+
+
+@app.get("/api/save_places")
+def save_places():
+    """导出对话框的常用位置（下载/桌面/文档/上次用过）。"""
+    return _save_dialog.places()
+
+
+@app.get("/api/list_dirs")
+def list_dirs(path: str = ""):
+    """目录浏览：列出子目录供应用内「保存位置」对话框导航。"""
+    try:
+        return _save_dialog.list_dirs(path or str(Path.home()))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/save_text")
+def save_text(req: SaveTextReq):
+    """把前端生成的文本（JSON/CSV）写到用户选定的路径。"""
+    existed = Path(req.path).expanduser().is_file()
+    try:
+        target = _save_dialog.write_bytes(req.path, req.content.encode("utf-8"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "ok": True,
+        "path": str(target),
+        "bytes": target.stat().st_size,
+        "overwrote": existed,
+    }
 
 
 def _download_remote_cover(con, zf, fid: str) -> bool:
@@ -1648,16 +1681,13 @@ def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
 
 @app.post("/api/download_images")
 def download_images(req: DownloadImgsReq):
-    """打包选中笔记的本地图片为 zip，落盘到固定目录并返回路径。
+    """打包选中笔记的本地图片为 zip，直接以文件流返回（不落盘）。
 
-    R-6.23：改为后端直接写文件（不再走浏览器 blob 下载）——内置 CFT 测试浏览器的
-    下载 UI 不可用（app 模式无下载栏，「在 Finder 中显示」打不开），用户无法定位
-    文件。落盘到 ~/Downloads（用户直觉位置；目录缺失时回退应用数据目录 downloads/），
-    前端据此提示路径 + 调 /api/open_folder 在 Finder 中定位。
+    前端拿到 application/zip 后用 File System Access API 弹系统「另存为」，
+    由用户自己选择保存位置；缺失的 feed_id 通过 X-Missing 响应头回传。
 
     优先打包本地缓存（克隆时下载的 fid_pN.jpg / fid_cover.jpg 全部命中）；
-    本地无缓存时回退远程 cover_url 补下载（带 Referer，低频，仅用户主动点打包时触发）；
-    仍缺失的 feed_id 在返回体 missing 中列出（前端据此提示）。
+    本地无缓存时回退远程 cover_url 补下载（带 Referer，低频，仅用户主动点打包时触发）。
     """
     if not req.feed_ids:
         raise HTTPException(400, "没有选中的笔记")
@@ -1671,40 +1701,25 @@ def download_images(req: DownloadImgsReq):
     if not data:
         raise HTTPException(400, "所选笔记没有可打包的图片")
     fname = f"xhs_images_{int(time.time() * 1000)}.zip"
-    # R-6.23：落盘到 ~/Downloads（用户直觉位置）；目录不存在/不可写时回退数据目录
-    try:
-        dl_dir = Path.home() / "Downloads"
-        dl_dir.mkdir(parents=True, exist_ok=True)
-        dest = dl_dir / fname
-        dest.write_bytes(data)
-    except Exception:  # noqa: BLE001（无下载目录/权限异常 → 数据目录兜底）
-        (DATA_DIR / "downloads").mkdir(parents=True, exist_ok=True)
-        dest = DATA_DIR / "downloads" / fname
-        dest.write_bytes(data)
-    return {"ok": True, "path": str(dest), "name": fname, "size": len(data), "missing": missing}
-
-
-@app.post("/api/open_folder")
-def open_folder(req: OpenFolderReq):
-    """R-6.23：在 Finder 中定位文件（macOS `open -R`），供「下载图片包」查看产物。
-
-    仅允许定位下载目录（~/Downloads）与应用数据目录下的文件，防越权路径。
-    """
-    p = Path(req.path).expanduser().resolve()
-    allowed = [
-        (Path.home() / "Downloads").resolve(),
-        (DATA_DIR / "downloads").resolve(),
-        DATA_DIR.resolve(),
-    ]
-    if not any(str(p).startswith(str(base)) for base in allowed):
-        raise HTTPException(400, "不允许打开该路径")
-    if not p.exists():
-        raise HTTPException(404, "文件不存在，可能已被移动或删除")
-    try:
-        subprocess.Popen(["open", "-R", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"ok": True, "path": str(p)}
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"打开文件夹失败：{e}") from e
+    if req.save_path:
+        # 用户已在应用内「保存位置」对话框选好路径：直接写盘，不再经过浏览器
+        existed = Path(req.save_path).expanduser().is_file()
+        try:
+            target = _save_dialog.write_bytes(req.save_path, data)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {
+            "ok": True,
+            "path": str(target),
+            "bytes": len(data),
+            "missing": missing,
+            "count": len(req.feed_ids) - len(missing),
+            "overwrote": existed,
+        }
+    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
+    if missing:
+        headers["X-Missing"] = ",".join(missing)
+    return Response(content=data, media_type="application/zip", headers=headers)
 
 
 # ================= 发布页追加图片 =================

@@ -124,11 +124,6 @@ def test_persona_save_roundtrip(client, monkeypatch, tmp_path):
     assert r2["industry"] == "珠宝"
 
 
-def test_open_folder_rejects_escape(client):
-    r = client.post("/api/open_folder", json={"path": "/etc/passwd"})
-    assert r.status_code >= 400
-
-
 def test_notes_with_params(client):
     r = client.get("/api/notes", params={"keyword": "x", "order": "recent", "tag": "t"}).json()
     assert r["total"] == 0
