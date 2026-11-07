@@ -93,9 +93,6 @@ function pickAuthor(a: Author) {
         <p>{{ appState.collecting ? '已按左侧条件开始采集，获取到的笔记会在此实时展示。' : '本次未获取到笔记，调整关键词或筛选条件后重新采集。' }}</p>
       </div>
       <CardGrid v-else :notes="appState.notes" @menu="emit('menu', $event)" />
-      <div v-if="appState.searchNote" style="margin-top:12px;font-size:12px;color:var(--ink-2);background:#FFF7E6;border-radius:8px;padding:8px 12px">
-        {{ appState.searchNote }}
-      </div>
     </div>
 
     <!-- 选择内容（一页式：评分徽标卡片 + 筛选 + 勾选 + 单条克隆；P2 作者榜在采集页内子切换） -->

@@ -56,7 +56,6 @@ export const appState = reactive({
   taskLabel: '',
   status: '搜索中',
   elapsed: 0,
-  searchNote: '',
   // 勾选
   selected: {} as Record<string, boolean>,
   // 发布页

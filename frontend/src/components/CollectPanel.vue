@@ -107,13 +107,11 @@ async function finalizeCollect(pr: any) {
   if (timer) { clearInterval(timer); timer = null }
   appState.collecting = false
   if (pr.status === 'error') {
-    appState.searchNote = pr.note || '采集失败'
     appState.status = '失败'
     toast(pr.note || '采集失败', 'error')
     if (isLoginAbnormal(pr.note || '')) emit('open-login')
     return
   }
-  appState.searchNote = pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成')
   toast(pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成'))
   // 采集完成后拉评分排序结果，自动推进到"筛选结果"阶段
   sessionStorage.setItem('xhs_stage_restore', '1')
@@ -147,14 +145,12 @@ async function handleCollectUpdate(pr: any) {
     emit('open-login')
     const note = pr.note || '需要登录，本次采集结束'
     toast(note, 'error')
-    appState.searchNote = note
     appState.status = '需要登录'
     await finalizeCollect(pr)
     return
   }
   if (pr.status === 'running') {
     appState.endedNeedLogin = false
-    appState.searchNote = pr.note || '正在采集…（可随时点「停止采集」）'
     scheduleListRefresh()
     return
   }
@@ -191,7 +187,6 @@ async function doCollect() {
         // 否则按钮会永远卡在「停止」
         appState.collecting = false
         appState.status = '空闲'
-        appState.searchNote = '已停止采集'
         if (timer) { clearInterval(timer); timer = null }
       }
     }
@@ -208,7 +203,6 @@ async function doCollect() {
   appState.total = 0
   appState.count = 0
   appState.taskLabel = buildTaskLabel()
-  appState.searchNote = ''
   appState.elapsed = 0
   if (timer) clearInterval(timer)
   timer = setInterval(() => { appState.elapsed += 1 }, 1000)
@@ -219,7 +213,6 @@ async function doCollect() {
     await apiCollectClear()
     const r = await apiCollectStart(appState.params)
     collectTaskId = r.task_id
-    appState.searchNote = '正在采集…（可随时点「停止采集」）'
     armProgressPolling(r.task_id)
   } catch (e) {
     if (timer) { clearInterval(timer); timer = null }
@@ -243,7 +236,6 @@ onMounted(async () => {
     if (sn.collecting && sn.task_id) {
       appState.collecting = true
       appState.status = '正在采集'
-      appState.searchNote = sn.detail || '正在采集…（可随时点「停止采集」）'
       if (sn.keyword) appState.params.keyword = sn.keyword
       if (sn.limit) appState.params.limit = sn.limit
       appState.taskLabel = buildTaskLabel()
