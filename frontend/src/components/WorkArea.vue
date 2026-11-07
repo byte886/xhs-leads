@@ -160,13 +160,14 @@ function pickAuthor(a: Author) {
 </template>
 
 <style scoped>
-/* 吸顶工具栏：在右侧 .work 滚动容器内贴顶，不透明背景盖住下方滚过的卡片 */
+/* 吸顶工具栏：.work 已去掉顶部 padding，sticky 直接吸到滚动视口最顶端无缝隙；
+   这里 padding-top 把内容推回原视觉位置，不透明背景盖住下方滚过的卡片 */
 .sticky-tools {
   position: sticky;
   top: 0;
   z-index: 8;
   background: var(--bg);
-  padding-bottom: 12px;
+  padding: 14px 0 12px;
 }
 .toolbar-row { display: flex; gap: 10px; align-items: center; }
 .toolbar-filter { flex: 1; min-width: 0; }

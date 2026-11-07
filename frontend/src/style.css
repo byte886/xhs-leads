@@ -111,8 +111,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .cookie-save { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
 .cookie-save input { width: 14px; height: 14px; accent-color: var(--red); }
 
-/* 右工作区：padding 收窄，让卡片网格贴满可用宽度，不出现右侧宽白边 */
-.work { flex: 1; padding: 14px; overflow: auto; min-height: 0; }
+/* 右工作区：只保留左右/底部 padding，顶部 padding 设为 0——
+   这样内部 sticky 工具栏 top:0 直接吸到滚动视口最顶端，不会因 padding-top 留缝
+   导致卡片从工具栏上方透出（透视）；顶部间距由 .sticky-tools 自身 padding-top 提供 */
+.work { flex: 1; padding: 0 14px 14px; overflow: auto; min-height: 0; }
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 60vh; color: var(--ink-2); gap: 12px; text-align: center;

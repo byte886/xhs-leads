@@ -192,14 +192,14 @@ onMounted(async () => {
 
     <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->
     <div v-show="appState.tab === 'clients'" class="work">
-      <div style="max-width:1100px;margin:0 auto;padding:22px 26px">
+      <div style="max-width:1100px;margin:0 auto;padding:36px 26px 22px">
         <ClientsPanel ref="clientsRef" />
       </div>
     </div>
 
     <!-- 设置 Tab：账号与登录 / AI Key / 账号人设 -->
     <div v-show="appState.tab === 'settings'" class="work">
-      <div style="max-width:1100px;margin:0 auto;padding:22px 26px">
+      <div style="max-width:1100px;margin:0 auto;padding:36px 26px 22px">
         <SettingsPanel />
       </div>
     </div>
