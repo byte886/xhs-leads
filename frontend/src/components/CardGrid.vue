@@ -288,6 +288,24 @@ function fmtPub(ts: string | number | null): string {
           >一键克隆</button>
           <button class="ha-btn client" title="采集客户（采人）" @click.stop="emit('clients', note)">采集客户</button>
         </div>
+        <!-- 封面底部交互指标：常驻显示，hover/选中时让位给操作按钮 -->
+        <div class="cover-stats">
+          <span class="cs-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20.3C12 20.3 3.8 15.4 3.8 9.7 3.8 7.1 5.7 5.3 8 5.3c1.6 0 3 .8 4 2.1 1-1.3 2.4-2.1 4-2.1 2.3 0 4.2 1.8 4.2 4.4 0 5.7-8.2 10.6-8.2 10.6Z"/>
+            </svg>{{ fmt(note.liked_count) }}
+          </span>
+          <span class="cs-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.8l5.9-.8L12 3.6Z"/>
+            </svg>{{ fmt(note.collected_count) }}
+          </span>
+          <span class="cs-item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V6A1.5 1.5 0 0 1 5 4.5Z"/>
+            </svg>{{ fmt(note.comment_count) }}
+          </span>
+        </div>
       </div>
       <div class="meta">
         <div class="title">{{ note.title || '（无标题）' }}</div>
@@ -305,23 +323,6 @@ function fmtPub(ts: string | number | null): string {
             <span v-else class="avatar avatar-ph"></span>
             <span class="nick">{{ note.nickname || '未知作者' }}</span>
           </button>
-          <span class="interact">
-            <span class="metric">
-              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 20.3C12 20.3 3.8 15.4 3.8 9.7 3.8 7.1 5.7 5.3 8 5.3c1.6 0 3 .8 4 2.1 1-1.3 2.4-2.1 4-2.1 2.3 0 4.2 1.8 4.2 4.4 0 5.7-8.2 10.6-8.2 10.6Z"/>
-              </svg>{{ fmt(note.liked_count) }}
-            </span>
-            <span class="metric">
-              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.8l5.9-.8L12 3.6Z"/>
-              </svg>{{ fmt(note.collected_count) }}
-            </span>
-            <span class="metric">
-              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V6A1.5 1.5 0 0 1 5 4.5Z"/>
-              </svg>{{ fmt(note.comment_count) }}
-            </span>
-          </span>
         </div>
       </div>
     </div>
