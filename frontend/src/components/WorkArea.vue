@@ -100,16 +100,8 @@ function pickAuthor(a: Author) {
 
     <!-- 选择内容（一页式：评分徽标卡片 + 筛选 + 勾选 + 单条克隆；P2 作者榜在采集页内子切换） -->
     <div v-else-if="appState.stage === 'pick'">
-      <!-- 吸顶工具栏：右侧主区滚动时，评分模型说明/笔记作者榜切换/搜索框保持可见 -->
+      <!-- 吸顶工具栏：右侧主区滚动时，笔记作者榜切换/搜索框保持可见 -->
       <div class="sticky-tools">
-        <div class="info-bar">
-          <div class="info-item">
-            <span class="k">评分模型</span><span class="v small">互动密度 × 内容结构 × 爆款潜力（卡片右上角分数）</span>
-          </div>
-          <div class="info-item">
-            <span class="k">操作提示</span><span class="v small">点击卡片勾选；卡片「一键克隆」进创作页，发布手动确认</span>
-          </div>
-        </div>
         <div class="toolbar-row">
           <div class="view-switch">
             <button class="vs-btn" :class="{ on: view === 'notes' }" @click="showNotes">笔记 {{ appState.notes.length }}</button>
