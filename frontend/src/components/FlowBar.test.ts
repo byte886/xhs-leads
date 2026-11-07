@@ -1,17 +1,11 @@
-// R-6.37e：组件挂载测试（@vue/test-utils）——FlowBar 4-Tab 导航与状态提示
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+// FlowBar 组件测试（@vue/test-utils）：4-Tab 工作流导航
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import FlowBar from './FlowBar.vue'
 import { appState, setTab } from '../store'
 
-vi.mock('../api', () => ({
-  apiLoginStatus: vi.fn().mockResolvedValue({ logged_in: true, nickname: '阿汤', kicked: false }),
-  apiGetLLMConfig: vi.fn().mockResolvedValue({ configured: true }),
-}))
-
 beforeEach(() => {
   appState.tab = 'collect'
-  appState.login = { logged_in: false, nickname: '', kicked: false }
 })
 
 describe('FlowBar', () => {
@@ -39,10 +33,9 @@ describe('FlowBar', () => {
     expect(cur.text()).toContain('创作')
   })
 
-  it('挂载后拉取登录态写入 appState.login', async () => {
-    mount(FlowBar)
-    await new Promise(r => setTimeout(r, 10))
-    expect(appState.login.logged_in).toBe(true)
-    expect(appState.login.nickname).toBe('阿汤')
+  it('不再渲染登录/AI Key 状态徽标', () => {
+    const w = mount(FlowBar)
+    expect(w.findAll('.sysbar')).toHaveLength(0)
+    expect(w.findAll('.sys-item')).toHaveLength(0)
   })
 })
