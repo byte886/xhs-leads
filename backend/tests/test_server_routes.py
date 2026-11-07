@@ -770,3 +770,54 @@ class TestCleanupBranches:
         (d / "b2_cover.jpg").write_bytes(b"x")
         (d / "orphan_cover.jpg").write_bytes(b"x")
         assert server._cleanup_orphan_images() == 1
+
+
+class TestFetchedAtSwap:
+    """fetched_at/score_info 字段错位修复（历史 bug：两列写反，被重算兜底掩盖）。"""
+
+    def _db(self, tmp_path):
+        con = sqlite3.connect(tmp_path / "swap.db")
+        con.row_factory = sqlite3.Row
+        server._init_tables(con)
+        return con
+
+    def test_insert_keeps_time_and_score_info(self, tmp_path):
+        con = self._db(tmp_path)
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        assert _rank_and_insert(con, {"feed_id": "f1", "title": "翡翠",
+                                     "liked_count": "100", "fans_count": "1000"},
+                                "翡翠", now)
+        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f1'").fetchone()
+        assert row["fetched_at"] == now  # 时间列存时间
+        assert "score" in json.loads(row["score_info"])  # 评分列存合法 JSON
+        con.close()
+
+    def test_repair_swap_fixes_legacy_rows(self, tmp_path):
+        con = self._db(tmp_path)
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        # 模拟历史错位：JSON 进 fetched_at、时间进 score_info
+        con.execute(
+            "INSERT INTO notes (feed_id, fetched_at, score_info) VALUES (?,?,?)",
+            ("f2", json.dumps({"score": 50.0}), now),
+        )
+        con.commit()
+        server._repair_fetched_at_swap(con)
+        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f2'").fetchone()
+        assert row["fetched_at"] == now
+        assert json.loads(row["score_info"]) == {"score": 50.0}
+        con.close()
+
+    def test_repair_swap_idempotent(self, tmp_path):
+        con = self._db(tmp_path)
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        con.execute(
+            "INSERT INTO notes (feed_id, fetched_at, score_info) VALUES (?,?,?)",
+            ("f3", json.dumps({"score": 40.0}), now),
+        )
+        con.commit()
+        server._repair_fetched_at_swap(con)
+        server._repair_fetched_at_swap(con)  # 再跑一次不误伤
+        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f3'").fetchone()
+        assert row["fetched_at"] == now
+        assert json.loads(row["score_info"]) == {"score": 40.0}
+        con.close()

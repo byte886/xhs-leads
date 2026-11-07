@@ -1,5 +1,6 @@
 """采集管道纯逻辑单测：数字解析、建库、CLI 落库。"""
 import datetime
+import json
 import sqlite3
 from pathlib import Path
 
@@ -59,4 +60,16 @@ class TestUpsertNote:
         n["score_info"]["score"] = 90.0
         cp._upsert_note(con, n, "翡翠", "2026-01-01T00:00:01")
         assert con.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 1
+        con.close()
+
+    def test_fetched_at_and_score_info_not_swapped(self, tmp_path):
+        con = cp.init_db(tmp_path / "n.db")
+        now = "2026-01-01T00:00:00"
+        n = {"feed_id": "f2",
+             "score_info": {"score": 70.0, "tag": "低粉", "fan_ratio": 1.0},
+             "liked_count": 1, "fans_count": 1, "publish_time": 1}
+        cp._upsert_note(con, n, "翡翠", now)
+        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f2'").fetchone()
+        assert row[0] == now  # 时间列存时间，不与评分 JSON 错位
+        assert json.loads(row[1])["score"] == 70.0
         con.close()

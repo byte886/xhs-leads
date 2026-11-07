@@ -130,7 +130,8 @@ function scheduleListRefresh() {
   refreshTimer = setTimeout(async () => {
     refreshTimer = null
     try {
-      const live = await apiNotes('', 'score')
+      // 过程中按入库时间正序：新卡片只往后追加、旧卡不动；完成时 finalize 再按评分排
+      const live = await apiNotes('', 'time_asc')
       if (live.notes) { appState.notes = live.notes; appState.total = live.total; appState.count = live.total }
     } catch { /* 单次列表刷新失败不阻断采集状态 */ }
   }, 400)

@@ -228,7 +228,23 @@ def _init_tables(con):
             con.execute(f"ALTER TABLE {_tbl} ADD COLUMN account_id TEXT DEFAULT 'default'")
         except sqlite3.OperationalError:
             pass  # 列已存在
+    _repair_fetched_at_swap(con)  # 历史错位数据迁移（幂等）
     con.commit()
+
+
+def _repair_fetched_at_swap(con) -> None:
+    """纠正历史 bug：fetched_at/score_info 两列写反。幂等——纠正后不再命中条件。
+
+    判定错位：fetched_at 以 '{' 开头（实为评分 JSON）且 score_info 不是 JSON（实为时间）。
+    """
+    rows = con.execute("SELECT feed_id, fetched_at, score_info FROM notes").fetchall()
+    for r in rows:
+        fa, si = r["fetched_at"], r["score_info"]
+        if fa and str(fa).strip().startswith("{") and not str(si).strip().startswith("{"):
+            con.execute(
+                "UPDATE notes SET fetched_at=?, score_info=? WHERE feed_id=?",
+                (si, fa, r["feed_id"]),
+            )
 
 
 # ================= 登录 =================
@@ -933,7 +949,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
                 _to_int(n.get("fans_count")), n.get("publish_time"),
                 si["score"], si["tag"], si["fan_ratio"],
-                json.dumps(si, ensure_ascii=False), now, n.get("video_url", ""),
+                now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
                 account_id or "default",
             ),
         )
@@ -1313,6 +1329,8 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
         state["collected"] = state["saved"]
         state["partial_items"].append(item)
         state["note"] = f"已采集 {state['saved']} 条"
+        # 逐条入库即推送（边沿触发回调，非轮询）：前端过程中看到数字/卡片逐条增长
+        emit_collect(state)
 
 
 @_log.tagged("worker:collect")
@@ -1509,6 +1527,8 @@ def _notes_query(keyword: str, tag: str, order: str) -> tuple:
         params.append(tag)
     if order == "score":
         sql += " ORDER BY score DESC"
+    elif order == "time_asc":
+        sql += " ORDER BY fetched_at ASC"  # 过程中：新卡片只往后追加、旧卡不动
     else:
         sql += " ORDER BY fetched_at DESC"
     sql += " LIMIT 200"

@@ -290,7 +290,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
             _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
             _to_int(n.get("fans_count")), n.get("publish_time"),
             si["score"], si["tag"], si["fan_ratio"],
-            json.dumps(si, ensure_ascii=False), now, n.get("video_url", ""),
+            now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
         ),
     )
     con.commit()

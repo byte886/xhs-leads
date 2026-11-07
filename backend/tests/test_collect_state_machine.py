@@ -199,6 +199,41 @@ class TestCollectOne:
         assert calls == [{"feed_id": "f2"}]
         assert st["saved"] == 1 and con.commits == 1
 
+    def test_emits_event_after_insert(self, monkeypatch):
+        async def ok_detail(item, account_id):
+            return item
+
+        async def ok_profile(item, cache, account_id):
+            return item
+
+        monkeypatch.setattr(server, "get_feed_detail", ok_detail)
+        monkeypatch.setattr(server, "get_user_profile", ok_profile)
+        monkeypatch.setattr(server, "_rank_and_insert", lambda *a, **k: True)
+        emitted = []
+        monkeypatch.setattr(server, "emit_collect", lambda s: emitted.append(s))
+        con, st = _FakeCon(), _state()
+        asyncio.run(server._collect_one({"feed_id": "f1"}, st, _ctx(con)))
+        assert len(emitted) == 1  # 成功入库后推送一次（边沿触发）
+        assert emitted[0] is st
+        assert st["saved"] == 1
+
+    def test_rejected_candidate_no_event(self, monkeypatch):
+        async def ok_detail(item, account_id):
+            return item
+
+        async def ok_profile(item, cache, account_id):
+            return item
+
+        monkeypatch.setattr(server, "get_feed_detail", ok_detail)
+        monkeypatch.setattr(server, "get_user_profile", ok_profile)
+        monkeypatch.setattr(server, "_rank_and_insert", lambda *a, **k: False)
+        emitted = []
+        monkeypatch.setattr(server, "emit_collect", lambda s: emitted.append(s))
+        con, st = _FakeCon(), _state()
+        asyncio.run(server._collect_one({"feed_id": ""}, st, _ctx(con)))
+        assert emitted == []  # 拒收（saved 未变）不推送
+        assert st["saved"] == 0
+
 
 class TestOrphanTakeover:
     """R-6.53z4：新任务顶掉旧任务时，必须和「点停止」一样复位采集窗。"""
