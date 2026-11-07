@@ -71,20 +71,23 @@ function pickAuthor(a: Author) {
 
     <!-- 采集作品 -->
     <div v-else-if="appState.stage === 'search'">
-      <div class="info-bar">
-        <div class="info-item">
-          <span class="k">共获取</span><span class="v">{{ appState.total || '—' }}</span>
-        </div>
-        <div class="info-item">
-          <span class="k">当前任务</span><span class="v small">{{ appState.taskLabel || '—' }}</span>
-        </div>
-        <div class="info-item">
-          <span class="k">状态</span>
-          <span class="status-pill" :class="{ running: appState.status === '正在采集', done: appState.status === '展示中' }">{{ appState.status }}</span>
-        </div>
-        <div class="info-item">
-          <span class="k">已完成</span><span class="v">{{ appState.notes.length }}</span>
-          <span class="v small">{{ appState.elapsed }}s</span>
+      <!-- 吸顶信息条：采集滚动时共获取/任务/状态/已完成保持可见 -->
+      <div class="sticky-tools">
+        <div class="info-bar">
+          <div class="info-item">
+            <span class="k">共获取</span><span class="v">{{ appState.total || '—' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="k">当前任务</span><span class="v small">{{ appState.taskLabel || '—' }}</span>
+          </div>
+          <div class="info-item">
+            <span class="k">状态</span>
+            <span class="status-pill" :class="{ running: appState.status === '正在采集', done: appState.status === '展示中' }">{{ appState.status }}</span>
+          </div>
+          <div class="info-item">
+            <span class="k">已完成</span><span class="v">{{ appState.notes.length }}</span>
+            <span class="v small">{{ appState.elapsed }}s</span>
+          </div>
         </div>
       </div>
       <!-- 采集中空态：左侧条件已提交、结果尚未产出时的占位提示 -->
@@ -97,21 +100,24 @@ function pickAuthor(a: Author) {
 
     <!-- 选择内容（一页式：评分徽标卡片 + 筛选 + 勾选 + 单条克隆；P2 作者榜在采集页内子切换） -->
     <div v-else-if="appState.stage === 'pick'">
-      <div class="info-bar">
-        <div class="info-item">
-          <span class="k">评分模型</span><span class="v small">互动密度 × 内容结构 × 爆款潜力（卡片右上角分数）</span>
+      <!-- 吸顶工具栏：右侧主区滚动时，评分模型说明/笔记作者榜切换/搜索框保持可见 -->
+      <div class="sticky-tools">
+        <div class="info-bar">
+          <div class="info-item">
+            <span class="k">评分模型</span><span class="v small">互动密度 × 内容结构 × 爆款潜力（卡片右上角分数）</span>
+          </div>
+          <div class="info-item">
+            <span class="k">操作提示</span><span class="v small">点击卡片勾选；卡片「一键克隆」进创作页，发布手动确认</span>
+          </div>
         </div>
-        <div class="info-item">
-          <span class="k">操作提示</span><span class="v small">点击卡片勾选；卡片「一键克隆」进创作页，发布手动确认</span>
+        <div class="toolbar-row">
+          <div class="view-switch">
+            <button class="vs-btn" :class="{ on: view === 'notes' }" @click="showNotes">笔记 {{ appState.notes.length }}</button>
+            <button class="vs-btn" :class="{ on: view === 'authors' }" @click="showAuthors">作者榜</button>
+          </div>
+          <input v-model="filterText" placeholder="请选标题,作者或UID" class="toolbar-filter" />
+          <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
         </div>
-      </div>
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-        <div class="view-switch">
-          <button class="vs-btn" :class="{ on: view === 'notes' }" @click="showNotes">笔记 {{ appState.notes.length }}</button>
-          <button class="vs-btn" :class="{ on: view === 'authors' }" @click="showAuthors">作者榜</button>
-        </div>
-        <input v-model="filterText" placeholder="请选标题,作者或UID" style="flex:1;min-width:0" />
-        <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
       </div>
 
       <!-- 作者榜（P2）：从当前采集集按作者聚合，低粉爆款多 × 均分高 = 值得模仿 -->
@@ -154,6 +160,16 @@ function pickAuthor(a: Author) {
 </template>
 
 <style scoped>
+/* 吸顶工具栏：在右侧 .work 滚动容器内贴顶，不透明背景盖住下方滚过的卡片 */
+.sticky-tools {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  background: var(--bg);
+  padding-bottom: 12px;
+}
+.toolbar-row { display: flex; gap: 10px; align-items: center; }
+.toolbar-filter { flex: 1; min-width: 0; }
 .view-switch {
   display: inline-flex;
   background: var(--bg-2, #f2f3f5);

@@ -14,7 +14,18 @@ html, body { height: 100%; }
 body {
   font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   background: var(--bg); color: var(--ink); font-size: 14px;
+  overflow: hidden; /* 固定外壳：window 不滚动，各内容区在自己容器内滚动（参考小红书 explore） */
 }
+
+/* App 固定外壳：一屏 flex 列，顶部导航/状态条固定，下方 Tab 主区占满剩余高度并内部滚动 */
+.app-shell { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+/* 顶部 FlowBar 根(.flow-wrap) + 实时状态条(.status-bar)：自然高度，不参与滚动 */
+.app-shell > .flow-wrap,
+.app-shell > .status-bar { flex: none; }
+/* 各 Tab 主容器：占满剩余高度（min-height:0 允许内部 overflow 滚动） */
+.app-shell > .workbench,
+.app-shell > .publish-wrap,
+.app-shell > .work { flex: 1 1 auto; min-height: 0; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; font-size: 13px; }
 input, select, textarea {
   font-family: inherit; font-size: 14px; border: 1px solid var(--line);
@@ -40,13 +51,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .flow .step.done .dot { background: var(--green); color: #fff; }
 .flow .arrow { color: #C8C8C8; font-size: 12px; }
 
-/* 主工作台 */
-.workbench { display: flex; align-items: stretch; min-height: calc(100vh - 60px); }
+/* 主工作台：在固定外壳内占满剩余高度（不再用 100vh 计算，window 不滚动） */
+.workbench { display: flex; align-items: stretch; height: 100%; min-height: 0; }
 
-/* 左面板：常用输入 + 选项折叠，默认 272px（控件一行化后收窄，让结果区更宽） */
+/* 左面板：常用输入 + 选项折叠，默认 272px（控件一行化后收窄，让结果区更宽）。
+   固定在外壳内，内容超高时面板内部滚动 */
 .panel {
   width: 272px; min-width: 272px; background: var(--panel); border-right: 1px solid var(--line);
-  padding: 16px 14px; display: flex; flex-direction: column; gap: 16px; overflow: auto; max-height: calc(100vh - 60px);
+  padding: 16px 14px; display: flex; flex-direction: column; gap: 16px; overflow: auto; height: 100%;
 }
 .sec-title { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
 .sec-title .tag { font-size: 10px; background: var(--red); color: #fff; border-radius: 4px; padding: 1px 5px; font-weight: 500; }
@@ -100,7 +112,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .cookie-save input { width: 14px; height: 14px; accent-color: var(--red); }
 
 /* 右工作区：padding 收窄，让卡片网格贴满可用宽度，不出现右侧宽白边 */
-.work { flex: 1; padding: 14px; overflow: auto; }
+.work { flex: 1; padding: 14px; overflow: auto; min-height: 0; }
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 60vh; color: var(--ink-2); gap: 12px; text-align: center;
@@ -266,10 +278,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 }
 .toast.error { background: #c0392b; }
 
-/* 窄视口（≤900px）：宽度不够时转为上下结构——上采集条件、下搜索结果 */
+/* 窄视口（≤900px）：宽度不够时转为上下结构——上采集条件、下搜索结果。
+   固定外壳下：上面板限高内部滚动，下结果区占满剩余高度 */
 @media (max-width: 900px) {
   .workbench { flex-direction: column; }
-  .panel { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line); max-height: none; }
+  .panel {
+    width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line);
+    height: auto; max-height: 42vh; flex: none;
+  }
   .publish { padding: 16px; }
   .float-bar { bottom: 14px; right: 14px; }
 }

@@ -173,7 +173,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div>
+  <div class="app-shell">
     <FlowBar />
     <StatusBar />
 
@@ -222,5 +222,5 @@ onMounted(async () => {
 <style scoped>
 .toast-fade-enter-active, .toast-fade-leave-active { transition: opacity .2s; }
 .toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; }
-.publish-wrap { padding: 0 22px; }
+.publish-wrap { padding: 0 22px; overflow: auto; }
 </style>
