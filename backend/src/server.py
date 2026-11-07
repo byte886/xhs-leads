@@ -744,6 +744,16 @@ async def mirror_window(req: MirrorWindowReq):
     return await engine_window.set_window(req.account_id, req.on)
 
 
+@app.post("/api/mirror/close")
+async def mirror_close(account_id: str = "default"):
+    """关闭账号引擎（R-6.60）：第三类账号开出来必须能收回去。
+
+    default 拒绝（承载 APP 壳窗与采集窗）；有采集任务在跑先拒绝。
+    """
+    from src import engine_window
+    return await engine_window.close_account(account_id)
+
+
 class SearchReq(BaseModel):
     keyword: str
     limit: int = 20
@@ -1477,32 +1487,38 @@ async def events_stream():
 
 @app.get("/api/accounts")
 async def accounts_list():
-    """账号列表 + 每账号独占的 CDP 调试端口（R-6.57）。
+    """账号列表 + 每账号独占 CDP 端口 + 运行状态（R-6.57 / R-6.60）。
 
     多账户引擎池的数据源是 accounts.json；本接口把它连同 debug_port 一起暴露，
     供前端账号切换与 UI 自动化脚本「按账号连对应端口」使用（脚本不再硬编码 9223）。
+
+    R-6.60 增补 running / headless：窗口管理必须看得出「这个账号现在开着没有」，
+    否则界面上分不清「账号存在」与「引擎在跑」。
     """
+    from src import engine_pool
+
     port_map = config.account_port_map()
-    items = []
-    for aid, acc in config.list_accounts().items():
-        items.append({
+    accounts = config.list_accounts()
+
+    def _item(aid: str) -> dict:
+        acc = accounts.get(aid) or {}
+        return {
             "account_id": aid,
             "role": acc.get("role", "mixed"),
             "status": acc.get("status", "ok"),
             "debug_port": port_map.get(aid),
-            "user_data_dir": acc.get("user_data_dir", ""),
+            "user_data_dir": acc.get("user_data_dir")
+            or config.home_relative(config.default_user_data_dir()),
             "cookie_expires_at": acc.get("cookie_expires_at"),
-        })
-    if "default" not in config.list_accounts():
-        items.insert(0, {
-            "account_id": "default",
-            "role": "mixed",
-            "status": "ok",
-            "debug_port": port_map.get("default"),
-            "user_data_dir": config.home_relative(config.default_user_data_dir()),
-            "cookie_expires_at": None,
-        })
-    return {"accounts": items, "port_map": port_map, "active": config.active_account()}
+            "running": engine_pool.pool.peek(aid) is not None,
+            "headless": config.account_headless(aid),
+        }
+
+    ids = list(accounts.keys())
+    if "default" not in accounts:
+        ids.insert(0, "default")
+    return {"accounts": [_item(aid) for aid in ids],
+            "port_map": port_map, "active": config.active_account()}
 
 
 @app.get("/api/status_now")

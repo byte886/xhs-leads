@@ -82,3 +82,34 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
                detail=f"window={'on' if on else 'off'}")
     return {"ok": True, "window": on,
             "note": "引擎已重启，独立小窗已打开（实时可见操作）" if on else "已回无头模式"}
+
+
+async def close_account(account: str = "default") -> dict:
+    """关闭账号引擎，释放 Chromium 进程与独占 CDP 端口（R-6.60）。
+
+    第三类运营账号窗按账号数开出来，就必须能按账号收回去——之前只有
+    `POST /api/mirror/open`，关窗只能去命令行杀进程，等于没有窗口管理。
+
+    default 拒绝关闭：它承载 APP 壳窗口与采集窗，关掉 = launcher 判定用户
+    退出应用（与 set_window 的 R-6.58 同一个根因）。
+    """
+    from src import config
+    from src.server import _COLLECT_TASKS
+
+    if account == "default":
+        return {"ok": False, "error": (
+            "default 账号承载 APP 壳窗口与采集窗，不能单独关闭；"
+            "要退出整个应用请用应用退出"
+        )}
+
+    for _st in list(_COLLECT_TASKS.values()):
+        if _st.get("status") == "running" and _st.get("account_id", "default") == account:
+            return {"ok": False, "error": "该账号有采集任务进行中，请先停止再关闭窗口"}
+
+    if engine_pool.pool.peek(account) is None:
+        return {"ok": True, "account": account, "note": "引擎未运行，无需关闭"}
+    if not await engine_pool.pool.close(account):
+        return {"ok": True, "account": account, "note": "引擎未运行，无需关闭"}
+
+    xlog.audit(account, action="mirror_close", ok=True, detail="engine closed")
+    return {"ok": True, "account": account, "note": "引擎已关闭，进程与 CDP 端口已释放"}
