@@ -118,6 +118,8 @@ function pickAuthor(a: Author) {
           <input v-model="filterText" placeholder="请选标题,作者或UID" class="toolbar-filter" />
           <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
         </div>
+        <!-- 批量条挂载点：CardGrid 用 Teleport 把「全选图文」等批量操作送进吸顶工具栏 -->
+        <div class="batch-slot"></div>
       </div>
 
       <!-- 作者榜（P2）：从当前采集集按作者聚合，低粉爆款多 × 均分高 = 值得模仿 -->
@@ -171,6 +173,9 @@ function pickAuthor(a: Author) {
 }
 .toolbar-row { display: flex; gap: 10px; align-items: center; }
 .toolbar-filter { flex: 1; min-width: 0; }
+/* 批量条挂载点：与上方切换行留间距；空时不占额外高度 */
+.batch-slot { margin-top: 10px; }
+.batch-slot:empty { margin-top: 0; }
 .view-switch {
   display: inline-flex;
   background: var(--bg-2, #f2f3f5);

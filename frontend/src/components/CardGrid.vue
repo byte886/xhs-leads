@@ -225,17 +225,20 @@ function fmtPub(ts: string | number | null): string {
 </script>
 
 <template>
-  <!-- 顶部批量条（对齐视频：全选图文 / 清空选择 / 下载图片包 / 导出JSON，克隆走卡片单条） -->
-  <div class="batch" v-if="selectable && notes.length" style="margin-bottom:14px;justify-content:flex-end">
-    <div style="display:flex;gap:8px">
-      <button class="b-btn" @click="selectAll">全选图文</button>
-      <button class="b-btn" @click="clearSelect">清空选择</button>
-      <button class="b-btn" @click="downloadImages">下载图片包</button>
-      <button v-if="lastZip" class="b-btn" @click="openFolder">打开文件夹</button>
-      <button class="b-btn" @click="exportJSON">导出 JSON</button>
-      <button class="b-btn" @click="exportCSV">导出 CSV</button>
+  <!-- 批量条：Teleport 到 WorkArea 吸顶工具栏内的 .batch-slot，随工具栏一起固定；
+       按钮逻辑（全选/清空/下载/导出）仍在本组件，事件与状态不受 Teleport 影响 -->
+  <Teleport to=".batch-slot" defer>
+    <div class="batch" v-if="selectable && notes.length">
+      <div class="batch-btns">
+        <button class="b-btn" @click="selectAll">全选图文</button>
+        <button class="b-btn" @click="clearSelect">清空选择</button>
+        <button class="b-btn" @click="downloadImages">下载图片包</button>
+        <button v-if="lastZip" class="b-btn" @click="openFolder">打开文件夹</button>
+        <button class="b-btn" @click="exportJSON">导出 JSON</button>
+        <button class="b-btn" @click="exportCSV">导出 CSV</button>
+      </div>
     </div>
-  </div>
+  </Teleport>
   <div class="grid">
     <div
       v-for="note in filtered"
@@ -336,6 +339,8 @@ function fmtPub(ts: string | number | null): string {
 </template>
 
 <style scoped>
+/* 批量按钮组：Teleport 到吸顶工具栏后，按钮一行排列、靠右、可换行 */
+.batch-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .score-wrap { position: relative; display: inline-flex; align-items: center; gap: 2px; }
 .score-tip-icon { cursor: pointer; font-size: 11px; color: #fff; opacity: .85; background: rgba(0,0,0,.45); border-radius: 50%; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .score-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 190px; background: #fff; color: #333; border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 12px; }
