@@ -126,7 +126,9 @@ async def clients(note_id, xsec_token="", account_id="default")
 - 保留旧文件（cdp_config.json / llm_config.json / persona.json）通过 config 统一入口读写，**不迁移数据文件**（避免破坏现有用户数据）
 - 读取优先级：环境变量 > config.json > 默认值
 - 路径一律 `~` 相对（沿用 `_home_relative` 模式）
-- **动态端口**：引擎调试端口固定 **9223**（`config.engine_port`，`XHS_PROFILE_PORT` 可覆盖；engine_pool 实参 `--remote-debugging-port=9223`）；8800-8899 是**前端端口**被占时的自动探测区间（非引擎端口）
+- **账号独占端口**（R-6.57 修订，原为"引擎调试端口固定 9223"）：默认账号仍用 **9223**（`config.engine_port`，`XHS_PROFILE_PORT` 可覆盖），兼容 36 个硬编码 9223 的老测试脚本；其余账号由 `config.account_debug_port` 分配 **9224–9249**，登记在 `accounts.json` 的 `debug_port` 并持久化（不按空闲端口漂移，避免测试连错）。
+  改因：Chromium 对 `--remote-debugging-port` 绑定失败**不报错、静默跳过**，两账号共用 9223 时第二个及之后的账号 CDP 根本不可达（真机对照实验已证实），多账号在测试层面等于不存在。
+  8800-8899 仍是**前端端口**被占时的自动探测区间（非引擎端口）
 - 前端保留页判断：`cleanup_tabs()` 从 config 读当前前端端口，不再硬编码 8791
 
 ### 3.3 统一日志 + 审计 + 脱敏（logger.py）
@@ -198,7 +200,8 @@ cooldown ──(人工确认/到期)────► ok
 |---|---|---|
 | P1（本轮） | config.py + logger.py + engine_pool 重构 + 生命周期 + 风控状态机 | 现有 E1 测试全绿；多账号引擎可分别启动/关闭；日志有审计无明文 Cookie |
 | P2（本轮） | server.py 适配（account_id 透传 + 每账号节流 + shutdown 钩子）+ 数据层 ALTER | /api/collect_start 带账号；notes 表带 account_id |
-| P3（后续） | pywebview 壳 + 动态端口 + 账号管理 UI（1 采集 + 1 发布） | 独立 App 窗口；账号页增删/扫码/状态 |
+| P3（进行中） | 多账号可调试地基（R-6.57，已落地机制层）：账号独占端口 + 账号窗口错开 + `/api/accounts` + `scripts/accounts.py` | 两账号各自 CDP 可达（9223/9224 真机验证）；第二账号窗口出现在屏内而非屏幕外；`GET /api/accounts` 返回 port_map |
+| P3（后续） | pywebview 壳改造 + 账号管理 UI（1 采集 + 1 发布） | 独立 App 窗口；账号页增删/扫码/状态 |
 | P4（后续） | 跨平台装机引导（Chrome 发现 + 一键配置） | Windows 实测 |
 
 ---

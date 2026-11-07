@@ -1475,6 +1475,36 @@ async def events_stream():
     )
 
 
+@app.get("/api/accounts")
+async def accounts_list():
+    """账号列表 + 每账号独占的 CDP 调试端口（R-6.57）。
+
+    多账户引擎池的数据源是 accounts.json；本接口把它连同 debug_port 一起暴露，
+    供前端账号切换与 UI 自动化脚本「按账号连对应端口」使用（脚本不再硬编码 9223）。
+    """
+    port_map = config.account_port_map()
+    items = []
+    for aid, acc in config.list_accounts().items():
+        items.append({
+            "account_id": aid,
+            "role": acc.get("role", "mixed"),
+            "status": acc.get("status", "ok"),
+            "debug_port": port_map.get(aid),
+            "user_data_dir": acc.get("user_data_dir", ""),
+            "cookie_expires_at": acc.get("cookie_expires_at"),
+        })
+    if "default" not in config.list_accounts():
+        items.insert(0, {
+            "account_id": "default",
+            "role": "mixed",
+            "status": "ok",
+            "debug_port": port_map.get("default"),
+            "user_data_dir": config.home_relative(config.default_user_data_dir()),
+            "cookie_expires_at": None,
+        })
+    return {"accounts": items, "port_map": port_map, "active": config.active_account()}
+
+
 @app.get("/api/status_now")
 async def status_now():
     """全局状态提示条（R 批 v1.4）：实时播报「正在干什么」，不落盘。

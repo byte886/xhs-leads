@@ -143,6 +143,67 @@ def engine_port() -> int:
     return int(get_config().get("engine_port", 9223))
 
 
+# ---------------------------------------------------------------------------
+# R-6.57 多账号调试端口分配
+#
+# 实测（2026-11-08，两个 persistent context 同带 --remote-debugging-port=9223）：
+# 第二个实例启动成功、页面正常，但 9223 上只有第一个账号的 target——Chromium
+# 绑定端口失败时静默跳过，不报错。后果是所有账号共享 9223，测试 connect_over_cdp
+# 连到的永远是先启动的那个账号，登录态与数据串号。
+# 故每账号必须独占一个端口：default 固定沿用 engine_port()（36 个 UI 测试硬编码
+# 依赖 9223），其余账号从 9224 起分配并持久化到 accounts.json，重启不变。
+# ---------------------------------------------------------------------------
+ACCOUNT_PORT_BASE = 9224
+ACCOUNT_PORT_MAX = 9249
+
+
+def _port_claimed_by_other(port: int, account_id: str) -> bool:
+    """该端口是否已被别的账号登记占用。"""
+    for aid, acc in list_accounts().items():
+        if aid != account_id and acc.get("debug_port") == port:
+            return True
+    return False
+
+
+def _alloc_account_port(account_id: str) -> int:
+    """从 ACCOUNT_PORT_BASE 起找第一个未被其他账号登记的端口。"""
+    for p in range(ACCOUNT_PORT_BASE, ACCOUNT_PORT_MAX + 1):
+        if not _port_claimed_by_other(p, account_id):
+            return p
+    raise RuntimeError(f"账号 {account_id} 无可用调试端口（{ACCOUNT_PORT_BASE}-{ACCOUNT_PORT_MAX} 已排满）")
+
+
+def account_debug_port(account_id: str) -> int:
+    """该账号独占的 CDP 调试端口。
+
+    default：engine_port()（环境变量 XHS_PROFILE_PORT / config.engine_port 可覆盖）。
+    其他：accounts.json 的 debug_port；缺失或与他号冲突则重新分配并回写。
+
+    注意：端口已被本账号引擎监听时不再"探测空闲"改号——那会导致每次启动端口漂移，
+    测试连错。只判断"是否被别的账号登记占用"。
+    """
+    if not account_id or account_id == "default":
+        return engine_port()
+    acc = list_accounts().get(account_id) or {}
+    saved = acc.get("debug_port")
+    if isinstance(saved, int) and ACCOUNT_PORT_BASE <= saved <= ACCOUNT_PORT_MAX:
+        if not _port_claimed_by_other(saved, account_id):
+            return saved
+    port = _alloc_account_port(account_id)
+    update_account(account_id, debug_port=port)
+    return port
+
+
+def account_port_map() -> dict:
+    """全部账号 → 调试端口（含 default），供 HTTP 接口与测试脚本使用。"""
+    result = {"default": engine_port()}
+    for aid in list_accounts():
+        if aid != "default":
+            result[aid] = account_debug_port(aid)
+    return result
+
+
+
 def front_port() -> int:
     """前端服务端口：XHS_FRONT_PORT > XHS_SHELL_URL（实际监听，launcher 设定）
     > config.front_port（auto 时探测空闲）。

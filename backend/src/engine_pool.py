@@ -68,6 +68,28 @@ def shell_window_geometry() -> tuple[int, int, int, int]:
     win_w = min(1280, sw // 2)
     return win_w, 800, 0, win_w
 
+
+def account_window_geometry(account_id: str) -> tuple[int, int, int, int] | None:
+    """非 default 账号的有头窗口位置（R-6.57 多账号错开）。
+
+    default 账号仍走 shell_window_geometry（左壳窗 + 右采集窗）。其余账号从
+    屏幕右下按序号级联偏移，保证每窗标题栏可见、可点击切换，不整窗压死在前一窗上。
+
+    返回 (宽, 高, left, top)；default 返回 None（由 shell_window 管）。
+    """
+    if not account_id or account_id == "default":
+        return None
+    others = [a for a in config.list_accounts().keys() if a != "default"]
+    idx = others.index(account_id) + 1 if account_id in others else 1
+    sw, sh = probe_screen_size()
+    win_w = min(1100, sw - 60)
+    win_h = min(760, sh - 140)
+    step = 36
+    k = min(idx, 6) - 1
+    left = max(0, sw - win_w - 20 - k * step)
+    top = max(28, sh - win_h - 60 - k * step)
+    return win_w, win_h, left, top
+
 # R-6.19：采集窗（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
 COLLECT_WIN_GUARD_LOCK = asyncio.Lock()
@@ -206,6 +228,9 @@ class AccountEngine:
         acc = config.get_account(account_id) or config.add_account(account_id)
         self.user_data_dir = config.expand(acc.get("user_data_dir", ""))
         self.role = acc.get("role", "mixed")
+        # R-6.57：每账号独占 CDP 端口（default=9223，其余 9224 起）。
+        # 共用端口时 Chromium 绑定失败静默跳过 → 测试连到的永远是先起的账号。
+        self.debug_port = config.account_debug_port(account_id)
         self._context = None
         self._lock = asyncio.Lock()
         self._task_page = None  # 该账号唯一任务 tab（复用，减少反复开关 tab）
@@ -395,8 +420,8 @@ class AccountEngine:
 
         R-6.27：非无头（壳窗口）时 viewport 必须与窗口几何对齐，否则 960 宽窗口
         显示 1280 布局、右侧内容被裁；无头引擎固定 1280x800 采集布局。
-        R 批 v1.5：引擎带固定 CDP 端口（config.engine_port，默认 9223）供 UI 测试
-        connect_over_cdp 复用同一实例（同一登录态 profile）。
+        R 批 v1.5：引擎带 CDP 端口供 UI 测试 connect_over_cdp 复用同一实例（同一登录态 profile）。
+        R-6.57：端口由调用方传入该账号独占的 debug_port（default=9223，其余 9224 起）。
         """
         geo = shell_window_geometry()[:2] if not headless else (1280, 800)
         return dict(
@@ -477,7 +502,7 @@ class AccountEngine:
         # R-6.48s：启动前清会话恢复文件，避免「启动先闪现小红书页再导航 APP」。
         _clear_session_restore(self.user_data_dir)
         headless = bool(config.get_config().get("headless", True))
-        launch_kwargs = self._launch_kwargs_base(headless, config.engine_port())
+        launch_kwargs = self._launch_kwargs_base(headless, self.debug_port)
         if not headless:
             self._launch_apply_shell_window(launch_kwargs)
         self._launch_apply_chrome_log(launch_kwargs)
@@ -486,7 +511,46 @@ class AccountEngine:
             self.user_data_dir, **launch_kwargs
         )
         await self._launch_after_start()
+        await self._place_account_window()
         return self._context
+
+
+    async def _place_account_window(self) -> None:
+        """R-6.57：非 default 账号的有头窗口按序号移到屏内可见位置。
+
+        启动参数统一用 --window-position=-4000,0（消除「普通窗→应用窗」左半屏闪现），
+        default 账号随后由 shell_window 校准；其余账号没有壳窗流程，必须在此自己定位，
+        否则会永久停在屏幕外——用户看到的现象是「第二个账号起了但找不到窗口」。
+        """
+        geo = account_window_geometry(self.account_id)
+        if geo is None or self._context is None:
+            return
+        if bool(config.get_config().get("headless", True)):
+            return  # 无头模式没有窗口，定位无意义
+        win_w, win_h, left, top = geo
+        try:
+            page = self._context.pages[0] if self._context.pages else None
+            if page is None:
+                return
+            cdp = await self._context.new_cdp_session(page)
+            info = await cdp.send("Browser.getWindowForTarget")
+            wid = info.get("windowId")
+            if wid is None:
+                return
+            target = {"left": left, "top": top, "width": win_w, "height": win_h}
+            # 实测：启动瞬间窗口仍在校准，立刻 set 会被随后的默认摆放覆盖（回读仍是
+            # 960,25,960x800）；必须等窗口稳定后再设，且回读确认才算成立。
+            cur = {}
+            for _ in range(3):
+                await asyncio.sleep(0.7)
+                await cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": target})
+                cur = (await cdp.send("Browser.getWindowBounds", {"windowId": wid})).get("bounds", {})
+                if (cur.get("left"), cur.get("top")) == (left, top):
+                    log.info("账号 %s 窗口定位 (%s,%s %sx%s)", self.account_id, left, top, win_w, win_h)
+                    return
+            log.warning("账号 %s 窗口定位未确认，回读=%s", self.account_id, cur)
+        except Exception as e:  # noqa: BLE001（定位失败不影响引擎可用）
+            log.warning("账号 %s 窗口定位失败（不影响启动）: %s", self.account_id, e)
 
 
     async def _replay_saved_cookies(self) -> None:
@@ -573,14 +637,21 @@ class AccountEngine:
         # 独立采集调试窗（keeper 采集窗）保留为展示窗，采集执行页与之解耦。
         p = await ctx.new_page()
         # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
+        # R-6.57：多账号时不能用统一的右半屏——否则第二个账号的窗口会被摆回
+        # default 采集窗的位置（实测启动后定位成功又被这里的 960,25 覆盖）。
         try:
-            w2, h2, _, l2 = shell_window_geometry()
+            acc_geo = account_window_geometry(self.account_id)
+            if acc_geo:
+                w2, h2, l2, top2 = acc_geo
+            else:
+                w2, h2, _, l2 = shell_window_geometry()
+                top2 = 0
             cdp = await p.context.new_cdp_session(p)
             t = await cdp.send("Browser.getWindowForTarget")
             await cdp.send(
                 "Browser.setWindowBounds",
                 {"windowId": t["windowId"],
-                 "bounds": {"left": l2, "top": 0, "width": w2, "height": h2,
+                 "bounds": {"left": l2, "top": top2, "width": w2, "height": h2,
                             "windowState": "normal"}},
             )
         except Exception:  # noqa: BLE001（校准失败不影响任务页可用性）
