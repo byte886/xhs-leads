@@ -153,10 +153,11 @@ onMounted(async () => {
     }
   })
   onUnmounted(() => { if (offEvents) { offEvents(); offEvents = null } })
-  // 显式 ?stage=pick 调试入口：仅 dev 构建可用（生产 build 不加载历史笔记）；
-  // 不改变默认白屏规则，仅当 URL 显式带参时进入列表视图（UI 自动化/演示用）
+  // 显式 ?stage=pick 调试/自动化入口：默认白屏规则不变（不带参仍不加载历史笔记），
+  // 仅当 URL 显式带参时进入列表视图（UI 自动化/演示用，dev 与生产构建均可用）。
+  // 本机 127.0.0.1 桌面应用，用户看到的是本机自己的采集数据，无对外暴露面。
   const urlStage = new URLSearchParams(location.search).get('stage')
-  if (import.meta.env.DEV && urlStage === 'pick') {
+  if (urlStage === 'pick') {
     try {
       const r = await apiNotes()
       if (r.total > 0) {
