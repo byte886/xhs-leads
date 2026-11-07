@@ -298,8 +298,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
   font-size: 15px; font-weight: 800;
   background: rgba(0, 0, 0, .6); color: #FFD666; border-radius: 6px; padding: 2px 8px;
   letter-spacing: .5px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
 }
+.card .score-badge:hover { background: rgba(0, 0, 0, .82); color: #FFE08A; }
 .card .score-badge.hot { background: var(--red); color: #fff; }
+.card .score-badge.hot:hover { background: #E51F3A; color: #fff; }
 
 /* 卡片排名标签（最值得模仿 / 高评分候选） */
 .card .flags .tag {
