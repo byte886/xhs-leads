@@ -9,17 +9,6 @@ const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void
 
 let timer: ReturnType<typeof setInterval> | null = null
 
-const collectOptions = [
-  { value: 'kw', label: '关键词搜索笔记', enabled: true },
-  { value: 'blogger', label: '博主/对标账号采集（即将上线）', enabled: false },
-  { value: 'comment', label: '评论采集（即将上线）', enabled: false },
-  { value: 'link', label: '指定链接采集（即将上线）', enabled: false },
-  { value: 'wm', label: '去水印下载（即将上线）', enabled: false },
-  { value: 'hot', label: '热门/赛道采集（即将上线）', enabled: false },
-  { value: 'user', label: '互动用户采集（即将上线）', enabled: false },
-  { value: 'timer', label: '定时/计划采集（即将上线）', enabled: false }
-]
-
 const sortOptions = ['综合', '最新', '最多点赞', '最多评论', '最多收藏']
 const typeOptions = ['全部', '图文', '视频']
 const timeOptions = ['不限', '一天内', '一周内', '半年内']
@@ -266,16 +255,8 @@ onMounted(async () => {
 
 <template>
   <aside class="panel">
-    <!-- 常用输入：采集方式 / 关键词 / 结果上限（一行一条，不占多余标题行） -->
+    <!-- 常用输入：关键词 / 结果上限（一行一条，不占多余标题行） -->
     <section class="collect-sec">
-      <div class="param-line">
-        <span class="p-label">采集方式</span>
-        <select class="p-select" @change="() => toast('演示：其余采集方式即将上线')">
-          <option v-for="o in collectOptions" :key="o.value" :value="o.value" :disabled="!o.enabled" :selected="o.value === 'kw'">
-            {{ o.label }}
-          </option>
-        </select>
-      </div>
       <!-- 关键词 + 结果上限：一行 -->
       <div class="param-row">
         <div class="param">
@@ -359,26 +340,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* 紧凑布局：一行内联采集方式；输入控件收紧高度；选项区折叠 */
+/* 紧凑布局：输入控件收紧高度；选项区折叠 */
 .collect-sec { display: flex; flex-direction: column; gap: 8px; }
 
-.param-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.p-label { font-size: 12px; color: var(--ink-2); flex-shrink: 0; }
-.p-select {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  font-size: 13px;
-  border: 1px solid var(--line, #e5e5e5);
-  border-radius: 7px;
-  background: #fff;
-  color: #333;
-}
-.p-select:focus, .param input:focus, .param select:focus { outline: none; border-color: #e0b36b; }
+.param input:focus, .param select:focus { outline: none; border-color: #e0b36b; }
 
 .param-row { display: flex; gap: 8px; }
 .param-row > * { flex: 1; min-width: 0; }

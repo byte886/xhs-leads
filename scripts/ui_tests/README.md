@@ -64,7 +64,7 @@ bash scripts/ui_tests/run_all.sh t01 t03 t08
 - **与 t 系列（引擎 9223 回归）同实例**：E1 连 `9223` 引擎（引擎独立 profile + 真实登录态），验证真实交互链路，**不加入 run_all.sh 一键跑**（依赖登录态与真实数据，且采集/客户为低频风控敏感操作）。
 - 单独运行：`backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py`（前置：引擎已启动且小红书已登录（引擎独立 profile）、后端 8791）。
 - 铁律：**低频单次**——关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），采集/客户不连环重试；e1-s3 的本地追加图路径可移植（仓库 data/images 兜底 /tmp）。
-- 踩坑记录（已写入各脚本头注释）：真实态比 t 系列多一个「采集方式」select（排序 select[1]/时间 select[3]）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
+- 踩坑记录（已写入各脚本头注释）：「采集方式」行已删除（2026-11-08，只保留关键词搜索），排序 select[0]/时间 select[1]（展开顺序：排序/时间/类型/范围/距离/可见性/账号）；选图文卡按 `.badge-note` 徽标文本不能按卡片 class；route 取 body 用 `route.request.post_data`；标题框定位用 `input[maxlength="50"]` 勿用 placeholder。
 
 ## 说明
 

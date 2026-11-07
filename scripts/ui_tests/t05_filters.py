@@ -13,9 +13,9 @@ with sync_playwright() as p:
     import json as _j
     json_dumps = _j.dumps
     res.append('DEFAULT=' + str(js('.filters-hint-none')))
-    # 排序 select 是页面第一个 select（nth=0 在 .param 内），发布时间是第三个筛选 select（排序/类型/时间/范围/距离 共5个）
-    pg.select_option('select >> nth=1', '最新')
-    pg.select_option('select >> nth=3', '一周内')
+    # 「采集方式」行已删除；展开后顺序为 排序/时间/类型/范围/距离/可见性/账号：排序 nth=0，时间 nth=1
+    pg.select_option('select >> nth=0', '最新')
+    pg.select_option('select >> nth=1', '一周内')
     pg.wait_for_timeout(300)
     res.append('HINT=' + str(js('.filters-hint-v')))
     pg.screenshot(path='/tmp/proto_v15_filters.png')

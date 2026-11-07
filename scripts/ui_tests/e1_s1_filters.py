@@ -3,7 +3,7 @@
 
 验证：真实态 select 数量/选项 → 选排序+时间 → 已选筛选行实时更新 → collect_start 请求体完整 → 低频真实采集。
 踩坑记录：
-  - 真实态比旧 headless 时代多一个「采集方式」select，排序从 select[1] 起、时间在 select[3]；
+  - 「采集方式」行已删除（只保留关键词搜索，2026-11-08），排序在 select[0]、时间在 select[1]（展开后顺序：排序/时间/类型/范围/距离/可见性/账号）；
   - route 拦截取 body 必须用 route.request.post_data，不能用 route.post_data；
   - 采集铁律：低频单次、关键词避开高频词（弃「翡翠手镯」换「南红玛瑙手串」），绝不连环重试。
 
@@ -33,9 +33,9 @@ with sync_playwright() as p:
         opts = pg.locator('select').nth(i).evaluate("el => [...el.options].map(o => o.text).join('/')")
         print(f"  select[{i}]:", opts[:80])
 
-    # 2) 选排序=最新、时间=一周内（排序在 select[1]，时间在 select[3]）
-    pg.select_option('select >> nth=1', '最新')
-    pg.select_option('select >> nth=3', '一周内')
+    # 2) 选排序=最新、时间=一周内（排序在 select[0]，时间在 select[1]）
+    pg.select_option('select >> nth=0', '最新')
+    pg.select_option('select >> nth=1', '一周内')
     pg.wait_for_timeout(500)
     hint = pg.evaluate("""() => {
         const h = document.querySelector('.filters-hint-v');
