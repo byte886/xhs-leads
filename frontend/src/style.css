@@ -302,11 +302,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .card .score-badge.hot { background: var(--red); color: #fff; }
 
 /* 卡片排名标签（最值得模仿 / 高评分候选） */
-.card .row .tag {
+.card .flags .tag {
   font-size: 10px; color: #9A6A2F; background: #F7EFE2; border: 1px solid #E4D5BC;
   border-radius: 4px; padding: 1px 5px; flex: none;
 }
-.card .row .tag.hot { color: var(--red); background: #FFF1F3; border-color: #F5C9D1; }
+.card .flags .tag.hot { color: var(--red); background: #FFF1F3; border-color: #F5C9D1; }
 
 /* 卡片「打开原作品」外链按钮（右下角，点击不触发勾选）。z-index 高于悬停浮层，悬停时仍可点 */
 .card .open-link {

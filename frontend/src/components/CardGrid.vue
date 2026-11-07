@@ -260,7 +260,6 @@ function fmtPub(ts: string | number | null): string {
         <span class="badge-note">{{ note.note_type === 'video' ? '视频' : '图文' }}</span>
         <span v-if="note.score != null" class="score-wrap" @mouseenter="hoverTip = note" @mouseleave="hoverTip = null">
           <span class="score-badge" :class="{ hot: note.score >= 90 }" @click.stop="openScore(note)">{{ note.score.toFixed(1) }}</span>
-          <span v-if="note.score_info" class="score-tip-icon" @click.stop="openScore(note)">ⓘ</span>
           <div v-if="note.score_info && hoverTip === note" class="score-tip">
             <div class="tip-title">分数构成 · {{ note.score.toFixed(1) }}</div>
             <div v-for="d in dimsOf(note)" :key="d.key" class="tip-row">
@@ -344,7 +343,6 @@ function fmtPub(ts: string | number | null): string {
 /* 分数整体绝对定位在封面右上角（修复：原为 relative 被封面图挤到封面下方、
    徽标错位不可见）；内部徽标/ⓘ 横向排列，tooltip 相对本容器下拉 */
 .score-wrap { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 2px; z-index: 3; }
-.score-tip-icon { cursor: pointer; font-size: 11px; color: #fff; opacity: .85; background: rgba(0,0,0,.45); border-radius: 50%; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .score-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 190px; background: #fff; color: #333; border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 12px; }
 .tip-title { font-weight: 600; color: #111; margin-bottom: 6px; }
 .tip-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
