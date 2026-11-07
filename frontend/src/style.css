@@ -324,7 +324,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
   position: absolute; left: 8px; right: 40px; bottom: 8px; display: flex; gap: 6px;
   opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 4;
 }
-.card:hover .hover-actions, .card.sel .hover-actions { opacity: 1; pointer-events: auto; }
+.card:hover .hover-actions { opacity: 1; pointer-events: auto; }
 .hover-actions .ha-btn {
   flex: 1; border: none; border-radius: 6px; padding: 3px 0; font-size: 11px;
   font-weight: 600; color: #fff; background: rgba(255, 36, 66, .92); cursor: pointer;
@@ -359,7 +359,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 }
 .card .cover-stats .cs-item { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .card .cover-stats .ic { width: 12px; height: 12px; flex: none; }
-.card:hover .cover-stats, .card.sel .cover-stats { opacity: 0; pointer-events: none; }
+.card:hover .cover-stats { opacity: 0; pointer-events: none; }
 
 /* 草稿库（简约版） */
 .draft-overlay {
