@@ -15,3 +15,13 @@ export function noteUrl(feedId: string | null | undefined, xsecToken?: string | 
   if (!token || DIRTY.has(token.toLowerCase())) return base
   return `${base}?xsec_token=${encodeURIComponent(token)}`
 }
+
+/**
+ * 博主主页链接（已实测登录态下不带 token 可正常打开）：
+ * userId 为空 → 返回空串，调用方不打开。
+ */
+export function userUrl(userId: string | null | undefined): string {
+  const id = (userId || '').trim()
+  if (!id) return ''
+  return `${XHS}/user/profile/${encodeURIComponent(id)}`
+}

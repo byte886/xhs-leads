@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { noteUrl } from '../xhsUrl'
+import { noteUrl, userUrl } from '../xhsUrl'
 import { computed, ref } from 'vue'
 import type { Note } from '../types'
 import { coverProxy } from '../store'
@@ -75,6 +75,11 @@ function isSel(note: Note) {
 
 function openOrigin(note: Note) {
   const url = note.origin || noteUrl(note.feed_id, note.xsec_token)
+  if (url) window.open(url, '_blank')
+}
+
+function openAuthor(note: Note) {
+  const url = userUrl(note.user_id)
   if (url) window.open(url, '_blank')
 }
 
@@ -295,14 +300,27 @@ function fmtPub(ts: string | number | null): string {
           <span class="tag" :class="{ hot: (note.score ?? 0) >= 90 }">{{ (note.score ?? 0) >= 90 ? '最值得模仿' : '高评分候选' }}</span>
         </div>
         <div class="row">
-          <span class="author">
-            <span class="avatar"></span>{{ note.nickname || '未知作者' }}
-          </span>
+          <button type="button" class="author" title="打开博主主页" @click.stop="openAuthor(note)">
+            <img v-if="note.avatar" class="avatar" :src="note.avatar" alt="" referrerpolicy="no-referrer" />
+            <span v-else class="avatar avatar-ph"></span>
+            <span class="nick">{{ note.nickname || '未知作者' }}</span>
+          </button>
           <span class="interact">
-            <svg width="11" height="11" viewBox="0 0 24 24" :fill="(note.liked_count || 0) > 10000 ? '#FF2442' : '#888'">
-              <path d="M12 21s-7.5-4.6-10-9.2C.4 8.6 2.8 5 6.4 5c2 0 3.6 1 4.8 2.6C12.4 6 14 5 16 5c3.6 0 6 3.6 4.4 6.8C18.9 16.4 12 21 12 21z" />
-            </svg>
-            {{ fmt(note.liked_count) }}
+            <span class="metric">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20.3C12 20.3 3.8 15.4 3.8 9.7 3.8 7.1 5.7 5.3 8 5.3c1.6 0 3 .8 4 2.1 1-1.3 2.4-2.1 4-2.1 2.3 0 4.2 1.8 4.2 4.4 0 5.7-8.2 10.6-8.2 10.6Z"/>
+              </svg>{{ fmt(note.liked_count) }}
+            </span>
+            <span class="metric">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.8l5.9-.8L12 3.6Z"/>
+              </svg>{{ fmt(note.collected_count) }}
+            </span>
+            <span class="metric">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V6A1.5 1.5 0 0 1 5 4.5Z"/>
+              </svg>{{ fmt(note.comment_count) }}
+            </span>
           </span>
         </div>
       </div>

@@ -1063,6 +1063,8 @@ async def _enrich_fast(n: dict, cache: dict, account_id: str = "default") -> Non
     for k in ("liked_count", "collected_count", "comment_count", "shared_count", "user_id", "author_nick"):
         if d.get(k):
             n[k] = d[k]
+    if d.get("author_avatar"):
+        n["avatar"] = d["author_avatar"]
     if d.get("publish_time_ms"):
         n["publish_time"] = int(d["publish_time_ms"]) // 1000
     uid = n.get("user_id")

@@ -195,6 +195,8 @@ def _merge_detail_core(note: dict, d: dict) -> None:
         note["user_id"] = d["user_id"]
     if d.get("author_nick"):
         note["nickname"] = html.unescape(d["author_nick"])
+    if d.get("author_avatar"):
+        note["avatar"] = d["author_avatar"]
     note["detail_imgs"] = d.get("imgs", [])
     # 视频原地址（视频克隆下载用；图文笔记恒空）
     note["video_url"] = d.get("video_url", "")

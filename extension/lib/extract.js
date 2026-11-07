@@ -105,6 +105,7 @@ function xhsExtractNoteDetail(root = document) {
   // 含 interactInfo{likedCount/collectedCount/commentCount/shareCount} + time(毫秒) + user.userId，
   // 无需签名接口，比 DOM 抓取更可靠（新版详情页互动计数不在静态 DOM 文本中）。
   let interact = null, pubTimeMs = null, noteId = null, authorUserId = null, authorNick = '';
+  let authorAvatar = '', ssrAvatar = '';
   try {
     const st = window.__INITIAL_STATE__ || {};
     const detailMap = (st.note && st.note.noteDetailMap) || {};
@@ -122,8 +123,18 @@ function xhsExtractNoteDetail(root = document) {
       noteId = cur.noteId || null;
       authorUserId = (cur.user && cur.user.userId) || null;
       authorNick = (cur.user && cur.user.nickname) || '';
+      ssrAvatar = (cur.user && cur.user.avatar) || '';
     }
   } catch (e) { /* 拿不到就走空值 */ }
+  // 作者头像：优先 DOM 头像的完整 src（带 imageView2 query，裸路径会 404）；
+  // DOM 缺失时用 SSR 裸路径并补标准 query。
+  try {
+    const av = root.querySelector('.author-avatar, .user-image, img[class*="avatar"]');
+    if (av && av.src) authorAvatar = av.src;
+  } catch (e) { /* 空值 */ }
+  if (!authorAvatar && ssrAvatar) {
+    authorAvatar = ssrAvatar + (ssrAvatar.includes('?') ? '' : '?imageView2/2/w/100/format/webp');
+  }
   // 浏览量：详情页头部 "xx次浏览"（DOM 文本；SSR interactInfo 无 views 字段）
   let views = '';
   try {
@@ -146,6 +157,7 @@ function xhsExtractNoteDetail(root = document) {
     note_id: noteId,
     user_id: authorUserId,
     author_nick: authorNick,
+    author_avatar: authorAvatar,
     liked_count: interact && interact.likedCount != null ? String(interact.likedCount) : '',
     collected_count: interact && interact.collectedCount != null ? String(interact.collectedCount) : '',
     comment_count: interact && interact.commentCount != null ? String(interact.commentCount) : '',
