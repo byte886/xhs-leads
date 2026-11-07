@@ -182,9 +182,8 @@ function dataCount() {
 
 const selCount = computed(() => selectedCount())
 
-// ============ 分数可解释：hover tooltip + 点击弹「评分说明」 ============
+// ============ 分数可解释：点击分数弹「评分说明」 ============
 const scoreModal = ref<Note | null>(null)
-const hoverTip = ref<Note | null>(null)
 const DIMS = [
   { key: 'like_fan_ratio', label: '点赞粉丝比', max: 40, weight: '权重 40%', hint: '赞/粉比越高，内容穿透粉丝圈层的能力越强（赞/粉 > 3 为爆款级）' },
   { key: 'low_fan', label: '低粉权重', max: 25, weight: '权重 25%', hint: '粉丝越少得分越高——专挖被低估的小博主（<500 满分，5000 归零）' },
@@ -258,16 +257,8 @@ function fmtPub(ts: string | number | null): string {
         />
         <div v-else class="ph" :style="phStyle(note)">{{ (note.title || '图')[0] }}</div>
         <span class="badge-note">{{ note.note_type === 'video' ? '视频' : '图文' }}</span>
-        <span v-if="note.score != null" class="score-wrap" @mouseenter="hoverTip = note" @mouseleave="hoverTip = null">
+        <span v-if="note.score != null" class="score-wrap">
           <span class="score-badge" :class="{ hot: note.score >= 90 }" @click.stop="openScore(note)">{{ note.score.toFixed(1) }}</span>
-          <div v-if="note.score_info && hoverTip === note" class="score-tip">
-            <div class="tip-title">分数构成 · {{ note.score.toFixed(1) }}</div>
-            <div v-for="d in dimsOf(note)" :key="d.key" class="tip-row">
-              <span class="tip-lbl">{{ d.label }}</span>
-              <span class="tip-val">{{ d.val }}/{{ d.max }}</span>
-            </div>
-            <div class="tip-foot">点击查看评分说明</div>
-          </div>
         </span>
         <button class="open-link" title="打开原作品（新窗口）" @click.stop="openOrigin(note)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4">
@@ -343,12 +334,6 @@ function fmtPub(ts: string | number | null): string {
 /* 分数整体绝对定位在封面右上角（修复：原为 relative 被封面图挤到封面下方、
    徽标错位不可见）；内部徽标/ⓘ 横向排列，tooltip 相对本容器下拉 */
 .score-wrap { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 2px; z-index: 3; }
-.score-tip { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; min-width: 190px; background: #fff; color: #333; border-radius: 8px; padding: 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); font-size: 12px; }
-.tip-title { font-weight: 600; color: #111; margin-bottom: 6px; }
-.tip-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
-.tip-lbl { color: #555; }
-.tip-val { color: #111; font-weight: 600; }
-.tip-foot { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ddd; color: #999; font-size: 11px; }
 .score-modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200; display: flex; align-items: center; justify-content: center; }
 .score-modal { width: 380px; max-width: 92vw; max-height: 86vh; overflow-y: auto; background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
 .sm-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }

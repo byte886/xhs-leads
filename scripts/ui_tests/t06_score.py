@@ -14,12 +14,7 @@ with sync_playwright() as p:
     # 1. 卡片分数渲染
     badges = pg.evaluate("() => [...document.querySelectorAll('.score-badge')].map(x => x.innerText)")
     print("SCORE_BADGES:", badges)
-    # 2. hover 第一条分数 → tooltip
-    first = pg.evaluate("() => { const s=document.querySelector('.card .score-wrap'); if(s) s.dispatchEvent(new MouseEvent('mouseenter',{bubbles:true})); return !!s }")
-    pg.wait_for_timeout(600)
-    tip = pg.evaluate("() => { const t=document.querySelector('.score-tip'); return t ? t.innerText : '(none)' }")
-    print("HOVER_TIP:", tip.replace('\n',' | ')[:160])
-    # 3. 点击分数 → 弹窗
+    # 2. 点击分数 → 评分说明弹窗（hover 预览已移除，统一走弹窗）
     pg.evaluate("() => { const s=document.querySelector('.card .score-badge'); if(s) s.click() }")
     pg.wait_for_selector('.score-modal', timeout=8000)
     modal = pg.evaluate("() => document.querySelector('.score-modal').innerText")

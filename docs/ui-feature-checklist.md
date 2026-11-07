@@ -104,7 +104,7 @@
 | Cookie 导入 | showImport/doImportCookie | 无 | ❌ |
 | Cookie 状态展示 | CollectPanel 登录条 | smoke_login_ui（login_status API） | ✅ |
 | 评分徽标 | score-badge | t06 | ✅ |
-| 悬浮 tip | score-tip | t06 | ✅ |
+| 悬浮 tip | score-tip（已移除，统一走评分弹窗） | — | ❌ |
 | 评分弹窗 | scoreModal | t06 | ✅ |
 | 卡片结论标签 | tagConclusion | 无 | ❌ |
 | 打开原作品 | CardGrid/CardMenu | ◐（跳转路径被 s4/s2 间接覆盖） | ◐ |
