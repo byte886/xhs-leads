@@ -288,23 +288,30 @@ function fmtPub(ts: string | number | null): string {
           >一键克隆</button>
           <button class="ha-btn client" title="采集客户（采人）" @click.stop="emit('clients', note)">采集客户</button>
         </div>
-        <!-- 封面底部交互指标：常驻显示，hover/选中时让位给操作按钮 -->
-        <div class="cover-stats">
-          <span class="cs-item">
-            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 20.3C12 20.3 3.8 15.4 3.8 9.7 3.8 7.1 5.7 5.3 8 5.3c1.6 0 3 .8 4 2.1 1-1.3 2.4-2.1 4-2.1 2.3 0 4.2 1.8 4.2 4.4 0 5.7-8.2 10.6-8.2 10.6Z"/>
-            </svg>{{ fmt(note.liked_count) }}
-          </span>
-          <span class="cs-item">
-            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.8l5.9-.8L12 3.6Z"/>
-            </svg>{{ fmt(note.collected_count) }}
-          </span>
-          <span class="cs-item">
-            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V6A1.5 1.5 0 0 1 5 4.5Z"/>
-            </svg>{{ fmt(note.comment_count) }}
-          </span>
+        <!-- 封面底部信息：上一行头像+昵称，下一行交互指标；hover/选中时整体让位给操作按钮 -->
+        <div class="cover-info">
+          <button type="button" class="cover-author" title="打开博主主页" @click.stop="openAuthor(note)">
+            <img v-if="note.avatar" class="cav" :src="note.avatar" alt="" referrerpolicy="no-referrer" />
+            <span v-else class="cav cav-ph"></span>
+            <span class="cnick">{{ note.nickname || '未知作者' }}</span>
+          </button>
+          <div class="cover-stats">
+            <span class="cs-item">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20.3C12 20.3 3.8 15.4 3.8 9.7 3.8 7.1 5.7 5.3 8 5.3c1.6 0 3 .8 4 2.1 1-1.3 2.4-2.1 4-2.1 2.3 0 4.2 1.8 4.2 4.4 0 5.7-8.2 10.6-8.2 10.6Z"/>
+              </svg>{{ fmt(note.liked_count) }}
+            </span>
+            <span class="cs-item">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.8l5.9-.8L12 3.6Z"/>
+              </svg>{{ fmt(note.collected_count) }}
+            </span>
+            <span class="cs-item">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 4.5h14A1.5 1.5 0 0 1 20.5 6v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V6A1.5 1.5 0 0 1 5 4.5Z"/>
+              </svg>{{ fmt(note.comment_count) }}
+            </span>
+          </div>
         </div>
       </div>
       <div class="meta">
@@ -316,13 +323,6 @@ function fmtPub(ts: string | number | null): string {
             title="这条笔记正文只有话题标签、没有文字内容：可评分选品，不适合克隆仿写"
           >正文仅标签</span>
           <span class="tag" :class="{ hot: (note.score ?? 0) >= 90 }">{{ (note.score ?? 0) >= 90 ? '最值得模仿' : '高评分候选' }}</span>
-        </div>
-        <div class="row">
-          <button type="button" class="author" title="打开博主主页" @click.stop="openAuthor(note)">
-            <img v-if="note.avatar" class="avatar" :src="note.avatar" alt="" referrerpolicy="no-referrer" />
-            <span v-else class="avatar avatar-ph"></span>
-            <span class="nick">{{ note.nickname || '未知作者' }}</span>
-          </button>
         </div>
       </div>
     </div>
