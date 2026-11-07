@@ -147,6 +147,20 @@ async function exportCSV() {
 
 const selCount = computed(() => selectedCount())
 
+// ============ 按作者采客户：配置面板（界面先交付，采集功能后续接入） ============
+const authorPanel = ref<Note | null>(null)
+const authorLimit = ref(10)
+function openAuthorPanel(note: Note) {
+  authorLimit.value = 10
+  authorPanel.value = note
+}
+function startAuthorCollect() {
+  const who = authorPanel.value?.nickname || '该作者'
+  authorPanel.value = null
+  // TODO(按作者采)：接 /api/clients_by_author(user_id, limit)，按人去重聚合、标注在几篇下评论过
+  toast(`按作者采集功能开发中：已选定「${who}」最近 ${authorLimit.value} 篇，暂请用「采集客户」采单篇`, 'ok')
+}
+
 // ============ 分数可解释：点击分数弹「评分说明」 ============
 const scoreModal = ref<Note | null>(null)
 const saveDialog = ref<{ open: (name: string) => Promise<string | null> } | null>(null)
@@ -238,7 +252,7 @@ function fmtPub(ts: string | number | null): string {
             <path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <!-- 悬停浮层：单条操作（一键克隆仅图文，采集客户图文+视频均可） -->
+        <!-- 悬停浮层：单条操作（一键克隆仅图文；采集客户=这一篇；采作者=该作者最近几篇合并去重） -->
         <div class="hover-actions">
           <button
             class="ha-btn clone"
@@ -246,9 +260,10 @@ function fmtPub(ts: string | number | null): string {
             :title="note.note_type === 'video' ? '视频暂不支持克隆（图文为主，视频仅设计留位）' : '一键克隆（抄内容）'"
             @click.stop="note.note_type === 'video' ? toast('视频笔记暂不支持一键克隆（当前产品以图文为主）', 'error') : emit('clone', note)"
           >一键克隆</button>
-          <button class="ha-btn client" title="采集客户（采人）" @click.stop="emit('clients', note)">采集客户</button>
+          <button class="ha-btn client" title="采集客户（采这一篇评论区的人）" @click.stop="emit('clients', note)">采集客户</button>
+          <button class="ha-btn author" title="按作者采客户：采该作者最近几篇笔记的评论，按人去重" @click.stop="openAuthorPanel(note)">采作者</button>
         </div>
-        <!-- 封面底部信息：上一行头像+昵称，下一行交互指标；hover/选中时整体让位给操作按钮 -->
+        <!-- 封面底部信息：上一行头像+昵称，下一行交互指标；hover/选中时数据行让位给操作按钮 -->
         <div class="cover-info">
           <button type="button" class="cover-author" title="打开博主主页" @click.stop="openAuthor(note)">
             <img v-if="note.avatar" class="cav" :src="note.avatar" alt="" referrerpolicy="no-referrer" />
@@ -288,6 +303,41 @@ function fmtPub(ts: string | number | null): string {
     </div>
   </div>
   <div v-if="!filtered.length" style="text-align:center;color:#AAA;padding:40px 0">暂无笔记（{{ props.filterText ? '无匹配结果（标题/作者名）' : '先点「开始采集」' }}）</div>
+
+  <!-- 按作者采客户：配置面板（界面先落地，采集功能后续接入） -->
+  <div v-if="authorPanel" class="ap-mask" @click.self="authorPanel = null">
+    <div class="ap">
+      <div class="ap-head">
+        <span class="ap-ava">
+          <img v-if="authorPanel.avatar" :src="authorPanel.avatar" alt="" referrerpolicy="no-referrer" />
+        </span>
+        <div class="ap-id">
+          <div class="ap-name">{{ authorPanel.nickname || '未知作者' }}</div>
+          <div class="ap-sub">按作者采客户 · 最近 {{ authorLimit }} 篇笔记的评论区</div>
+        </div>
+        <button class="ap-x" title="关闭" @click="authorPanel = null">×</button>
+      </div>
+      <div class="ap-body">
+        <p class="ap-tip">
+          把该作者最近几篇笔记的评论一起采、按人去重。同一个人在几篇下都问过价的，意向更强——这是单篇采集看不出来的信号。
+        </p>
+        <div class="ap-row">
+          <span class="ap-lbl">采集篇数</span>
+          <select v-model.number="authorLimit">
+            <option :value="5">最近 5 篇</option>
+            <option :value="10">最近 10 篇</option>
+            <option :value="20">最近 20 篇</option>
+          </select>
+        </div>
+        <div class="ap-note">只采这一篇请用卡片上的「采集客户」，结果同样可用。</div>
+        <div class="ap-wip">按作者采集功能开发中：本次先交付界面，点「开始采集」暂不发起采集。</div>
+      </div>
+      <div class="ap-foot">
+        <button class="ap-btn ghost" @click="authorPanel = null">取消</button>
+        <button class="ap-btn go" @click="startAuthorCollect">开始采集</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 评分说明弹窗 -->
   <div v-if="scoreModal" class="score-modal-mask" @click.self="closeScore">
@@ -339,6 +389,29 @@ function fmtPub(ts: string | number | null): string {
 .sm-hint { color: #777; font-size: 11px; line-height: 1.5; }
 .sm-raw { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; color: #666; font-size: 12px; line-height: 1.6; }
 .sm-concl { margin-top: 10px; padding: 10px 12px; background: #FFF7E6; border-radius: 8px; color: #8a6a2f; font-size: 12px; line-height: 1.6; }
+
+/* 按作者采客户：配置面板 */
+.ap-mask { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 200; display: flex; align-items: center; justify-content: center; }
+.ap { width: 420px; max-width: 92vw; background: #fff; border-radius: 14px; box-shadow: 0 12px 40px rgba(0, 0, 0, .25); overflow: hidden; }
+.ap-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; border-bottom: 1px solid #f0f0f0; }
+.ap-ava { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; background: #eee; flex: none; }
+.ap-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ap-id { min-width: 0; }
+.ap-name { font-size: 14px; font-weight: 600; color: #111; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-sub { font-size: 11px; color: #888; margin-top: 2px; }
+.ap-x { margin-left: auto; border: none; background: none; font-size: 20px; line-height: 1; color: #888; cursor: pointer; }
+.ap-body { padding: 14px 18px 6px; }
+.ap-tip { font-size: 12px; color: #555; line-height: 1.65; margin: 0 0 12px; }
+.ap-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.ap-lbl { font-size: 12px; color: #333; font-weight: 600; }
+.ap-row select { flex: none; padding: 5px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; color: #333; background: #fff; }
+.ap-note { font-size: 11px; color: #999; }
+.ap-wip { margin: 10px 0 12px; padding: 8px 10px; background: #FFF7E6; border-radius: 8px; color: #8a6a2f; font-size: 11px; line-height: 1.6; }
+.ap-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px 16px; }
+.ap-btn { padding: 7px 16px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #ddd; background: #fff; color: #444; }
+.ap-btn.ghost:hover { border-color: #bbb; }
+.ap-btn.go { background: #4059DB; border-color: #4059DB; color: #fff; }
+.ap-btn.go:hover { background: #3449C0; }
 
 /* 状态标签行：正文仅标签 + 评分标签并排，可换行，不挤压作者名 */
 .flags { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 6px; }

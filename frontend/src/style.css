@@ -321,15 +321,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 
 /* 悬停操作按钮：只覆盖底部数据行（不遮挡上一行头像昵称），右侧留 40px 给外链按钮 */
 .card .hover-actions {
-  position: absolute; left: 8px; right: 40px; bottom: 8px; display: flex; gap: 6px;
+  position: absolute; left: 8px; right: 40px; bottom: 8px; display: flex; gap: 4px;
   opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 4;
 }
 .card:hover .hover-actions { opacity: 1; pointer-events: auto; }
 .hover-actions .ha-btn {
-  flex: 1; border: none; border-radius: 6px; padding: 3px 0; font-size: 11px;
+  flex: 1 1 0; min-width: 0; border: none; border-radius: 6px; padding: 4px 2px;
+  font-size: 10px; line-height: 1.1; white-space: nowrap;
   font-weight: 600; color: #fff; background: rgba(255, 36, 66, .92); cursor: pointer;
 }
 .hover-actions .ha-btn.client { background: rgba(64, 89, 219, .92); }
+/* 采作者：进阶粒度（一个作者的多篇合并），用描边区分，不与两个单篇操作抢视觉权重 */
+.hover-actions .ha-btn.author {
+  background: rgba(0, 0, 0, .5); border: 1px solid rgba(255, 255, 255, .55);
+}
+.hover-actions .ha-btn.author:hover { background: rgba(64, 89, 219, .92); border-color: transparent; }
 .hover-actions .ha-btn.off { background: rgba(120, 120, 120, .75); cursor: not-allowed; }
 
 /* 封面底部信息块：上一行头像+昵称（始终可点开博主主页），下一行交互指标；
