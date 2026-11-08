@@ -113,3 +113,63 @@ async def close_account(account: str = "default") -> dict:
 
     xlog.audit(account, action="mirror_close", ok=True, detail="engine closed")
     return {"ok": True, "account": account, "note": "引擎已关闭，进程与 CDP 端口已释放"}
+
+
+async def minimize_account(account: str = "default") -> dict:
+    """瞬时收起窗口（最小化，不重启、不打断任务、page 不失效）。
+
+    与 set_window(on=False) 切无头的区别：切无头要重启引擎（20-40s、page 失效），
+    最小化是同一有头引擎内 0.5 秒级的窗口状态，CDP 与页面全程保持。
+    """
+    from src import config
+
+    if account == "default":
+        return {"ok": False, "error": "default 承载 APP 壳窗与采集窗，不做最小化收起"}
+    eng = engine_pool.pool.peek(account)
+    if eng is None:
+        return {"ok": True, "account": account, "note": "引擎未运行，无需收起"}
+    if config.account_headless(account):
+        return {"ok": True, "account": account, "note": "已是无头，没有窗口"}
+    if not await eng.minimize_window():
+        return {"ok": False, "account": account, "error": "最小化未确认（窗口状态未变为 minimized）"}
+    xlog.audit(account, action="mirror_minimize", ok=True)
+    return {"ok": True, "account": account, "note": "窗口已最小化，任务与 CDP 保持运行"}
+
+
+async def restore_account(account: str = "default") -> dict:
+    """把最小化的有头窗口恢复到账号级联位置。"""
+    from src import config
+
+    if account == "default":
+        return {"ok": False, "error": "default 窗口不通过此接口操作"}
+    eng = engine_pool.pool.peek(account)
+    if eng is None:
+        return {"ok": False, "account": account, "error": "引擎未运行，先打开账号窗口"}
+    if config.account_headless(account):
+        return {"ok": False, "account": account,
+                "error": "当前是无头模式；要看窗口请用 window 切换有头"}
+    if not await eng.restore_window():
+        return {"ok": False, "account": account, "error": "恢复未确认"}
+    xlog.audit(account, action="mirror_restore", ok=True)
+    return {"ok": True, "account": account, "note": "窗口已恢复到级联位置"}
+
+
+async def minimize_all_accounts() -> dict:
+    """全部收起：把所有在跑的有头第三类账号最小化（瞬时、不重启、不打断任务）。
+
+    只动「在跑且有头」的账号；无头账号本来就没窗口、引擎没开的跳过；default 不动。
+    """
+    from src import config
+
+    changed = []
+    for aid in config.list_accounts():
+        if aid == "default":
+            continue
+        eng = engine_pool.pool.peek(aid)
+        if eng is None or config.account_headless(aid):
+            continue
+        if await eng.minimize_window():
+            changed.append(aid)
+    xlog.audit("all", action="mirror_minimize_all", ok=True, detail=f"{len(changed)} 个")
+    return {"ok": True, "minimized": changed,
+            "note": f"已收起 {len(changed)} 个窗口，default 不受影响"}

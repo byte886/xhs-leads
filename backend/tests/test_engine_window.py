@@ -80,3 +80,76 @@ def test_close_account_closes_running_engine(monkeypatch):
     r = asyncio.run(engine_window.close_account("acc_x"))
     assert r["ok"] is True
     assert "已关闭" in r["note"]
+
+
+# ------------------------------------------------ R-6.62 最小化/恢复
+
+class _FakeVisibleEng:
+    """有头引擎 stub：记录最小化/恢复调用次数。"""
+
+    def __init__(self):
+        self.min_n = 0
+        self.rest_n = 0
+
+    async def minimize_window(self):
+        self.min_n += 1
+        return True
+
+    async def restore_window(self):
+        self.rest_n += 1
+        return True
+
+
+def test_minimize_refuses_default():
+    r = asyncio.run(engine_window.minimize_account("default"))
+    assert r["ok"] is False
+
+
+def test_minimize_noop_when_engine_not_running(monkeypatch):
+    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: None)
+    r = asyncio.run(engine_window.minimize_account("acc_x"))
+    assert r["ok"] is True
+    assert "未运行" in r["note"]
+
+
+def test_minimize_skips_headless_account(monkeypatch):
+    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: object())
+    monkeypatch.setattr(config, "account_headless", lambda _aid: True)
+    r = asyncio.run(engine_window.minimize_account("acc_x"))
+    assert r["ok"] is True
+    assert "无头" in r["note"]
+
+
+def test_minimize_calls_engine(monkeypatch):
+    fake = _FakeVisibleEng()
+    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
+    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
+    r = asyncio.run(engine_window.minimize_account("acc_x"))
+    assert r["ok"] is True
+    assert fake.min_n == 1
+
+
+def test_restore_calls_engine(monkeypatch):
+    fake = _FakeVisibleEng()
+    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
+    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
+    r = asyncio.run(engine_window.restore_account("acc_x"))
+    assert r["ok"] is True
+    assert fake.rest_n == 1
+
+
+def test_minimize_all_only_running_visible(monkeypatch):
+    """全部收起：只动在跑且有头的账号，default 与没开的都跳过。"""
+    fake = _FakeVisibleEng()
+    monkeypatch.setattr(config, "list_accounts",
+                        lambda: {"default": {}, "acc_run": {}, "acc_off": {}})
+
+    def _peek(aid):
+        return fake if aid == "acc_run" else None
+
+    monkeypatch.setattr(engine_pool.pool, "peek", _peek)
+    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
+    r = asyncio.run(engine_window.minimize_all_accounts())
+    assert r["ok"] is True
+    assert r["minimized"] == ["acc_run"]
+    assert fake.min_n == 1

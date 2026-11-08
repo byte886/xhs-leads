@@ -553,6 +553,57 @@ class AccountEngine:
             log.warning("账号 %s 窗口定位失败（不影响启动）: %s", self.account_id, e)
 
 
+    async def _window_cdp(self):
+        """取窗口级 CDP 会话与 windowId（无 context / 无页面时返回 None, None）。"""
+        if self._context is None:
+            return None, None
+        page = self._context.pages[0] if self._context.pages else None
+        if page is None:
+            return None, None
+        cdp = await self._context.new_cdp_session(page)
+        info = await cdp.send("Browser.getWindowForTarget")
+        return cdp, info.get("windowId")
+
+
+    async def set_window_state(self, state: str, bounds: dict | None = None) -> bool:
+        """切换窗口形态（minimized / normal），不重启、不丢 page，回读确认。
+
+        与 set_window（切无头，要重启引擎、20-40s、page 失效）的区别：这是同一个
+        有头引擎内的窗口状态，0.5 秒级生效，CDP 与页面全程保持。无头账号无窗口，返回 False。
+        """
+        if config.account_headless(self.account_id):
+            return False
+        cdp, wid = await self._window_cdp()
+        if cdp is None or wid is None:
+            return False
+        b = {"windowState": state}
+        if bounds:
+            b.update(bounds)
+        await cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": b})
+        # 实测：发完立刻回读可能仍是旧状态（probe1 时序），等一下再确认
+        for _ in range(3):
+            await asyncio.sleep(0.5)
+            cur = (await cdp.send("Browser.getWindowBounds", {"windowId": wid})).get("bounds", {})
+            if cur.get("windowState") == state:
+                return True
+        return False
+
+
+    async def minimize_window(self) -> bool:
+        """最小化收起：瞬时、不重启、不打断任务。"""
+        return await self.set_window_state("minimized")
+
+
+    async def restore_window(self) -> bool:
+        """恢复有头窗口到账号级联位置（带 bounds，实测比只给 windowState 可靠）。"""
+        geo = account_window_geometry(self.account_id)
+        if geo is None:
+            return await self.set_window_state("normal")
+        win_w, win_h, left, top = geo
+        return await self.set_window_state(
+            "normal", {"left": left, "top": top, "width": win_w, "height": win_h})
+
+
     async def _replay_saved_cookies(self) -> None:
         """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。"""
         # 登录态重启保留（R-6.6）：以 data/cookies.json 为权威源，启动即回注。

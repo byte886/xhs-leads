@@ -754,6 +754,27 @@ async def mirror_close(account_id: str = "default"):
     return await engine_window.close_account(account_id)
 
 
+@app.post("/api/mirror/minimize")
+async def mirror_minimize(account_id: str = "default"):
+    """最小化收起账号窗口（R-6.62）：瞬时、不重启、不打断任务、page 不失效。"""
+    from src import engine_window
+    return await engine_window.minimize_account(account_id)
+
+
+@app.post("/api/mirror/restore")
+async def mirror_restore(account_id: str = "default"):
+    """恢复最小化的账号窗口到级联位置（R-6.62）。"""
+    from src import engine_window
+    return await engine_window.restore_account(account_id)
+
+
+@app.post("/api/mirror/minimize_all")
+async def mirror_minimize_all():
+    """全部收起：所有在跑的有头第三类账号最小化，default 不动。"""
+    from src import engine_window
+    return await engine_window.minimize_all_accounts()
+
+
 class SearchReq(BaseModel):
     keyword: str
     limit: int = 20
