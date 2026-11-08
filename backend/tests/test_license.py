@@ -100,6 +100,46 @@ def test_machine_code_fallback_on_error(monkeypatch):
     assert mc == license._digest("HOSTX|unknown") or len(mc) == 32
 
 
+def test_machine_code_survives_no_tty(monkeypatch):
+    """无控制终端时不得崩溃（R-6.75 实修）。
+
+    os.getlogin() 依赖 tty，Finder/Dock 启动的桌面 App、systemd 服务、CI runner
+    都会抛 OSError(ENOTTY)。修复前 machine_code 的兜底行没被 try 包住，
+    Linux CI 上 8 个 license 用例集体报 "Inappropriate ioctl for device"。
+    """
+    monkeypatch.setattr(license.sys, "platform", "linux")  # 无 darwin/win 分支 → 直接走兜底
+
+    def no_tty():
+        raise OSError(25, "Inappropriate ioctl for device")
+
+    monkeypatch.setattr(license.os, "getlogin", no_tty, raising=False)
+    monkeypatch.setattr(license.getpass, "getuser", lambda: "ci-runner")
+    monkeypatch.setattr(license.platform, "node", lambda: "HOSTX")
+    assert license.machine_code() == license._digest("HOSTX|ci-runner")
+
+
+def test_machine_code_unknown_when_all_user_getters_fail(monkeypatch):
+    """连 getpass 与环境变量都取不到 → 落到 unknown，仍是稳定摘要而非异常。"""
+    monkeypatch.setattr(license.sys, "platform", "linux")
+
+    def no_tty():
+        raise OSError(25, "Inappropriate ioctl for device")
+
+    monkeypatch.setattr(license.os, "getlogin", no_tty, raising=False)
+    monkeypatch.setattr(license.getpass, "getuser", no_tty)
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.delenv("LOGNAME", raising=False)
+    monkeypatch.setattr(license.platform, "node", lambda: "HOSTX")
+    assert license.machine_code() == license._digest("HOSTX|unknown")
+
+
+def test_login_user_name_prefers_os_getlogin(monkeypatch):
+    """有 tty 时仍优先 os.getlogin —— 已激活机器的机器码不得因本次修复而变。"""
+    monkeypatch.setattr(license.os, "getlogin", lambda: "wenjiechen", raising=False)
+    monkeypatch.setattr(license.getpass, "getuser", lambda: "other-user")
+    assert license._login_user_name() == "wenjiechen"
+
+
 # ---------------------------------------------------------------- load_license_file
 
 def test_load_missing_file_returns_defaults():

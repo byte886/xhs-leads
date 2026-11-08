@@ -10,6 +10,7 @@ ADR《授权机制选型与薄层设计》定死的 4 件事：
 档位切换只改本文件内部实现，其余业务代码零改动。
 """
 
+import getpass
 import hashlib
 import json
 import os
@@ -151,6 +152,30 @@ def _windows_machine_guid() -> str | None:
         return _digest(str(guid))
 
 
+def _login_user_name() -> str:
+    """当前登录用户名，逐级降级。
+
+    `os.getlogin()` 依赖控制终端，无 tty 时抛 OSError(ENOTTY='Inappropriate
+    ioctl for device')——Finder/Dock 启动的桌面 App、systemd 服务、CI runner
+    都属于这种情况，直接调用会让 machine_code() 整体崩溃。降级顺序保证
+    有 tty 时结果与历史行为完全一致（已发激活码的机器码不变）。
+    """
+    for getter in (
+        getattr(os, "getlogin", None),
+        getpass.getuser,
+        lambda: os.environ.get("USER") or os.environ.get("LOGNAME"),
+    ):
+        if not callable(getter):
+            continue
+        try:
+            value = getter()
+        except Exception:  # noqa: BLE001（任一取法失败继续降级）
+            continue
+        if value:
+            return value
+    return "unknown"
+
+
 def machine_code() -> str:
     """跨平台稳定硬件指纹（SHA-256 摘要，非明文；不进 git、不落日志明文）。
 
@@ -170,7 +195,7 @@ def machine_code() -> str:
                 return code
     except Exception:  # noqa: BLE001（任一平台探测失败走兜底，不阻断）
         pass
-    return _digest(f"{platform.node()}|{os.getlogin() if hasattr(os, 'getlogin') else 'unknown'}")
+    return _digest(f"{platform.node()}|{_login_user_name()}")
 
 
 def _digest(value: str) -> str:
