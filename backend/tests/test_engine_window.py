@@ -153,3 +153,51 @@ def test_minimize_all_only_running_visible(monkeypatch):
     assert r["ok"] is True
     assert r["minimized"] == ["acc_run"]
     assert fake.min_n == 1
+
+
+# ------------------------------------------------ R-6.62 可见窗口 LRU 上限
+
+def test_mark_visible_lru_order():
+    ep = engine_pool.EnginePool()
+    ep.mark_visible("a")
+    ep.mark_visible("b")
+    ep.mark_visible("a")  # 重复可见 → 提到末尾
+    assert ep.visible_order() == ["b", "a"]
+    ep.mark_hidden("b")
+    assert ep.visible_order() == ["a"]
+
+
+def test_enforce_visible_cap_hides_oldest():
+    """已有 3 个可见，开第 4 个时把最旧的最小化。"""
+    ep = engine_pool.EnginePool()
+    fake = _FakeVisibleEng()
+    for aid in ("a", "b", "c"):
+        ep._engines[aid] = fake
+        ep.mark_visible(aid)
+    hidden = asyncio.run(ep.enforce_visible_cap("d", limit=3))
+    assert hidden == ["a"]
+    assert ep.visible_order() == ["b", "c"]
+    assert fake.min_n == 1
+
+
+def test_enforce_visible_cap_noop_under_limit():
+    ep = engine_pool.EnginePool()
+    ep.mark_visible("a")
+    hidden = asyncio.run(ep.enforce_visible_cap("b", limit=3))
+    assert hidden == []
+
+
+def test_restore_reports_made_room(monkeypatch):
+    """恢复时可见已满：先 enforce 收起最旧，返回 made_room。"""
+    fake = _FakeVisibleEng()
+    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
+    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
+
+    async def _enforce(_aid, limit=None):
+        return ["old1"]
+
+    monkeypatch.setattr(engine_pool.pool, "enforce_visible_cap", _enforce)
+    r = asyncio.run(engine_window.restore_account("acc_x"))
+    assert r["ok"] is True
+    assert r["made_room"] == ["old1"]
+    assert fake.rest_n == 1

@@ -40,7 +40,14 @@ async def login_page(account: str = "default"):
 
 async def open_login(account: str = "default") -> dict:
     """登录小窗打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪）。"""
+    from src import config
+
     await login_page(account)
+    # default 是固定壳窗/采集窗，不参与第三类账号的「最多 3 个」管理
+    if account != "default" and not config.account_headless(account):
+        made_room = await engine_pool.pool.enforce_visible_cap(account)
+        engine_pool.pool.mark_visible(account)
+        return {"ok": True, "account": account, "made_room": made_room}
     return {"ok": True, "account": account}
 
 
@@ -111,6 +118,7 @@ async def close_account(account: str = "default") -> dict:
     if not await engine_pool.pool.close(account):
         return {"ok": True, "account": account, "note": "引擎未运行，无需关闭"}
 
+    engine_pool.pool.mark_hidden(account)
     xlog.audit(account, action="mirror_close", ok=True, detail="engine closed")
     return {"ok": True, "account": account, "note": "引擎已关闭，进程与 CDP 端口已释放"}
 
@@ -132,6 +140,7 @@ async def minimize_account(account: str = "default") -> dict:
         return {"ok": True, "account": account, "note": "已是无头，没有窗口"}
     if not await eng.minimize_window():
         return {"ok": False, "account": account, "error": "最小化未确认（窗口状态未变为 minimized）"}
+    engine_pool.pool.mark_hidden(account)
     xlog.audit(account, action="mirror_minimize", ok=True)
     return {"ok": True, "account": account, "note": "窗口已最小化，任务与 CDP 保持运行"}
 
@@ -148,10 +157,15 @@ async def restore_account(account: str = "default") -> dict:
     if config.account_headless(account):
         return {"ok": False, "account": account,
                 "error": "当前是无头模式；要看窗口请用 window 切换有头"}
+    # 恢复前先保证可见窗口不超上限：超了把最旧的最小化，给本账号腾位置
+    made_room = await engine_pool.pool.enforce_visible_cap(account)
     if not await eng.restore_window():
         return {"ok": False, "account": account, "error": "恢复未确认"}
+    engine_pool.pool.mark_visible(account)
     xlog.audit(account, action="mirror_restore", ok=True)
-    return {"ok": True, "account": account, "note": "窗口已恢复到级联位置"}
+    return {"ok": True, "account": account,
+            "note": "窗口已恢复到级联位置",
+            "made_room": made_room}
 
 
 async def minimize_all_accounts() -> dict:
@@ -170,6 +184,7 @@ async def minimize_all_accounts() -> dict:
             continue
         if await eng.minimize_window():
             changed.append(aid)
+            engine_pool.pool.mark_hidden(aid)
     xlog.audit("all", action="mirror_minimize_all", ok=True, detail=f"{len(changed)} 个")
     return {"ok": True, "minimized": changed,
             "note": f"已收起 {len(changed)} 个窗口，default 不受影响"}

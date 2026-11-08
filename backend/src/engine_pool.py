@@ -880,9 +880,47 @@ class AccountEngine:
 class EnginePool:
     """账号 → AccountEngine 注册表（全局单例 pool）。"""
 
+    VISIBLE_LIMIT = 3  # 屏幕上同时可见（normal）的有头窗口上限，超出自动最小化最旧的
+
     def __init__(self):
         self._engines: dict[str, AccountEngine] = {}
+        self._visible_order: list[str] = []  # 可见窗口 LRU，末尾是最近可见
         self._lock = asyncio.Lock()
+
+    def mark_visible(self, account_id: str) -> None:
+        """记录某账号窗口变为可见（normal），并提到 LRU 末尾。"""
+        if account_id in self._visible_order:
+            self._visible_order.remove(account_id)
+        self._visible_order.append(account_id)
+
+    def mark_hidden(self, account_id: str) -> None:
+        """记录某账号窗口被最小化/关闭，从可见顺序移除。"""
+        if account_id in self._visible_order:
+            self._visible_order.remove(account_id)
+
+    def visible_order(self) -> list[str]:
+        return list(self._visible_order)
+
+    async def enforce_visible_cap(self, account_id: str,
+                                  limit: int | None = None) -> list[str]:
+        """开窗前调用：保证可见窗口不超过 limit（默认 VISIBLE_LIMIT）。
+
+        account_id 是即将可见的账号（先不计入）；其余可见账号若已达上限，
+        把最旧的逐个最小化，直到给 account_id 腾出名额。返回被收起的账号。
+        """
+        if limit is None:
+            limit = self.VISIBLE_LIMIT
+        others = [a for a in self._visible_order if a != account_id]
+        hidden = []
+        while len(others) >= limit:  # account_id 要占一个，others 最多留 limit-1
+            old = others.pop(0)
+            eng = self._engines.get(old)
+            if eng is not None and await eng.minimize_window():
+                hidden.append(old)
+                if old in self._visible_order:
+                    self._visible_order.remove(old)
+        return hidden
+
 
     async def get(self, account_id: str = "default") -> AccountEngine:
         async with self._lock:
