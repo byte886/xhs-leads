@@ -775,6 +775,19 @@ async def mirror_minimize_all():
     return await engine_window.minimize_all_accounts()
 
 
+@app.post("/api/mirror/auto_headless")
+async def mirror_auto_headless(account_id: str = "default", on: bool = True):
+    """开启/取消「登录完成自动切无头」守护（R-6.64）。
+
+    on=true：开窗扫码时挂上，检测到 id_token 登录成功后自动切无头；
+    on=false：取消守护。
+    """
+    from src import engine_window
+    if on:
+        return await engine_window.start_auto_headless(account_id)
+    return await engine_window.cancel_auto_headless(account_id)
+
+
 class SearchReq(BaseModel):
     keyword: str
     limit: int = 20

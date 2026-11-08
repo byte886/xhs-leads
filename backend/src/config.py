@@ -425,6 +425,19 @@ def set_account_headless(account_id: str, headless: bool) -> bool:
     return True
 
 
+def account_auto_headless(account_id: str) -> bool:
+    """该账号是否「登录完成后自动切无头」（R-6.64）。默认 false。"""
+    return bool((get_account(account_id) or {}).get("auto_headless"))
+
+
+def set_account_auto_headless(account_id: str, on: bool) -> bool:
+    """设置/清除「登录后自动切无头」标记；账号不存在返回 False。"""
+    if get_account(account_id) is None:
+        return False
+    update_account(account_id, auto_headless=bool(on))
+    return True
+
+
 def retire_account_dir(account_id: str) -> str:
     """删除账号时把 profile 移进 accounts/_trash/，返回移入后的路径（无目录返回空串）。
 
