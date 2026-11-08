@@ -339,3 +339,47 @@ cooldown ──(人工确认/到期)────► ok
 | 历史根 `~/.xhs-leads/accounts/` | 已清空 |
 | 单测 | `test_account_paths.py` 20 例 + 四件合计 52 例、含 engine_window 共 56 例全过 |
 | 后端全量 | 全绿（排除 llm_service / real_login） |
+
+## 十、统一登录模式改造（R-6.65 ~ R-6.67，2026-11-08）
+
+### 10.1 背景与问题
+
+真机扫码登录第三类账号时暴露两个问题：
+1. **点空白登录组件消失（原有 BUG）**：登录是全屏 modal，卡片外所有区域都是遮罩 `.reds-mask`，点遮罩即关闭（modal 从 DOM 移除），重新登录入口不直观。
+2. **登录方式不统一**：第三类账号走独立 `/login`（full-page），而采集窗走 explore 浏览页模式（背后有浏览流、侧边栏登录按钮常驻、关了也能找回），用户要求统一并做抽象。
+
+### 10.2 三步改造
+
+| 步骤 | 版本 | 内容 |
+|---|---|---|
+| 第一步 mask 拦截 | R-6.65 | 复用现有 `force_login` 注入，在 `engine_pool._launch_after_start` 给第三类账号 context 补挂（此前只挂在 default 壳窗），拦截遮罩点击与 ESC |
+| 第二步 explore 模式 | R-6.66 | `login_page` 导航从 `/login` 改 `/explore`；新增 `LOGIN_CLOSE_SELECTORS` 常量补齐 explore modal 的 `.close` 关闭按钮（旧选择器漏覆盖，点 × 仍可关） |
+| 第三步 事件驱动 | R-6.67 | 新建 `login_session.py`，`LoginSession` 替代 R-6.64 轮询守护，见 10.3 |
+
+### 10.3 事件驱动登录会话（login_session.py）
+
+真机调研确认的登录信号（探针 `/tmp/probe_*`）：
+
+| 状态 | `GET /api/sns/web/v2/user/me` |
+|---|---|
+| 未登录 | `data.guest=true`，无 nickname |
+| 扫码登录成功 | 前端重新拉取，`data.guest=false` + 真实 nickname |
+
+`LoginSession` 流程（**无轮询**）：
+1. 监听挂 **context 级** `response` 事件（页面导航/重建不影响），匹配 user/me 路径；
+2. 纯函数 `is_real_login_me` 严格判定 `data.guest === false`（游客/异常响应不触发）；
+3. 事件触发后一次性 `read_cookies` 确认 `id_token`（项目权威登录口径，非轮询）；
+4. 等 `LOGIN_STABLE=3s` 稳定 → 调 `set_window(on=False)` 切无头；
+5. 支持取消、`LOGIN_TIMEOUT=600s` 超时（10 分钟，给用户宽松扫码时间）；finally 自动移除监听。
+
+### 10.4 真机验证
+
+| 项 | 结果 |
+|---|---|
+| 会话启动 | 后端日志确认 context 级监听挂上 |
+| 事件捕获 | 「捕获 user/me guest=false 登录事件」→「自动切无头 成功」 |
+| 无头进程参数 | `--headless --remote-debugging-port=9225 --user-data-dir=.../accounts/acc_a` |
+| 无头 + 已登录（填补历史空白） | explore 推荐流完整渲染、侧边栏有「我」、无登录 modal、UA 无 Headless 标识 |
+| 单测 | 新增 `test_login_session.py` 13 例 + 重写 engine_window 相关；后端全量全绿 |
+
+**踩坑**：首版超时 300s，用户扫码耗时超过 5 分钟导致会话先退出（登录本身成功、仅未自动切无头），已延长到 600s；独立进程脚本读不到后端进程内存里的 `_SESSIONS`（跨进程，同 `_active_page` 恒 None），以后端日志为准。

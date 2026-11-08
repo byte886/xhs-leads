@@ -12,7 +12,6 @@
 注意：登录页不再由本模块"驱动"——第二窗口（采集窗）自主打开与刷新，此处只保证页面存在。
 """
 import asyncio
-import time
 
 from src import engine_pool, logger as xlog
 
@@ -194,84 +193,33 @@ async def minimize_all_accounts() -> dict:
             "note": f"已收起 {len(changed)} 个窗口，default 不受影响"}
 
 
-# ---------------- R-6.64 登录完成自动切无头
-
-AUTO_HEADLESS_POLL = 2.5       # 轮询间隔（秒）
-AUTO_HEADLESS_STABLE = 3.0     # 检测到 id_token 后等页面稳定的时间
-AUTO_HEADLESS_TIMEOUT = 300.0  # 等待登录的最长时间，超时放弃（避免 task 永久挂着）
-
-_AUTO_TASKS: dict[str, asyncio.Task] = {}
-
-
-def _has_running_task(account: str) -> bool:
-    from src.server import _COLLECT_TASKS  # noqa: PLC0415
-
-    for st in list(_COLLECT_TASKS.values()):
-        if st.get("status") == "running" and st.get("account_id", "default") == account:
-            return True
-    return False
-
-
-async def _auto_headless_watch(account: str) -> None:
-    """针对单个账号的后台守护：等登录成功（id_token）→ 自动切无头。
-
-    退出条件（任一）：标记被取消、检测到 id_token 且切无头完成、等待超时。
-    """
-    from src import config  # noqa: PLC0415
-
-    deadline = time.monotonic() + AUTO_HEADLESS_TIMEOUT
-    try:
-        while config.account_auto_headless(account):
-            if time.monotonic() > deadline:
-                log.info("账号 %s 等待登录超时，自动切无头守护退出", account)
-                break
-            eng = engine_pool.pool.peek(account)
-            if (eng is not None and not config.account_headless(account)
-                    and not _has_running_task(account)):
-                try:
-                    cookies = await eng.read_cookies()
-                except Exception:  # noqa: BLE001（CDP 暂时不可用，下轮再试）
-                    cookies = []
-                if any(c.get("name") == "id_token" for c in cookies):
-                    await asyncio.sleep(AUTO_HEADLESS_STABLE)  # 等登录后跳转稳定
-                    config.set_account_auto_headless(account, False)
-                    r = await set_window(account, on=False)
-                    log.info("账号 %s 登录后自动切无头 %s", account,
-                             "成功" if r.get("ok") else "失败")
-                    break
-            await asyncio.sleep(AUTO_HEADLESS_POLL)
-    finally:
-        config.set_account_auto_headless(account, False)
-        _AUTO_TASKS.pop(account, None)
-
+# ---------------- R-6.67 登录完成自动切无头（纯事件驱动）
 
 async def start_auto_headless(account: str) -> dict:
-    """开启「登录后自动切无头」守护（通常开窗扫码时调用）。
+    """开启「登录后自动切无头」事件监听（开窗扫码时调用）。
 
-    已经是无头 / 已在守护中给出幂等提示；default 与不存在的账号拒绝。
+    实现与事件循环在 login_session.LoginSession：监听 context 级 user/me 响应
+    （guest=false 即登录成功），无轮询。这里只做校验与兼容返回结构。
+    已是无头 / 已在监听给出幂等提示；default 与不存在的账号拒绝。
     """
-    from src import config  # noqa: PLC0415
+    from src import config, login_session  # noqa: PLC0415
 
     if account == "default":
         return {"ok": False, "error": "default 承载 APP 壳窗与采集窗，不做自动切无头"}
     if config.get_account(account) is None:
         return {"ok": False, "error": f"账号 {account} 不存在"}
-    if account in _AUTO_TASKS and not _AUTO_TASKS[account].done():
-        return {"ok": True, "account": account, "note": "已在等待登录，无需重复开启"}
     if config.account_headless(account):
         return {"ok": True, "account": account, "note": "当前已是无头，无需再等登录"}
-    config.set_account_auto_headless(account, True)
-    _AUTO_TASKS[account] = asyncio.create_task(_auto_headless_watch(account))
+    if login_session.start_login_session(account) is None:
+        return {"ok": True, "account": account, "note": "已在等待登录，无需重复开启"}
     return {"ok": True, "account": account,
-            "note": f"已开启守护，登录成功后 {AUTO_HEADLESS_STABLE}s 自动切无头"}
+            "note": f"已开启事件监听，登录成功后 {login_session.LOGIN_STABLE}s 自动切无头"}
 
 
 async def cancel_auto_headless(account: str) -> dict:
-    """取消「登录后自动切无头」守护。"""
-    from src import config  # noqa: PLC0415
+    """取消「登录后自动切无头」事件监听。"""
+    from src import config, login_session  # noqa: PLC0415
 
     config.set_account_auto_headless(account, False)
-    task = _AUTO_TASKS.pop(account, None)
-    if task is not None and not task.done():
-        task.cancel()
-    return {"ok": True, "account": account, "note": "已取消自动切无头守护"}
+    await login_session.stop_login_session(account)
+    return {"ok": True, "account": account, "note": "已取消自动切无头监听"}

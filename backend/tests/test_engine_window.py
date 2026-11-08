@@ -4,7 +4,7 @@
 """
 import asyncio
 
-from src import config, engine_pool, engine_window, server
+from src import config, engine_pool, engine_window, login_session, server  # noqa: F401
 
 
 def test_set_window_refuses_while_collecting():
@@ -203,7 +203,7 @@ def test_restore_reports_made_room(monkeypatch):
     assert fake.rest_n == 1
 
 
-# ------------------------------------------------ R-6.64 登录完成自动切无头
+# ------------------------------------------------ R-6.67 登录完成自动切无头（事件驱动）
 
 def test_start_auto_refuses_default():
     r = asyncio.run(engine_window.start_auto_headless("default"))
@@ -216,57 +216,51 @@ def test_start_auto_rejects_unknown(monkeypatch):
     assert r["ok"] is False
 
 
-def test_start_auto_sets_flag(monkeypatch):
-    """正常开启：写标记 + 起守护 task。"""
+def test_start_auto_noop_when_already_headless(monkeypatch):
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    monkeypatch.setattr(config, "account_headless", lambda _a: True)
+    r = asyncio.run(engine_window.start_auto_headless("acc_x"))
+    assert r["ok"] is True and "已是无头" in r["note"]
+
+
+def test_start_auto_starts_event_session(monkeypatch):
+    """正常开启：委托 login_session 启动事件监听。"""
     monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
     monkeypatch.setattr(config, "account_headless", lambda _a: False)
-    flags = {}
-    monkeypatch.setattr(config, "set_account_auto_headless",
-                        lambda a, on: flags.__setitem__(a, on))
+    started = {}
 
-    async def _noop(_a):  # 替换真实守护，避免 task 真跑轮询
-        return None
+    def _start(aid):
+        started["aid"] = aid
+        return object()  # 非 None = 新会话已建
 
-    monkeypatch.setattr(engine_window, "_auto_headless_watch", _noop)
+    monkeypatch.setattr(login_session, "start_login_session", _start)
     r = asyncio.run(engine_window.start_auto_headless("acc_x"))
     assert r["ok"] is True
-    assert flags["acc_x"] is True
-    engine_window._AUTO_TASKS.pop("acc_x", None)
+    assert started["aid"] == "acc_x"
+    assert "事件监听" in r["note"]
 
 
-def test_cancel_auto_clears_flag(monkeypatch):
+def test_start_auto_idempotent_when_session_exists(monkeypatch):
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    monkeypatch.setattr(config, "account_headless", lambda _a: False)
+    monkeypatch.setattr(login_session, "start_login_session", lambda _a: None)
+    r = asyncio.run(engine_window.start_auto_headless("acc_x"))
+    assert r["ok"] is True and "无需重复开启" in r["note"]
+
+
+def test_cancel_auto_stops_session(monkeypatch):
     flags = {"acc_x": True}
     monkeypatch.setattr(config, "set_account_auto_headless",
                         lambda a, on: flags.__setitem__(a, on))
+
+    async def _stop(aid):
+        flags["stopped"] = aid
+        return True
+
+    monkeypatch.setattr(login_session, "stop_login_session", _stop)
     r = asyncio.run(engine_window.cancel_auto_headless("acc_x"))
     assert r["ok"] is True
-    assert flags["acc_x"] is False
-
-
-def test_watch_switches_after_id_token(monkeypatch):
-    """守护检测到 id_token：等稳定后调 set_window 切无头。"""
-    monkeypatch.setattr(config, "account_auto_headless", lambda _a: True)
-    monkeypatch.setattr(config, "account_headless", lambda _a: False)
-    monkeypatch.setattr(engine_window, "AUTO_HEADLESS_STABLE", 0)
-    monkeypatch.setattr(engine_window, "AUTO_HEADLESS_POLL", 0)
-    monkeypatch.setattr(engine_window, "_has_running_task", lambda _a: False)
-
-    class _Eng:
-        async def read_cookies(self):
-            return [{"name": "id_token", "value": "x"}]
-
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _a: _Eng())
-    monkeypatch.setattr(config, "set_account_auto_headless", lambda _a, _b: True)
-
-    called = {}
-
-    async def _set_window(aid, on):
-        called["v"] = (aid, on)
-        return {"ok": True}
-
-    monkeypatch.setattr(engine_window, "set_window", _set_window)
-    asyncio.run(engine_window._auto_headless_watch("acc_x"))
-    assert called["v"] == ("acc_x", False)
+    assert flags["acc_x"] is False and flags["stopped"] == "acc_x"
 
 
 # ------------------------------------------------ R-6.66 登录走 explore 浏览页
