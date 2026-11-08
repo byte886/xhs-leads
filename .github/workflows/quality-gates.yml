@@ -26,6 +26,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      # server.py 启动时 StaticFiles 强制挂载 frontend/dist（check_dir=True），
+      # 而 frontend/dist 被 .gitignore 排除 → 干净环境必须自己构建，否则所有
+      # 依赖 app 的测试在 collection 阶段就报 "Directory does not exist"。
+      # 用 build:only（vite build）而非 build，避开 vue-tsc 类型检查挡后端门；
+      # 前端类型检查留给将来的 TS 质量门。
+      - name: 装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 构建前端产物
+        run: |
+          cd frontend
+          npm ci
+          npm run build:only
+          test -d dist/assets
+
       - name: 装后端测试依赖
         run: |
           python -m pip install --upgrade pip
