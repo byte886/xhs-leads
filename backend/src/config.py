@@ -18,6 +18,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import socket
 import sys
 import time
@@ -422,6 +423,28 @@ def set_account_headless(account_id: str, headless: bool) -> bool:
                     status=acc.get("status", "ok"))
         update_account(account_id, headless=bool(headless))
     return True
+
+
+def retire_account_dir(account_id: str) -> str:
+    """删除账号时把 profile 移进 accounts/_trash/，返回移入后的路径（无目录返回空串）。
+
+    为什么不直接删：profile 里存着登录态，误删一次就得重新扫码。移进回收区可回滚，
+    也避免"只删注册表"留下孤儿目录（之前清理的那批 acc_test1/verify_b 就是这么来的）。
+    """
+    if account_id == "default" or not valid_account_id(account_id):
+        return ""
+    acc = get_account(account_id) or {}
+    # 用注册表里记的 user_data_dir（accounts/<id> 之类的相对路径），
+    # 不能直接拿 account_id 去 resolve——那会落到数据目录根下而不是 accounts/ 里
+    udd = acc.get("user_data_dir") or f"{ACCOUNTS_DIR_NAME}/{account_id}"
+    src = pathlib.Path(resolve_account_dir(udd))
+    if not src.is_dir():
+        return ""
+    trash = accounts_dir() / "_trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    dst = trash / f"{account_id}-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.move(str(src), str(dst))
+    return str(dst)
 
 
 def remove_account(account_id: str) -> bool:

@@ -1521,6 +1521,58 @@ async def accounts_list():
             "port_map": port_map, "active": config.active_account()}
 
 
+class AccountAddReq(BaseModel):
+    account_id: str = ""
+    role: str = "mixed"
+
+
+@app.post("/api/accounts")
+async def accounts_add(req: AccountAddReq):
+    """新增账号（R-6.61）：自动分配独占 CDP 端口 + 相对数据目录的 profile。
+
+    account_id 留空 = 自动生成 acc_xxxxxx；显式给名要满足 valid_account_id
+    （小写字母/数字/下划线/短横线，≤32 字符——这是跨平台目录名约束）。
+    """
+    aid = (req.account_id or "").strip() or config.new_account_id()
+    if aid in config.list_accounts():
+        return {"ok": False, "error": f"账号已存在：{aid}"}
+    try:
+        acc = config.add_account(aid, role=req.role or "mixed")
+    except ValueError as e:  # noqa: BLE001（id 不合规：直接回给调用方，不抛 500）
+        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "account_id": aid,
+        "role": acc.get("role"),
+        "debug_port": config.account_debug_port(aid),
+        # 与 GET /api/accounts 同口径：返回注册表里的相对路径（不是解析后的绝对路径）
+        "user_data_dir": acc.get("user_data_dir"),
+    }
+
+
+@app.delete("/api/accounts/{account_id}")
+async def accounts_remove(account_id: str):
+    """删除账号（R-6.61）：引擎在跑先关掉；profile 移进回收区，不直接删。
+
+    不直删的理由：profile 里有登录态，误删要重新扫码；回收区可回滚，
+    也不会像「只删注册表」那样留下孤儿目录。
+    """
+    from src import engine_pool
+
+    if account_id == "default":
+        return {"ok": False, "error": "default 账号不可删除"}
+    if account_id not in config.list_accounts():
+        return {"ok": False, "error": f"账号不存在：{account_id}"}
+
+    if engine_pool.pool.peek(account_id) is not None:
+        await engine_pool.pool.close(account_id)
+    retired = config.retire_account_dir(account_id)
+    config.remove_account(account_id)
+    note = (f"已删除；profile 已移入回收区 {config.home_relative(retired)}"
+            if retired else "已删除（该账号没有 profile 目录）")
+    return {"ok": True, "account_id": account_id, "note": note}
+
+
 @app.get("/api/status_now")
 async def status_now():
     """全局状态提示条（R 批 v1.4）：实时播报「正在干什么」，不落盘。
