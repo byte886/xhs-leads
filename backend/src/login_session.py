@@ -33,6 +33,62 @@ def is_real_login_me(payload: dict) -> bool:
     return data.get("guest") is False
 
 
+def login_nickname(payload: dict) -> str:
+    """纯函数：从 user/me 响应取平台昵称（非字符串/空白一律返回空串）。
+
+    登录成功那一刻 data.nickname 就是真实昵称（实测 default 为「普通人」），
+    顺手缓存进注册表，账号列表就不用为 N 个账号各连一次 CDP。
+    """
+    data = (payload or {}).get("data")
+    if not isinstance(data, dict):
+        return ""
+    nickname = data.get("nickname")
+    return nickname.strip() if isinstance(nickname, str) else ""
+
+
+async def capture_user_me(account_id: str, timeout: float = 20.0) -> dict | None:
+    """读一次该账号的 user/me 响应（返回 payload；取不到返回 None）。
+
+    为什么不在页面里 fetch：小红书该接口要 x-s 签名，裸 ``fetch`` 会被拦
+    （实测返回非 JSON 文本 "create inv..."）。这里让**页面自己发请求**——
+    挂 context 级 response 监听后 reload 一次，实测一次 reload 捕获 4 次 user/me。
+
+    用途：历史账号在「登录事件顺带缓存昵称」上线前就登录过，列表里认不出是谁，
+    需一次手动补。频繁调用会多一次页面 reload，故不做定时刷新。
+    """
+    from src import engine_window  # noqa: PLC0415（避免循环导入）
+
+    eng = engine_pool.pool.peek(account_id)
+    if eng is None:
+        return None
+    ctx = await eng.context()
+    page = await engine_window.login_page(account_id)
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    async def _inspect(resp):
+        if fut.done():
+            return
+        try:
+            payload = await resp.json()
+        except Exception:  # noqa: BLE001（非 JSON/读取失败，忽略该次）
+            return
+        if not fut.done():
+            fut.set_result(payload)
+
+    def _on_response(resp):
+        if USER_ME_MARK in resp.url:
+            asyncio.create_task(_inspect(resp))
+
+    ctx.on("response", _on_response)
+    try:
+        await page.reload(wait_until="domcontentloaded", timeout=30000)
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except Exception:  # noqa: BLE001（导航失败/超时：按取不到处理，由调用方提示）
+        return None
+    finally:
+        ctx.remove_listener("response", _on_response)
+
+
 class LoginSession:
     """单个账号的事件驱动登录会话。"""
 
@@ -59,6 +115,11 @@ class LoginSession:
                 return
             if is_real_login_me(payload):
                 log.info("账号 %s 捕获 user/me guest=false 登录事件", self.account_id)
+                nickname = login_nickname(payload)
+                if nickname:
+                    # 业务锚点：昵称落盘后，账号列表能显示「这是哪个号」，无需再连 CDP
+                    config.set_account_nickname(self.account_id, nickname)
+                    log.info("账号 %s 缓存平台昵称 %s", self.account_id, nickname)
                 logged_in.set()
 
         def _on_response(resp):

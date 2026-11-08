@@ -145,6 +145,10 @@ export interface LicenseStatus {
 /** 账号注册表项（GET /api/accounts 的每一项） */
 export interface AccountItem {
   account_id: string
+  /** 业务展示名（可中文、可改，不落路径）；没设过等于 account_id */
+  name: string
+  /** 平台昵称（登录事件顺带缓存，未登录为空） */
+  nickname: string
   role: string
   status: string
   debug_port: number | null

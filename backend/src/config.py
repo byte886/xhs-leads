@@ -353,16 +353,31 @@ def get_account(account_id: str) -> dict | None:
 _ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
+# 账号业务名：给人看的名字（如「珠宝主号」「二号店·翡翠」），可中文可空格，可随时改。
+# 与 account_id 分层的原因：id 是目录名有跨平台字符约束，业务名是纯展示字段不落路径——
+# 否则用户想改成中文名就得搬 80M 的 profile 目录，还会丢登录态。
+ACCOUNT_NAME_MAX = 24
+# 业务名只禁控制字符（换行/制表）与路径分隔符（防拼接路径时被误用），不落路径故不必限 ASCII。
+_ACCOUNT_NAME_RE = re.compile(r"^[^\x00-\x1f\x7f/\\]{1,%d}$" % ACCOUNT_NAME_MAX)
+
+
+def valid_account_name(name: str) -> bool:
+    """账号业务名是否可用：≤24 字符，禁控制字符与路径分隔符。"""
+    return bool(_ACCOUNT_NAME_RE.match((name or "").strip()))
+
+
 def valid_account_id(account_id: str) -> bool:
     """账号 id 是否可安全用作目录名（macOS/Windows 通用）。"""
     return bool(_ACCOUNT_ID_RE.match(account_id or ""))
 
 
 def add_account(account_id: str, role: str = "mixed",
-                user_data_dir: str = "", status: str = "ok") -> dict:
+                user_data_dir: str = "", status: str = "ok",
+                name: str = "") -> dict:
     """新增账号。user_data_dir 缺省 = accounts/<account_id>（相对数据目录，搬目录/换平台不用改）。
 
     role：collect（采集号）/ publish（发布号）/ mixed（通用）。
+    name：业务展示名（可中文），留空则界面显示 account_id，不编造业务含义。
     """
     if not account_id or account_id.strip() in ("", "."):
         raise ValueError("account_id 不能为空")
@@ -370,12 +385,17 @@ def add_account(account_id: str, role: str = "mixed",
     if not valid_account_id(account_id):
         raise ValueError(
             f"账号 id 只能用 小写字母/数字/下划线/短横线（≤32 字符，不能中文或空格）：{account_id!r}")
+    name = (name or "").strip()
+    if name and not valid_account_name(name):
+        raise ValueError(
+            f"账号名最多 {ACCOUNT_NAME_MAX} 字符，不能含控制字符或路径分隔符：{name!r}")
     if not user_data_dir:
         user_data_dir = f"{ACCOUNTS_DIR_NAME}/{account_id}"
     data = _accounts_data()
     data.setdefault("accounts", {})
     data["accounts"][account_id] = {
         "role": role,
+        "name": name,
         "user_data_dir": user_data_dir,
         "status": status,
         "cookie_expires_at": None,
@@ -398,6 +418,44 @@ def update_account(account_id: str, **fields) -> dict | None:
     acc["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     _write_json(ACCOUNTS_FILE, data)
     return acc
+
+
+def account_name(account_id: str) -> str:
+    """账号业务名：注册表 name 字段；没设过回退 account_id（不编造业务含义）。"""
+    acc = get_account(account_id) or {}
+    return (acc.get("name") or "").strip() or account_id
+
+
+def set_account_name(account_id: str, name: str) -> bool:
+    """改业务名：只动展示字段，不搬目录、不动登录态。空名 = 清除自定义名。
+
+    账号不在注册表里返回 False；名字不合规返回 False（由调用方回给用户）。
+    """
+    acc = get_account(account_id)
+    if acc is None:
+        return False
+    name = (name or "").strip()
+    if name and not valid_account_name(name):
+        return False
+    if update_account(account_id, name=name) is None:
+        # default 等历史账号可能尚未写进注册表：先补一条再写业务名
+        add_account(account_id, role=acc.get("role", "mixed"),
+                    user_data_dir=acc.get("user_data_dir", ""),
+                    status=acc.get("status", "ok"))
+        update_account(account_id, name=name)
+    return True
+
+
+def account_nickname(account_id: str) -> str:
+    """平台昵称（登录事件由 user/me 顺带写入；未登录/无缓存为空）。"""
+    return ((get_account(account_id) or {}).get("nickname") or "").strip()
+
+
+def set_account_nickname(account_id: str, nickname: str) -> bool:
+    """缓存平台昵称：登录成功那一刻顺手落盘，账号列表零额外请求即可显示。"""
+    if get_account(account_id) is None:
+        return False
+    return update_account(account_id, nickname=(nickname or "").strip()) is not None
 
 
 def account_headless(account_id: str = "default") -> bool:

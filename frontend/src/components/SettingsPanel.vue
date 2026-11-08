@@ -9,7 +9,8 @@ import {
   apiMirrorWindow, apiMirrorOpen, apiMirrorClose,
   apiLoginStatus, apiLoginBegin,
   apiGetAppConfig, apiSetAppConfig,
-  apiListAccounts, apiAddAccount, apiDeleteAccount,
+  apiListAccounts, apiAddAccount, apiDeleteAccount, apiRenameAccount,
+  apiRefreshNickname,
 } from '../api'
 import type { AccountItem } from '../types'
 
@@ -61,6 +62,18 @@ async function relogin() {
 const accounts = ref<AccountItem[]>([])
 const acctBusy = ref(false)
 const newAcctId = ref('')
+const newAcctName = ref('')
+// 行内改名（R-6.69）：改的是展示名，不动目录、不动登录态
+const editingAcct = ref('')
+const editName = ref('')
+
+/** role 的业务含义（注册表原值是 mixed/collect/publish，界面别直接露技术词） */
+const ROLE_LABEL: Record<string, string> = {
+  mixed: '通用', collect: '采集', publish: '发布',
+}
+function roleLabel(role: string): string {
+  return ROLE_LABEL[role] || role || '通用'
+}
 
 async function loadAccounts() {
   try {
@@ -71,17 +84,63 @@ async function loadAccounts() {
   }
 }
 
+function startRename(a: AccountItem) {
+  editingAcct.value = a.account_id
+  editName.value = a.name || a.account_id
+}
+function cancelRename() {
+  editingAcct.value = ''
+  editName.value = ''
+}
+async function saveRename(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiRenameAccount(aid, editName.value.trim())
+    if (!r.ok) {
+      toast(r.error || '改名失败', 'error')
+      return
+    }
+    toast(`已改名为「${r.name}」`)
+    cancelRename()
+    await loadAccounts()
+  } catch (e) {
+    toast('改名失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
+async function refreshNicknameFn(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiRefreshNickname(aid)
+    if (!r.ok) {
+      toast(r.error || '识别昵称失败', 'error')
+      return
+    }
+    toast(`已识别平台昵称「${r.nickname}」`)
+    await loadAccounts()
+  } catch (e) {
+    toast('识别昵称失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
 async function addAccountFn() {
   if (acctBusy.value) return
   acctBusy.value = true
   try {
-    const r = await apiAddAccount(newAcctId.value.trim())
+    const r = await apiAddAccount(newAcctId.value.trim(), 'mixed', newAcctName.value.trim())
     if (!r.ok) {
       toast(r.error || '新增失败', 'error')
       return
     }
-    toast(`已新增账号 ${r.account_id}（CDP 端口 ${r.debug_port}）`)
+    toast(`已新增「${r.name || r.account_id}」（CDP 端口 ${r.debug_port}）`)
     newAcctId.value = ''
+    newAcctName.value = ''
     await loadAccounts()
   } catch (e) {
     toast('新增失败：' + (e as Error).message, 'error')
@@ -377,17 +436,49 @@ onMounted(async () => {
 
             <div class="acct-list">
               <div v-for="a in accounts" :key="a.account_id" class="acct-item">
-                <div class="acct-meta">
-                  <span class="acct-id">{{ a.account_id }}</span>
-                  <span class="tag-pill" :class="{ run: a.running }">
-                    {{ a.running ? '运行中' : '已停止' }}
-                  </span>
-                  <span v-if="a.running" class="tag-pill" :class="{ hl: !a.headless }">
-                    {{ a.headless ? '无头' : '有头' }}
-                  </span>
-                  <span class="port-pill">CDP {{ a.debug_port ?? '—' }}</span>
+                <div class="acct-row">
+                  <!-- 主标题 = 业务名（可中文、可改）；技术 id 降为副标题 -->
+                  <div class="acct-main">
+                    <span class="acct-name" :title="a.account_id">{{ a.name || a.account_id }}</span>
+                    <span class="acct-sub">
+                      <span v-if="a.nickname" class="acct-nick">{{ a.nickname }}</span>
+                      <span class="acct-id">{{ a.account_id }}</span>
+                      <span class="acct-role">{{ roleLabel(a.role) }}</span>
+                    </span>
+                  </div>
+                  <div class="acct-tags">
+                    <span class="tag-pill" :class="{ run: a.running }">
+                      {{ a.running ? '运行中' : '已停止' }}
+                    </span>
+                    <span v-if="a.running" class="tag-pill" :class="{ hl: !a.headless }">
+                      {{ a.headless ? '无头' : '有头' }}
+                    </span>
+                    <span class="port-pill">CDP {{ a.debug_port ?? '—' }}</span>
+                  </div>
                 </div>
-                <div class="acct-ops">
+
+                <!-- 改名：行内输入，改完写注册表 name，不搬目录不动登录态 -->
+                <div v-if="editingAcct === a.account_id" class="acct-rename">
+                  <input
+                    v-model="editName"
+                    class="acct-name-input"
+                    placeholder="业务名，如「珠宝主号」「二号店·翡翠」"
+                    maxlength="24"
+                    @keyup.enter="saveRename(a.account_id)"
+                    @keyup.esc="cancelRename"
+                  />
+                  <button class="btn primary sm" :disabled="acctBusy" @click="saveRename(a.account_id)">保存</button>
+                  <button class="btn sm" @click="cancelRename">取消</button>
+                </div>
+                <div v-else class="acct-ops">
+                  <button class="btn sm" :disabled="acctBusy" @click="startRename(a)">改名</button>
+                  <button
+                    v-if="a.running && !a.nickname"
+                    class="btn sm"
+                    :disabled="acctBusy"
+                    title="读一次该账号的小红书昵称，用来认出这是哪个号"
+                    @click="refreshNicknameFn(a.account_id)"
+                  >识别昵称</button>
                   <button
                     v-if="!a.running"
                     class="btn sm"
@@ -413,9 +504,15 @@ onMounted(async () => {
 
             <div class="add-acct">
               <input
-                v-model="newAcctId"
+                v-model="newAcctName"
                 class="acct-name-input"
-                placeholder="留空自动生成；自定义仅小写字母/数字/_-，≤32 字符"
+                placeholder="业务名，如「珠宝主号」（可中文，≤24 字符）"
+                maxlength="24"
+              />
+              <input
+                v-model="newAcctId"
+                class="acct-id-input"
+                placeholder="内部 id 留空自动生成"
                 @keyup.enter="addAccountFn"
               />
               <button class="btn primary sm" :disabled="acctBusy" @click="addAccountFn">
@@ -423,7 +520,9 @@ onMounted(async () => {
               </button>
             </div>
             <p class="set-hint">
-              新增账号默认独立 profile；开窗后未登录可扫码，登录成功会自动切无头常驻。
+              业务名是给人看的名字，随时可改，不搬 profile 目录、不影响登录态；
+              内部 id 才是目录名（仅小写字母/数字/_-，≤32 字符）。
+              开窗后未登录可扫码，登录成功会自动切无头常驻并记下平台昵称。
               删除会把 profile 移入回收区（可回滚），不直接清除登录态。
             </p>
           </div>
@@ -646,16 +745,34 @@ input:not([type="checkbox"]) {
 }
 .acct-status.on { color: #1a7f4c; background: #eaf7ef; }
 
-/* 多账号列表 */
+/* 多账号列表：主标题=业务名（大、深），副标题=昵称/内部id/用途（小、灰） */
 .acct-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .acct-item {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap;
+  display: flex; flex-direction: column; gap: 8px;
   border: 1px solid var(--line, #ececec); border-radius: 10px;
   padding: 10px 12px; background: #fafafa;
 }
-.acct-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.acct-id { font-size: 13px; font-weight: 700; color: #333; min-width: 72px; }
+.acct-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.acct-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.acct-name {
+  font-size: 14px; font-weight: 700; color: #222;
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acct-nick {
+  font-size: 12px; font-weight: 600; color: #b45409;
+  background: #fdf2e2; padding: 1px 8px; border-radius: 999px;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-id {
+  font-size: 11px; color: #999;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.acct-role { font-size: 11px; color: #888; }
+.acct-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tag-pill {
   font-size: 11px; font-weight: 600; color: #888;
   padding: 2px 9px; border-radius: 999px; background: #eee;
@@ -666,11 +783,13 @@ input:not([type="checkbox"]) {
   font-size: 11px; color: #666; font-family: ui-monospace, Menlo, monospace;
   background: #f0f0f3; padding: 2px 8px; border-radius: 6px;
 }
-.acct-ops { display: flex; gap: 6px; }
+.acct-ops { display: flex; gap: 6px; flex-wrap: wrap; }
+.acct-rename { display: flex; gap: 8px; align-items: center; }
 .add-acct {
-  display: flex; gap: 8px; margin-top: 12px; align-items: center;
+  display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap;
 }
-.acct-name-input { flex: 1; margin-top: 0 !important; }
+.acct-name-input { flex: 1 1 200px; margin-top: 0 !important; }
+.acct-id-input { flex: 1 1 160px; margin-top: 0 !important; font-family: ui-monospace, Menlo, monospace; }
 .set-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .import-result { font-size: 12px; color: #1a7f4c; margin: auto 0 0 4px; }
 .limit { color: #b08a4d; font-weight: 500; font-size: 12px; }

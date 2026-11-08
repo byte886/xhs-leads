@@ -1538,6 +1538,10 @@ async def accounts_list():
         acc = accounts.get(aid) or {}
         return {
             "account_id": aid,
+            # 业务展示名（可中文、可改，不落路径）；没设过回退 id，不编造业务含义
+            "name": config.account_name(aid),
+            # 平台昵称：登录事件顺带缓存，用来一眼认出「这个号是谁」
+            "nickname": config.account_nickname(aid),
             "role": acc.get("role", "mixed"),
             "status": acc.get("status", "ok"),
             "debug_port": port_map.get(aid),
@@ -1557,7 +1561,12 @@ async def accounts_list():
 
 class AccountAddReq(BaseModel):
     account_id: str = ""
+    name: str = ""
     role: str = "mixed"
+
+
+class AccountRenameReq(BaseModel):
+    name: str = ""
 
 
 @app.post("/api/accounts")
@@ -1566,22 +1575,71 @@ async def accounts_add(req: AccountAddReq):
 
     account_id 留空 = 自动生成 acc_xxxxxx；显式给名要满足 valid_account_id
     （小写字母/数字/下划线/短横线，≤32 字符——这是跨平台目录名约束）。
+    name 是业务展示名（可中文），与目录名分离，改名不搬目录。
     """
     aid = (req.account_id or "").strip() or config.new_account_id()
     if aid in config.list_accounts():
         return {"ok": False, "error": f"账号已存在：{aid}"}
     try:
-        acc = config.add_account(aid, role=req.role or "mixed")
-    except ValueError as e:  # noqa: BLE001（id 不合规：直接回给调用方，不抛 500）
+        acc = config.add_account(aid, role=req.role or "mixed", name=req.name)
+    except ValueError as e:  # noqa: BLE001（id/业务名不合规：直接回给调用方，不抛 500）
         return {"ok": False, "error": str(e)}
     return {
         "ok": True,
         "account_id": aid,
+        "name": acc.get("name") or aid,
         "role": acc.get("role"),
         "debug_port": config.account_debug_port(aid),
         # 与 GET /api/accounts 同口径：返回注册表里的相对路径（不是解析后的绝对路径）
         "user_data_dir": acc.get("user_data_dir"),
     }
+
+
+@app.patch("/api/accounts/{account_id}")
+async def accounts_rename(account_id: str, req: AccountRenameReq):
+    """改账号业务名（R-6.69）：只改展示名，不搬 profile 目录、不动登录态。
+
+    account_id 是目录名，改名要迁移数据；业务名是纯展示字段，随时可改——
+    这样用户能把 acc_a 标成「珠宝主号」而不用重新扫码。
+    """
+    if config.get_account(account_id) is None:
+        return {"ok": False, "error": f"账号不存在：{account_id}"}
+    name = (req.name or "").strip()
+    if name and not config.valid_account_name(name):
+        return {"ok": False, "error": (
+            f"账号名最多 {config.ACCOUNT_NAME_MAX} 字符，不能含控制字符或路径分隔符")}
+    if not config.set_account_name(account_id, name):
+        return {"ok": False, "error": "改名失败"}
+    return {"ok": True, "account_id": account_id, "name": config.account_name(account_id)}
+
+
+@app.post("/api/accounts/{account_id}/nickname")
+async def accounts_refresh_nickname(account_id: str):
+    """识别平台昵称（R-6.69）：账号在跑时读一次 user/me 并缓存进注册表。
+
+    为什么需要手动入口：昵称默认由登录事件顺带写入，但在此机制上线**之前**
+    就已登录的账号（如 default）没有缓存，列表里认不出是哪个号。
+    不自动刷新的原因：每个账号要 reload 一次页面，账号多时开销与风控都不划算。
+    """
+    from src import engine_pool, login_session
+
+    if config.get_account(account_id) is None:
+        return {"ok": False, "error": f"账号不存在：{account_id}"}
+    if engine_pool.pool.peek(account_id) is None:
+        return {"ok": False, "error": "账号引擎未运行，先开窗再识别昵称"}
+    for _st in list(_COLLECT_TASKS.values()):
+        if _st.get("status") == "running" and _st.get("account_id", "default") == account_id:
+            return {"ok": False, "error": "有采集任务进行中，稍后再识别昵称"}
+    payload = await login_session.capture_user_me(account_id)
+    if payload is None:
+        return {"ok": False, "error": "未能读取账号信息（页面未响应或超时）"}
+    if not login_session.is_real_login_me(payload):
+        return {"ok": False, "error": "该账号尚未登录，请扫码登录后再识别"}
+    nickname = login_session.login_nickname(payload)
+    if not nickname:
+        return {"ok": False, "error": "已登录但未取到昵称"}
+    config.set_account_nickname(account_id, nickname)
+    return {"ok": True, "account_id": account_id, "nickname": nickname}
 
 
 @app.delete("/api/accounts/{account_id}")

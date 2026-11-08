@@ -189,13 +189,25 @@ export async function apiListAccounts(): Promise<AccountListResp> {
   return j(await fetch(`${BASE}/api/accounts`))
 }
 
-export async function apiAddAccount(accountId = '', role = 'mixed'): Promise<{
-  ok: boolean; account_id?: string; debug_port?: number; user_data_dir?: string; error?: string
+export async function apiAddAccount(accountId = '', role = 'mixed', name = ''): Promise<{
+  ok: boolean; account_id?: string; name?: string; debug_port?: number
+  user_data_dir?: string; error?: string
 }> {
   return j(await fetch(`${BASE}/api/accounts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ account_id: accountId, role }),
+    body: JSON.stringify({ account_id: accountId, role, name }),
+  }))
+}
+
+/** 改业务名（R-6.69）：只改展示名，不搬 profile 目录、不动登录态 */
+export async function apiRenameAccount(accountId: string, name: string): Promise<{
+  ok: boolean; account_id?: string; name?: string; error?: string
+}> {
+  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
   }))
 }
 
@@ -203,6 +215,15 @@ export async function apiDeleteAccount(accountId: string): Promise<{
   ok: boolean; note?: string; error?: string
 }> {
   return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }))
+}
+
+/** 识别平台昵称（R-6.69）：账号在跑时读一次 user/me 并缓存，用于认号 */
+export async function apiRefreshNickname(accountId: string): Promise<{
+  ok: boolean; account_id?: string; nickname?: string; error?: string
+}> {
+  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}/nickname`, {
+    method: 'POST',
+  }))
 }
 
 /** R-6.18 双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */

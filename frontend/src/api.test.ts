@@ -122,7 +122,7 @@ describe('账号管理 API 契约', () => {
       return okRes({ ok: true, account_id: 'acc_a' })
     })
     const r = await api.apiAddAccount('acc_a', 'mixed')
-    expect(body).toEqual({ account_id: 'acc_a', role: 'mixed' })
+    expect(body).toEqual({ account_id: 'acc_a', role: 'mixed', name: '' })
     expect(r.account_id).toBe('acc_a')
   })
 
@@ -133,7 +133,59 @@ describe('账号管理 API 契约', () => {
       return okRes({ ok: true })
     })
     await api.apiAddAccount()
-    expect(body).toEqual({ account_id: '', role: 'mixed' })
+    expect(body).toEqual({ account_id: '', role: 'mixed', name: '' })
+  })
+
+  it('apiAddAccount：业务名进 body（可中文，与内部 id 分离）', async () => {
+    let body: any = null
+    mockFetch(async (_u, init) => {
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true, account_id: 'acc_x', name: '珠宝主号' })
+    })
+    const r = await api.apiAddAccount('', 'mixed', '珠宝主号')
+    expect(body.name).toBe('珠宝主号')
+    expect(r.name).toBe('珠宝主号')
+  })
+
+  it('apiRenameAccount：PATCH 带业务名，account_id 进路径且编码', async () => {
+    let u = ''
+    let method = ''
+    let body: any = null
+    mockFetch(async (uu, init) => {
+      u = String(uu)
+      method = String(init!.method)
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true, account_id: 'acc_a', name: '珠宝主号' })
+    })
+    const r = await api.apiRenameAccount('acc_a', '珠宝主号')
+    expect(u).toBe('/api/accounts/acc_a')
+    expect(method).toBe('PATCH')
+    expect(body).toEqual({ name: '珠宝主号' })
+    expect(r.name).toBe('珠宝主号')
+  })
+
+  it('apiRenameAccount：空名可清除自定义名（回退显示 id）', async () => {
+    let body: any = null
+    mockFetch(async (_u, init) => {
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true, name: 'acc_a' })
+    })
+    await api.apiRenameAccount('acc_a', '')
+    expect(body).toEqual({ name: '' })
+  })
+
+  it('apiRefreshNickname：POST 到 nickname 子路径且编码', async () => {
+    let u = ''
+    let method = ''
+    mockFetch(async (uu, init) => {
+      u = String(uu)
+      method = String(init!.method)
+      return okRes({ ok: true, account_id: 'acc_a', nickname: '普通人' })
+    })
+    const r = await api.apiRefreshNickname('acc_a')
+    expect(u).toBe('/api/accounts/acc_a/nickname')
+    expect(method).toBe('POST')
+    expect(r.nickname).toBe('普通人')
   })
 
   it('apiDeleteAccount：account_id 进路径且编码', async () => {
