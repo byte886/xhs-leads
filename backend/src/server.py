@@ -1201,6 +1201,25 @@ async def _recover_collect_window(account_id: str) -> None:
         log.warning("停止后清理采集窗口失败", exc_info=True)
 
 
+def _finalize_aborted(state: dict, emit: bool = False) -> bool:
+    """关窗中断收尾：有 abort_note 就落状态并返回 True，调用方据此提前 return。
+
+    R-6.76：关掉采集窗会让读页、导航、搜索结果全部退化成「失败」或「空」，
+    底层据此给出的「需要登录 / 未采到数据 / 浏览器异常」都只是表象。用户口径是
+    「关了就中断、要采就重来」，所以每一个收尾分支都必须先让位给 abort_note，
+    否则用户会被误导去重新扫码，或者看到「未获取到笔记」这种错误归因。
+    """
+    note = state.get("abort_note")
+    if not note:
+        return False
+    state["status"] = "stopped"
+    state["phase"] = "done"
+    state["note"] = note
+    if emit:
+        emit_collect(state)
+    return True
+
+
 def _finalize_stopped(state: dict, req, account_id: str) -> None:
     """框架级取消（用户点停止）收尾：已处理入库的条数即最终结果。
 
@@ -1212,14 +1231,40 @@ def _finalize_stopped(state: dict, req, account_id: str) -> None:
     if abort_note:
         # R-6.72：用户关掉采集窗这类「外部原因中断」有自己的文案，不能被覆盖成
         # 「已停止：采集到 N 条」——否则用户会以为自己点了停止。
-        state["status"] = "stopped"
-        state["note"] = abort_note
-        state["phase"] = "done"
+        _finalize_aborted(state)
         return
     processed = state.get("saved", 0)
     state["status"] = "stopped"
     state["note"] = f"已停止：采集到 {processed} 条" if processed else "已停止（未采到结果）"
     state["phase"] = "done"
+
+
+_WIN_CLOSED_NOTE = "采集窗口已关闭，本次采集中断，请重新开始采集"
+
+
+def _abort_one_task(st: dict, now: float) -> bool:
+    """关窗回调对单个任务的动作；返回是否命中（命中即视为本次中断）。
+
+    两种情况都算：正在跑的任务直接中止；刚结束（5 秒内）的任务补认原因——
+    关窗瞬间 Playwright 会先一步让采集线程抛「Target closed」，等这里被调用时
+    状态已落成 error，只按 running 判断会漏掉（用户看到「浏览器刚在重建」）。
+    """
+    if st.get("status") == "running":
+        st["abort_note"] = _WIN_CLOSED_NOTE
+        st["stop_event"] = True
+        task = st.get("task")
+        if task and not task.done():
+            task.cancel()
+        return True
+    recent = now - st.get("ended_ts", now - 1e9) <= 5.0
+    if st.get("status") not in ("error", "done") or st.get("abort_note") or not recent:
+        return False
+    st["abort_note"] = _WIN_CLOSED_NOTE
+    st["status"] = "stopped"
+    st["phase"] = "done"
+    st["note"] = _WIN_CLOSED_NOTE
+    emit_collect(st)
+    return True
 
 
 def abort_collect_on_window_close() -> int:
@@ -1231,16 +1276,8 @@ def abort_collect_on_window_close() -> int:
 
     返回值：被中止的任务数（0 表示当时没有任务在跑）。
     """
-    hit = 0
-    for st in list(_COLLECT_TASKS.values()):
-        if st.get("status") != "running":
-            continue
-        st["abort_note"] = "采集窗口已关闭，本次采集中断，请重新开始采集"
-        st["stop_event"] = True
-        task = st.get("task")
-        if task and not task.done():
-            task.cancel()
-        hit += 1
+    now = time.time()
+    hit = sum(1 for st in list(_COLLECT_TASKS.values()) if _abort_one_task(st, now))
     if hit:
         log.info("采集窗口被关闭：已中止 %d 个进行中的采集任务", hit)
     return hit
@@ -1293,6 +1330,8 @@ async def _stop_running_collect_tasks() -> None:
 
 def _collect_finalize_empty(state: dict, res: dict) -> None:
     """search 阶段无候选的收尾：用户停止 vs 平台没加载出内容（0 条=功能未完成，用户口径）。"""
+    if _finalize_aborted(state):
+        return
     if state["stop_event"] or res.get("stopped"):
         state["status"] = "stopped"
         state["note"] = "已停止（未采到结果）"
@@ -1311,6 +1350,8 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
     四个分支都必须落 status——漏设会让任务永远停在 running，而 running 是
     mirror 切换、keeper collect_win 治理、采集窗 关闭三处的唯一判据（状态泄漏会连锁污染壳层）。
     """
+    if _finalize_aborted(state):
+        return
     if state["stop_event"] or res.get("stopped"):
         state["status"] = "stopped"
         state["note"] = (
@@ -1356,6 +1397,13 @@ def _finalize_need_login(state: dict, account_id: str, err: Exception) -> None:
     必须推的原因：左窗完全靠事件驱动更新状态，不推就只能一直停在「正在采集」。
     不挂起等待、不续采——用户口径是「需要登录就重新采集」。
     """
+    abort_note = state.get("abort_note")
+    if abort_note:
+        # R-6.76：用户关掉采集窗后，读页/导航必然抛「Target closed」，底层会把它
+        # 当成登录墙报上来。用户口径是「关了就中断、要采就重来」，提示必须是
+        # 「窗口已关闭」——不能被「需要登录」覆盖，否则会误导用户去重新扫码。
+        _finalize_aborted(state, emit=True)
+        return
     saved = state.get("saved", 0)
     limit = state.get("limit", 0)
     state["status"] = "ended_need_login"
@@ -1504,12 +1552,14 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         _finalize_stopped(state, req, account_id)
         raise
     except Exception as e:  # noqa: BLE001 任务不因单点异常悬挂在 running
-        state["status"] = "error"
-        state["note"] = _friendly_collect_error(e)
-        state["phase"] = "done"
+        if not _finalize_aborted(state):
+            state["status"] = "error"
+            state["note"] = _friendly_collect_error(e)
+            state["phase"] = "done"
     finally:
         if con is not None:
             con.close()  # _db() 每次新建连接，结束即释放
+        state["ended_ts"] = time.time()  # R-6.76b：供关窗回调认领「刚被关窗带崩」的任务
         _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
         emit_collect(state)  # 收尾一次推送：done/stopped/error 统一从事件到前端
 
