@@ -6,7 +6,7 @@
   旧的截图映射与事件转发随之失去意义，已于 R-6.53z8p 删除，避免留孤儿代码。
 
 现有能力：
-- open_login(account)：确保引擎里有一个小红书页（无则开 /login）；供起引擎的脚本调用
+- open_login(account)：确保引擎里有一个小红书页（无则开 explore，未登录自动弹登录 modal）；供起引擎的脚本调用
 - set_window(account, on)：调试实时窗口开关（有头小窗 ↔ 无头；引擎重启生效，登录态回注保留）
 
 注意：登录页不再由本模块"驱动"——第二窗口（采集窗）自主打开与刷新，此处只保证页面存在。
@@ -19,12 +19,15 @@ from src import engine_pool, logger as xlog
 log = xlog.get("mirror")
 
 XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
-# R-6.53z8：登录小窗只允许 /login；已登录时平台自己会跳 /explore
+# 历史上登录小窗只允许 /login（full-page 独立页）；R-6.66 起统一走 explore
+# 浏览页模式——未登录平台自动弹同款 login-modal，背后有浏览页、侧边栏登录按钮
+# 常驻可重新唤起，配合 force_login 遮罩锁避免点空白丢失。常量保留供兼容/回退。
 XHS_LOGIN = "https://www.xiaohongshu.com/login"
 
 
 async def login_page(account: str = "default"):
-    """取镜像目标页：引擎活动页中的小红书页；无则新建并打开 explore（触发登录弹窗）。"""
+    """取镜像目标页：引擎活动页中的小红书页；无则新建并打开 explore（未登录自动
+    弹登录 modal；已登录平台直接给浏览流）。"""
     eng = await engine_pool.pool.get(account)
     ctx = await eng.context()
     for p in ctx.pages:
@@ -34,8 +37,8 @@ async def login_page(account: str = "default"):
         except Exception:  # noqa: BLE001
             continue
     page = await eng.new_page()
-    await page.goto(XHS_LOGIN, wait_until="domcontentloaded", timeout=30000)
-    await asyncio.sleep(3)  # 等 SPA 登录弹窗渲染稳定
+    await page.goto(XHS_EXPLORE, wait_until="domcontentloaded", timeout=30000)
+    await asyncio.sleep(3)  # 等 SPA 登录弹窗/浏览流渲染稳定
     return page
 
 

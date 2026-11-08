@@ -267,3 +267,75 @@ def test_watch_switches_after_id_token(monkeypatch):
     monkeypatch.setattr(engine_window, "set_window", _set_window)
     asyncio.run(engine_window._auto_headless_watch("acc_x"))
     assert called["v"] == ("acc_x", False)
+
+
+# ------------------------------------------------ R-6.66 登录走 explore 浏览页
+
+def test_login_page_navigates_explore_when_no_page(monkeypatch):
+    """无现成小红书页：新建并导航 explore（未登录自动弹登录 modal），不进 /login。"""
+    gotos = []
+
+    class _Page:
+        def is_closed(self):
+            return False
+
+    class _Ctx:
+        def __init__(self):
+            self.pages = []  # 无现成页
+
+    class _Eng:
+        async def context(self):
+            return _Ctx()
+
+        async def new_page(self):
+            class _P:
+                async def goto(self, url, wait_until=None, timeout=None):
+                    gotos.append(url)
+            return _P()
+
+    async def _get(_a):
+        return _Eng()
+
+    monkeypatch.setattr(engine_pool.pool, "get", _get)
+
+    async def _no_sleep(_s):
+        return None
+
+    monkeypatch.setattr(engine_window.asyncio, "sleep", _no_sleep)
+    asyncio.run(engine_window.login_page("acc_x"))
+    assert gotos == [engine_window.XHS_EXPLORE]
+    assert engine_window.XHS_LOGIN not in gotos
+
+
+def test_login_page_reuses_existing_xhs_page(monkeypatch):
+    """已有小红书页时直接复用，不新建、不导航。"""
+    class _P:
+        def is_closed(self):
+            return False
+
+        url = "https://www.xiaohongshu.com/explore"
+
+    class _Ctx:
+        def __init__(self):
+            self.pages = [_P()]
+
+    class _Eng:
+        def __init__(self):
+            self.new_called = False
+
+        async def context(self):
+            return _Ctx()
+
+        async def new_page(self):
+            self.new_called = True
+            raise AssertionError("不应新建页面")
+
+    eng = _Eng()
+
+    async def _get(_a):
+        return eng
+
+    monkeypatch.setattr(engine_pool.pool, "get", _get)
+    pg = asyncio.run(engine_window.login_page("acc_x"))
+    assert isinstance(pg, _P)
+    assert eng.new_called is False

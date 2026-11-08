@@ -45,6 +45,13 @@ class TestForceLoginSelectors:
     def test_mask_selector_embedded(self):
         assert injections.LOGIN_MASK_SELECTOR in injections.get("force_login")
 
+    def test_close_selectors_embedded(self):
+        """R-6.66：所有关闭按钮选择器（含 explore modal 的 .close）都嵌入隐藏 CSS/锁。"""
+        js = injections.get("force_login")
+        for sel in injections.LOGIN_CLOSE_SELECTORS:
+            assert sel in js, f"关闭选择器 {sel} 未嵌入 force_login JS"
+            assert f"{sel}{{display:none!important}}" in js, f"{sel} 缺隐藏样式"
+
     def test_click_events_embedded(self):
         js = injections.get("force_login")
         for ev in injections.LOGIN_CLICK_EVENTS:

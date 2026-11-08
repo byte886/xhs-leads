@@ -243,6 +243,19 @@ LOGIN_MASK_SELECTOR = ".reds-mask"
 LOGIN_EXTRA_HIDE_SELECTORS = ".out.right"  # R-6.48p：登录页杂项（活动推广区）净化专用
 LOGIN_CLICK_EVENTS = ("pointerdown", "mousedown", "mouseup", "click")
 LOGIN_ESC_EVENTS = ("keydown", "keyup")
+# 关闭按钮选择器（R-6.66 集中常量化）：full-page /login 的 aria-label 关闭、
+# 历史 .close-btn/.close-icon，以及 explore 浏览页 login-modal 的 .close
+# （实测父节点 class="icon-btn-wrapper button close"，旧选择器漏覆盖导致点 × 关闭）。
+LOGIN_CLOSE_SELECTORS = (
+    '[aria-label="关闭"]',
+    '[aria-label="close"]',
+    '.close-btn',
+    '.close-icon',
+    '.login-modal .close',
+    '.login-container .close',
+)
+_LOGIN_CLOSE_CSS = "".join(f"{s}{{display:none!important}}" for s in LOGIN_CLOSE_SELECTORS)
+_LOGIN_CLOSE_QUERY = ",".join(LOGIN_CLOSE_SELECTORS)
 
 
 def decide_block(hits_panel: bool, hits_mask: bool) -> bool:
@@ -256,11 +269,11 @@ _FORCE_LOGIN_JS = (
     "function ensureStyle(){"
     "if(document.head&&!document.querySelector('#xhs-leads-lock')){"
     "var st=document.createElement('style');st.id='xhs-leads-lock';"
-    "st.textContent='[aria-label=\"关闭\"]{display:none!important}[aria-label=\"close\"]{display:none!important}.close-btn,.close-icon{display:none!important}';"
+    "st.textContent='" + _LOGIN_CLOSE_CSS + "';"
     "document.head.appendChild(st);"
     "}}"
     "function lockBtns(){"
-    "var a=document.querySelectorAll('[aria-label=\"关闭\"],[aria-label=\"close\"],.close-btn,.close-icon');"
+    "var a=document.querySelectorAll('" + _LOGIN_CLOSE_QUERY + "');"
     "for(var i=0;i<a.length;i++){a[i].style.display='none';a[i].removeAttribute('onclick');}"
     "}"
     "ensureStyle();lockBtns();"
