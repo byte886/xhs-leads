@@ -632,10 +632,23 @@ class AccountEngine:
 
 
     async def _replay_saved_cookies(self) -> None:
-        """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。"""
-        # 登录态重启保留（R-6.6）：以 data/cookies.json 为权威源，启动即回注。
+        """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。
+
+        R-6.72：原口径「以 cookies.json 为权威源、启动即回注」有个致命副作用——
+        cookies.json 是**旧快照**，启动时无条件回注会把 profile 里浏览器自己
+        持久化的**新**会话覆盖成旧值。实测表现：扫码登录后 profile 的 Cookies
+        文件持续写盘（mtime 就是当下），但一重启页面就退回登录页，用户每次
+        都要重扫。改为：profile 已有 web_session 就跳过回注，只在 profile 空
+        （导入 cookie 到新账号这类场景）时兜底。
+        """
         # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存。
         try:
+            cur = []
+            if self._context is not None:
+                cur = await self._context.cookies()
+            if any(c.get("name") == "web_session" for c in cur):
+                log.info("账号 %s profile 已有会话，跳过 Cookie 回注", self.account_id)
+                return
             saved = []
             cf = self.cookie_file
             if cf.exists():

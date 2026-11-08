@@ -70,30 +70,44 @@ class _GuardWin:
     async def load_url(self, url):
         self.loaded.append(url)
 
+class TestForcedMonitorNoPullBack:
+    """R-6.72（用户拍板：守护会造成不可控局面，完全抛弃自动干预）。
 
-class TestGuardReleaseWhenLoggedIn:
-    """R-6.53z7 用户口径：登录成功后页面自己跳 explore，守卫必须放行、不许拉回。"""
+    离开登录页（含 chrome-error://chromewebdata/ 加载失败死页）= 未登录，
+    直接判定结束监视并交回上层；**绝不 load_url 拉回**。旧逻辑「一离开 /login
+    就拉回」会在死页上自激（拉回→导航事件→再判离开→再拉回），实测打满
+    CPU 并触发 CFT Chrome_IOThread CHECK 崩溃。
+    """
 
-    def _run(self, cookies):
+    def _run(self, cookies, url):
         import asyncio
-        import threading
+        from src.shell_window import _guard_monitor_forced
 
-        from src.shell_window import _guard_pull_back_if_logged_out
+        class _W:
+            async def current_url(self):
+                return url
 
-        win = _GuardWin(cookies)
-        stop = threading.Event()
-        asyncio.run(_guard_pull_back_if_logged_out(
-            win, stop, "https://www.xiaohongshu.com/explore"))
-        return win.loaded
+            async def load_url(self, u, **k):
+                raise AssertionError("R-6.72 禁止任何自动拉回/导航")
 
-    def test_logged_in_is_released(self):
-        """已登录（web_session）→ 一次导航都不做，让页面停在 explore。"""
-        assert self._run([{"name": "web_session", "value": "x"}]) == []
+            async def evaluate_js(self, js):
+                return None
 
-    def test_logged_in_by_id_token_is_released(self):
-        assert self._run([{"name": "id_token", "value": "t"}]) == []
+        return asyncio.run(_guard_monitor_forced(_W(), "b", cookies, {"import": 0.0}))
 
-    def test_logged_out_is_pulled_back(self):
-        """未登录乱点离开登录页 → 拉回登录页（防白屏）。"""
-        from src.shell_window import XHS_LOGIN_URL
-        assert self._run([{"name": "a", "value": "1"}]) == [XHS_LOGIN_URL]
+    def test_leave_login_page_returns_false_without_navigation(self):
+        # 未登录 + 已离开登录页（死页）→ False 结束监视，且一次导航都不做
+        assert self._run(
+            [{"name": "a", "value": "1"}], "chrome-error://chromewebdata/"
+        ) is False
+
+    def test_leave_login_page_explore_returns_false(self):
+        assert self._run(
+            [{"name": "a", "value": "1"}], "https://www.xiaohongshu.com/explore"
+        ) is False
+
+    def test_still_on_login_page_keeps_monitoring(self):
+        # 仍在登录页 → None（继续等事件），不强制结束
+        assert self._run(
+            [{"name": "a", "value": "1"}], "https://www.xiaohongshu.com/login"
+        ) is None

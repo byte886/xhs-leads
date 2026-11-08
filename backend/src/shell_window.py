@@ -847,78 +847,25 @@ async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
     return None
 
 
-def _guard_detect_escape(frame, stop, domain: str) -> str | None:
-    """判定主 frame 是否逃出登录页：返回需拉回的 URL，否则 None。
-
-    非主 frame / frame 已销毁 / 仍在小红书登录页 / 守卫已停止 → None。
-    仅拦小红书域（守卫自己 load_url 登录页属 /login 不触发；验证码 iframe 不触发）。
-    """
-    try:
-        if not frame.is_main_frame():
-            return None
-        url = frame.url or ""
-    except Exception:  # noqa: BLE001（frame 已销毁：忽略）
-        return None
-    if domain not in url or "/login" in url:
-        return None
-    if stop.is_set():
-        return None
-    return url
-
-
-async def _guard_pull_back_if_logged_out(win: "ShellWindow", stop, url: str) -> None:
-    """离开登录页后的处置（R-6.53z7，用户拍板）：
-
-    已登录 → **放行**。小红书登录页登录成功后会自己跳到 explore，我们不再插手，
-    更不许把人拉回登录页（旧逻辑「一离开 /login 就立即拉回」实测会让刚登录成功的
-    用户被弹回登录页）。
-    未登录 → 拉回登录页（防用户在登录页乱点跳走变白屏）。
-    """
-    if stop.is_set():
-        return
-    if has_login_cookie(await _guard_read_cookies(win)):
-        log.info(f"已登录，放行进入（{url[:50]}）")
-        return
-    log.info(f"导航拦截：未登录离开登录页（{url[:70]}），立即拉回")
-    try:
-        await win.load_url(XHS_LOGIN_URL)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _guard_hook_forced_nav(win: "ShellWindow", stop: "threading.Event"):
-    """R-6.48h 强制登录导航拦截：主窗口主 frame 一旦离开 /login（小红书域内
-    乱点/外链跳转），事件级立即拉回登录页——替代纯轮询（0.3s 间隙内白屏/
-    乱跳窗口期，用户实测「点两下变空白」根因）。返回移除函数。
-
-    同步函数（勿 await）：framenavigated 为同步回调，内部只做 URL 判定 +
-    schedule 拉回任务；仅拦主 frame（登录页内的验证码 iframe 等不受影响）；
-    仅拦小红书域（守卫自己 load_url 登录页属 /login 不触发）。登录成功/监视
-    退出时由调用方移除监听，避免循环。
-    """
-    _domain = "xiaohongshu.com"
-
-    def _on_nav(frame) -> None:
-        url = _guard_detect_escape(frame, stop, _domain)
-        if url is None:
-            return
-        try:
-            asyncio.get_running_loop().create_task(_guard_pull_back_if_logged_out(win, stop, url))
-        except Exception:  # noqa: BLE001（loop 关闭中：轮询兜底）
-            pass
-
-    try:
-        win.page.on("framenavigated", _on_nav)
-        return lambda: win.page.remove_listener("framenavigated", _on_nav)
-    except Exception:  # noqa: BLE001（页面未就绪：轮询兜底）
-        return None
+# R-6.72（用户拍板：守护会造成不可控局面，完全抛弃自动干预）：
+# 原 _guard_detect_escape / _guard_pull_back_if_logged_out / _guard_hook_forced_nav
+# 三件套已整块删除——它们实现「离开登录页 → 自动 load_url 拉回」，与
+# framenavigated 事件互为触发源：拉回产生导航事件 → 再判离开 → 再拉回，在页面
+# 加载失败（chrome-error://chromewebdata/）时永不收敛，实测打满 CPU 并触发
+# CFT Chrome_IOThread CHECK 崩溃。
+# 新语义：离开登录页 = 未登录，_guard_monitor_forced 直接判定并结束监视；
+# 用户自行再点「去登录」；采集一问一答（未登录立即返回，不等待）。
 
 
 async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> bool | None:
-    """强制登录单步：返回 True=登录成功 / None=继续监视（离开登录页自动拉回）。
+    """强制登录单步：True=登录成功 / False=已离开登录页（判定未登录，结束监视）/ None=继续。
 
-    R-6.48k：移除每 10s 轮询补注——登录页行为（弹窗锁/居中/标题）由
-    add_init_script 在每个新 document 自动注入（事件驱动），无需循环守护。
+    R-6.72（用户拍板：守护会造成不可控局面，完全抛弃）：登录页**不做任何自动
+    拉回或自动导航**。离开登录页即视为未登录、立即结束本次监视交回上层，由用户
+    自己再点「去登录」。旧逻辑「一离开 /login 就拉回」会在页面加载失败变成
+    chrome-error://chromewebdata/ 时自激——拉回产生导航事件→再判离开→再拉回，
+    每个循环还附带 3 个 evaluate 全部 TargetClosedError，实测把渲染进程与主进程
+    CPU 打满并最终触发 CFT Chrome_IOThread CHECK 崩溃。
     """
     if has_login_cookie(cs):
         return await _guard_handle_id_token(win, base, cs, state)
@@ -927,13 +874,8 @@ async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> boo
     except Exception:  # noqa: BLE001
         cur = ""
     if cur and "/login" not in cur:
-        log.info(f"离开登录页（{cur[:70]}），强制拉回登录页")
-        try:
-            await win.load_url(XHS_LOGIN_URL)
-        except Exception:  # noqa: BLE001
-            pass
-        # 拉回产生新 document：事件点补注（init script 已注册时仅 evaluate 当前文档）
-        await _ensure_login_injects(win)
+        log.info(f"离开登录页（{cur[:70]}），判定未登录并结束监视（不再自动拉回）")
+        return False
     return None
 
 
@@ -989,7 +931,11 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
     不产生任何平台访问，从根本上减少登录页期间的自动化痕迹。
     """
     state = {"import": 0.0, "inject": 0.0}
-    remove_nav_hook = _guard_hook_forced_nav(win, stop) if cur_force else None
+    # R-6.72：导航拦截（离开登录页 → 自动 load_url 拉回）整套废弃。
+    # 它与 framenavigated 事件互为触发源：拉回产生导航事件 → 再判离开 → 再拉回，
+    # 页面加载失败（chrome-error://chromewebdata/）时永不收敛。现在仅保留
+    # 「事件到达 → 一次短验证」；离开登录页由 _guard_monitor_forced 直接判未登录结束。
+    remove_nav_hook = None
     wake = asyncio.Event()
 
     def _on_wake(*_a) -> None:

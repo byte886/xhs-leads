@@ -50,39 +50,6 @@ class _FakeWin:
         return None
 
 
-class TestGuardDetectEscape:
-    def test_escape_returns_url(self):
-        stop = threading.Event()
-        url = "https://www.xiaohongshu.com/explore?x=1"
-        assert sw._guard_detect_escape(_FakeFrame(url), stop, "xiaohongshu.com") == url
-
-    def test_login_page_not_escape(self):
-        stop = threading.Event()
-        assert sw._guard_detect_escape(
-            _FakeFrame("https://www.xiaohongshu.com/login"), stop, "xiaohongshu.com") is None
-
-    def test_sub_frame_ignored(self):
-        stop = threading.Event()
-        assert sw._guard_detect_escape(
-            _FakeFrame("https://www.xiaohongshu.com/explore", main=False), stop,
-            "xiaohongshu.com") is None
-
-    def test_non_xhs_domain_ignored(self):
-        stop = threading.Event()
-        assert sw._guard_detect_escape(
-            _FakeFrame("https://example.com/page"), stop, "xiaohongshu.com") is None
-
-    def test_stopped_guard_ignored(self):
-        stop = threading.Event()
-        stop.set()
-        assert sw._guard_detect_escape(
-            _FakeFrame("https://www.xiaohongshu.com/explore"), stop, "xiaohongshu.com") is None
-
-    def test_destroyed_frame_ignored(self):
-        stop = threading.Event()
-        assert sw._guard_detect_escape(_FakeFrame("", broken=True), stop, "xiaohongshu.com") is None
-
-
 class TestGuardNextForce:
     def test_event_driven_returns_force_and_clears(self):
         evt = asyncio.Event()
@@ -154,45 +121,59 @@ class TestGuardMonitorStep:
 
 
 class TestGuardMonitorLoop:
-    def test_success_returns_true_and_removes_hook(self, monkeypatch):
-        removed = []
+    """R-6.72：登录监视循环不再注册任何导航拦截 hook（自动拉回已整体删除）。
 
+    旧契约「finally 必须移除 framenavigated 监听」随实现一起废弃；现在只需
+    保证：登录成功 → True 结束；已停止/未登录 → False。同时用断言锁住
+    「不再挂 framenavigated 监听」，防止旧自激逻辑被悄悄加回。
+    """
+
+    def test_success_returns_true(self, monkeypatch):
         async def fake_rebind(win, base):
             return False
 
-        async def fake_step(win, base, force, state):
+        async def fake_burst(win, base, force, state):
             return True
 
         monkeypatch.setattr(sw, "_rebind_if_closed", fake_rebind)
-        monkeypatch.setattr(sw, "_guard_monitor_step", fake_step)
-        monkeypatch.setattr(sw, "_guard_hook_forced_nav",
-                            lambda win, stop: (lambda: removed.append(1)))
+        monkeypatch.setattr(sw, "_guard_verify_burst", fake_burst)
         assert _run(sw._guard_monitor_loop(_FakeWin(), "b", threading.Event(), True)) is True
-        assert removed == [1]  # finally 必须移除监听，避免叠加
 
     def test_stop_before_loop_returns_false(self, monkeypatch):
         stop = threading.Event()
         stop.set()
-        removed = []
-        monkeypatch.setattr(sw, "_guard_hook_forced_nav",
-                            lambda win, s: (lambda: removed.append(1)))
+
+        async def fake_burst(win, base, force, state):
+            return None
+
+        monkeypatch.setattr(sw, "_guard_verify_burst", fake_burst)
         assert _run(sw._guard_monitor_loop(_FakeWin(), "b", stop, True)) is False
-        assert removed == [1]
 
-    def test_no_hook_for_voluntary_login(self, monkeypatch):
-        hooked = []
+    def test_only_event_wake_sources_registered(self, monkeypatch):
+        """强制模式也只挂事件唤醒源，不得加回任何拉回钩子（自激源已除）。
 
-        async def fake_rebind(win, base):
-            return False
+        framenavigated/close 是**唤醒**事件（状态可能变化时才验证一次），
+        不是「离开登录页就 load_url 拉回」的触发源——后者已随 R-6.72 整体删除。
+        若有人新增第三个监听，说明绕道把拉回逻辑加回来了，此断言会失败。
+        """
+        events = []
 
-        async def fake_step(win, base, force, state):
-            return False
+        class _Page:
+            def on(self, event, cb):
+                events.append(event)
 
-        monkeypatch.setattr(sw, "_rebind_if_closed", fake_rebind)
-        monkeypatch.setattr(sw, "_guard_monitor_step", fake_step)
-        monkeypatch.setattr(sw, "_guard_hook_forced_nav",
-                            lambda win, stop: hooked.append(1))
+            def remove_listener(self, event, cb):
+                pass
+
+        class _Win(_FakeWin):
+            page = _Page()
+
+        async def fake_burst(win, base, force, state):
+            return None
+
+        monkeypatch.setattr(sw, "_guard_verify_burst", fake_burst)
         stop = threading.Event()
         stop.set()
-        assert _run(sw._guard_monitor_loop(_FakeWin(), "b", stop, False)) is False
-        assert hooked == []  # 主动重登不锁页面
+        _run(sw._guard_monitor_loop(_Win(), "b", stop, True))
+        assert sorted(events) == ["close", "framenavigated"]
+

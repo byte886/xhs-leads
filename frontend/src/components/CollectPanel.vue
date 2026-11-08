@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
 import { apiCollectClear, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { onAppEvent } from '../events'
@@ -8,6 +8,16 @@ import { isLoginAbnormal } from '../lib/auth'
 const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void }>()
 
 let timer: ReturnType<typeof setInterval> | null = null
+// R-6.72（用户口径）：采集进行中每 3s 主动问一次进度。
+// 事件推送是快速路径；轮询是保底——丢事件/断线时状态不会永远停在「正在采集」。
+let progressTimer: ReturnType<typeof setInterval> | null = null
+let progressInflight = false
+const PROGRESS_POLL_MS = 3000
+
+function stopProgressPolling() {
+  if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
+  progressInflight = false
+}
 
 const sortOptions = ['综合', '最新', '最多点赞', '最多评论', '最多收藏']
 const typeOptions = ['全部', '图文', '视频']
@@ -94,6 +104,7 @@ let offCollect: (() => void) | null = null
 /** 采集收尾（done / stopped / error 三态共用）：按钮复位 + 拉最终列表。 */
 async function finalizeCollect(pr: any) {
   if (timer) { clearInterval(timer); timer = null }
+  stopProgressPolling()  // R-6.72：终态（完成/停止/失败/需登录）立即停进度轮询
   appState.collecting = false
   if (pr.status === 'error') {
     appState.status = '失败'
@@ -163,7 +174,26 @@ function armProgressPolling(taskId: string) {
   })
   // 立即同步一次当前状态（挂载/重连的初始对齐，不是轮询）
   apiCollectProgress(taskId).then(handleCollectUpdate).catch(() => { /* 后端未就绪 */ })
+  // R-6.72（用户口径）：开始采集已「立刻返回 ack」，之后每 3s 主动问一次「现在采到哪了」。
+  // 事件推送仍是快速路径；轮询兜住丢事件/断线，避免按钮永远卡在「正在采集」。
+  stopProgressPolling()
+  progressTimer = setInterval(() => {
+    if (progressInflight) return
+    progressInflight = true
+    apiCollectProgress(taskId)
+      .then(handleCollectUpdate)
+      .catch(() => { /* 单次失败等下一次，不重试、不打断 */ })
+      .finally(() => { progressInflight = false })
+  }, PROGRESS_POLL_MS)
 }
+
+// R-6.72：组件卸载时清理全部定时器与订阅，避免计时/轮询在后台空转。
+onUnmounted(() => {
+  if (timer) { clearInterval(timer); timer = null }
+  stopProgressPolling()
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
+  if (offCollect) { offCollect(); offCollect = null }
+})
 
 // 任务式采集：开始采集 → 后台逐批提取（事件推送进度）→ 采满/平台不增长/用户停止后统一评分排序展示
 async function doCollect() {
@@ -178,6 +208,7 @@ async function doCollect() {
         appState.collecting = false
         appState.status = '空闲'
         if (timer) { clearInterval(timer); timer = null }
+        stopProgressPolling()
       }
     }
     return
@@ -206,6 +237,7 @@ async function doCollect() {
     armProgressPolling(r.task_id)
   } catch (e) {
     if (timer) { clearInterval(timer); timer = null }
+    stopProgressPolling()
     const msg = (e as Error).message
     toast(`启动采集失败：${msg}`, 'error')
     appState.status = '失败'

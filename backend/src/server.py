@@ -452,6 +452,12 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
     logged_in = has_ws and page_logged_in and not kicked
     if kicked or risk_verify:
         _LOGIN_INVALID = True
+    elif logged_in:
+        # R-6.72（用户口径：未登录就直说，不要等来等去）：实测已登录 → **立即**解除
+        # 失效记忆。旧实现只在 import_cookies 成功时复位，于是「用户已在引擎窗口
+        # 扫码成功、引擎 Cookie 与页面都有效」仍被判未登录，只能重启 app 才恢复——
+        # 表现为「扫了码左边还在等、点开始采集一直被拦」。
+        _LOGIN_INVALID = False
     final_logged_in = logged_in and not _LOGIN_INVALID
     result = _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in)
     _resolve_risk_if_valid(final_logged_in, kicked)
@@ -511,6 +517,12 @@ async def login_status():
                 "引擎 CDP 假死，已保持待恢复；下次操作将尝试恢复，无法恢复则强制重建"
             )
         result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
+        # R-6.72（用户口径「没登录就直接返回未登录」）：页面停在登录页 = 尚未登录、
+        # 等用户扫码，不是被平台踢出。对外状态统一成 not_logged_in，避免前端把
+        # 「还没扫码」显示成「账号被踢」，让用户误以为号废了。
+        if kicked and not risk_verify and await _engine_on_login_page(eng):
+            result = dict(result, status="not_logged_in", kicked=False)
+            result["raw"] = str(result.get("raw", "")) + "（页面停在登录页→按未登录）"
         await _login_status_store_cache(now, result, kicked, risk_verify, eng)
         return result
     except Exception as e:  # noqa: BLE001
@@ -659,7 +671,11 @@ async def _refresh_engine_after_inject(eng) -> None:
 
 
 def _mark_login_ok() -> None:
-    """登录验证通过后的统一收尾：解失效记忆、清登录门、唤醒续采、推事件。"""
+    """登录验证通过后的统一收尾：解失效记忆、清登录门、推事件。
+
+    R-6.72：**不唤醒、不续采**——采集早已改成「撞墙即收尾」，没有挂起等待的任务
+    可唤醒；这里只是把登录门复位并通知前端登录态已恢复。
+    """
     global _LOGIN_INVALID
     _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
     # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
@@ -805,57 +821,94 @@ class SearchReq(BaseModel):
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
     account_id: str = ""
 
-async def _require_real_login() -> dict:
-    """真实登录校验（采集/搜索前置，解决「纸面登录」空跑问题）。
+_REAL_LOGIN_TIMEOUT_S = 3.0
+
+
+async def _engine_on_login_page(eng) -> bool:
+    """R-6.72：引擎现成的小红书页是否停在登录页（只读 URL，不读 body，极轻）。
+
+    唯一用途是**区分文案语义**：页面停在 /login 是「还没登录（等扫码）」，
+    不是「被平台踢出」。两者在 `_engine_login_state` 里都表现为 kicked（
+    login_redirect 参与判定，防止 cookie 残留假阳性放行），但文案混用会让
+    用户误以为账号被封，与「没登录就直接返回未登录」的口径冲突。
+    """
+    try:
+        ctx = await eng.context()
+    except Exception:  # noqa: BLE001（引擎未就绪：不判，走原被踢文案）
+        return False
+    for p in ctx.pages:
+        u = p.url or ""
+        if p.is_closed() or "xiaohongshu" not in u:
+            continue
+        return _is_login_redirect_url(u)
+    return False
+
+
+async def _real_login_probe() -> dict:
+    """真实登录探针（无超时包装）：一次引擎 Cookie 读取 + 一次登录态判定。
 
     纸面登录态（本地 cookies.json 副本）≠ 引擎独立 profile 内真实会话有效：
     小红书 Cookie 有效期短（数小时~数天），副本可能「未过期」而真实会话早已失效，
     导致采集打开页面停在登录界面、一条都采不到。
 
-    校验链路（R 批 v1.4 改造版：登录态 100% 只依赖引擎独立 profile，不读系统 Chrome）：
-    ① 引擎 CDP（登录发生在引擎独立 profile 内，内存 Cookie 最实时）→ 有有效 web_session → OK；
-    ② 无 → 拦截，提示在 app 内登录小窗完成登录（扫码/手机号/微信途径不限）。
-
-    （方案 A/B「读系统/目标 Chrome Cookie 库自动续命」旧链路已随 R-6.34 收敛删除。）
+    R 批 v1.4：登录态 100% 只依赖引擎独立 profile，不读系统 Chrome
+    （方案 A/B「读系统/目标 Chrome Cookie 库自动续命」旧链路已随 R-6.34 收敛删除）。
     """
     from src import engine_pool
 
-    # ① 引擎 CDP：独立 profile 内存 Cookie 最实时（R 批唯一登录态来源）
-    try:
-        eng = await engine_pool.pool.get("default")
-        mem = await eng.read_cookies()
-        # R-6.7 口径对齐：id_token 为真实登录权威标志（与 login_status 的
-        # _engine_login_state 同判定），存在即放行——不依赖页面渲染（headless
-        # 偶发空白 → xhsIsLoggedIn 假阴性坑，登录态明明有效却被拦）。
-        # R-6.8 被踢覆盖：平台已踢（登录超限/请重新登录弹窗）但 id_token 残留 → 视为未登录，
-        # 走拦截引导重新登录（否则采集 403 与登录态判定的口径再次脱节）。
-        if any(c.get("name") == "id_token" for c in mem):
-            _, _, kicked, risk_verify = await _engine_login_state(eng)
-            # R-6.22e：风控拦截（需人工扫码/验证）时 id_token 残留且未被踢——会话在但被
-            # 平台风控拦，不得视为「真实登录有效」放行，须引导用户扫码验证。
-            if not kicked and not risk_verify:
-                return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP id_token）"}
-            if risk_verify:
-                return {
-                    "ok": False, "code": "risk_verify",
-                    "note": "账号被小红书风控拦截（Cookie 有效但需人工扫码/验证后重试），请在 app 内完成扫码验证",
-                }
+    eng = await engine_pool.pool.get("default")
+    mem = await eng.read_cookies()
+    # R-6.7 口径对齐：id_token 为真实登录权威标志（与 login_status 的
+    # _engine_login_state 同判定），存在即放行——不依赖页面渲染（headless
+    # 偶发空白 → xhsIsLoggedIn 假阴性坑，登录态明明有效却被拦）。
+    if any(c.get("name") == "id_token" for c in mem):
+        # R-6.72：这里禁止读页面正文。_engine_login_state 会扫 inner_text("body")，
+        # explore 瀑布流页上万节点，一次 >3s——把「点开始采集」本身变成新的墙
+        # （实测 collect_start 直接返回「登录校验超时」）。id_token 是登录权威标志，
+        # 只再读一个最轻的 URL 信号就够；真被踢/风控由采集撞墙兜底
+        # （BrowserLoginRequiredError → 前端提示重新登录）。
+        if await _engine_on_login_page(eng):
+            # R-6.72：页面停在登录页 = 尚未登录（等用户扫码），不是被平台踢出。
+            # 仍然拦住采集（页面在登录页确实采不到），但文案必须如实。
             return {
-                "ok": False, "code": "kicked",
-                "note": "登录已被平台踢出（登录超限/风控），请在 app 内重新登录后重试",
+                "ok": False, "code": "not_logged_in",
+                "note": "尚未登录小红书：右侧登录小窗当前停在登录页，请扫码登录后重试",
             }
-        if any(c.get("name") == "web_session" for c in mem):
-            r = await _verify_cookies_or_raise(mem, "default")
-            if r.get("logged_in"):
-                return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP）"}
-    except Exception as e:  # noqa: BLE001
-        log.warning("引擎 CDP 真实校验失败（走文件链路）: %s", e)
-
-    # ② 无有效登录态 → 拦截（R 批：不再读目标/日常 Chrome Cookie 库，登录走 app 内登录小窗）
+        return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（id_token）"}
+    if any(c.get("name") == "web_session" for c in mem):
+        r = await _verify_cookies_or_raise(mem, "default")
+        if r.get("logged_in"):
+            return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP）"}
     return {
         "ok": False, "code": "not_logged_in",
         "note": "独立 profile 无有效小红书登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）",
     }
+
+
+async def _require_real_login() -> dict:
+    """真实登录校验（采集/搜索前置）：**一问一答 + 硬超时**，绝不把用户拖进「等待」。
+
+    R-6.72（用户拍板：守护会造成不可控局面，完全抛弃）：
+    超时就超时，给提示让用户重试；不做后台等待、不自动续采、不自动拉回。
+    引擎页面卡死（CDP 无响应）时旧实现会让「点开始采集」卡在这里几十秒——
+    正是用户看到的「左边一直在等待」。现在整体 3s 上限，超时按未登录返回。
+    """
+    try:
+        return await asyncio.wait_for(_real_login_probe(), timeout=_REAL_LOGIN_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("真实登录校验超时（%.1fs），按未登录返回", _REAL_LOGIN_TIMEOUT_S)
+        return {
+            "ok": False, "code": "timeout",
+            "note": f"登录校验超时（引擎 {_REAL_LOGIN_TIMEOUT_S:.0f}s 内无响应），请稍后重试；"
+                    "若反复出现请在 app 内重新登录",
+        }
+    except Exception as e:  # noqa: BLE001
+        log.warning("引擎 CDP 真实校验失败（按未登录返回）: %s", e)
+        return {
+            "ok": False, "code": "not_logged_in",
+            "note": "独立 profile 无有效小红书登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）",
+        }
+
 
 
 def _check_license_or_raise(feature: str) -> None:
@@ -1393,11 +1446,12 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
 
 @_log.tagged("worker:collect")
 async def _collect_worker(state: dict, req, account_id: str) -> None:
-    """采集 worker：多轮「搜索 → 逐条补全入库」，撞墙暂停等登录后自动续采。
+    """采集 worker：多轮「搜索 → 逐条补全入库」。
 
     R-6.53z 流式流水线：采满 limit 自动完成，停止时结果=已入库条数。
-    R-6.53z8c：撞到登录墙不再当 error 退出——任务转为 paused_need_login 挂起等待，
-    扫码成功后从断点（已入库 feed_id）续采，用户不在时超时转部分完成。
+    R-6.72（用户拍板：完全抛弃守护与等待）：撞到登录墙**立即收尾**——已入库部分
+    按条数完成、状态 ended_need_login 并提示用户重新登录后重试；不挂起、不等待
+    扫码、不自动续采、不自动导航/拉回。用户想继续就再点一次「开始采集」。
     """
     con = None
     try:

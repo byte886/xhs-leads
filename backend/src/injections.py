@@ -121,15 +121,24 @@ _register(
 _COLLECT_DEBUG_TITLE_JS = """(() => {
     const T = 'XHS Leads · 采集调试窗口';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.48i：事件级守护替代 setInterval 轮询（用户拍板：守护循环不科学、有可见
-    // 中间态）——页面脚本/SPA 一改 title 立即改回，微任务级无闪烁。
-    // 锚点必须是 document：documentElement/head 在 document 创建极早期可能为 null，
-    // observe(null) 抛 TypeError 会中断 IIFE 导致 observer 从未挂载（实测坑）。
-    // document.subtree 覆盖 title 元素增删/文本变化（SPA 重建 head/title 均捕捉）。
-    const obs = new MutationObserver(() => setT());
-    obs.observe(document, { childList: true, characterData: true, subtree: true });
+    // R-6.72（用户拍板「守护整套不要」）：旧做法 observe(document,
+    // {childList,characterData,subtree}) 观察**整棵文档树**——小红书瀑布流每秒上百次
+    // DOM 变动（卡片加载/动画/计数刷新），每次变动都挤一次回调进渲染主线程，实测把
+    // 主线程打到 100%+，CDP evaluate 排队超时（inject.run/inject.mark 3s 超时）→
+    // 注入失败 → 采集 0 条，并最终拖垮浏览器。
+    // 改为拦截 document.title 赋值：零 DOM 观察、零轮询，页面一写标题就被换成 T。
+    try {
+        const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
+        if (d && d.get && d.set && d.configurable) {
+            Object.defineProperty(Document.prototype, 'title', {
+                configurable: true, enumerable: d.enumerable,
+                get() { return d.get.call(this); },
+                set() { d.set.call(this, T); },
+            });
+        }
+    } catch (e) {}
     setT();
-    document.addEventListener('DOMContentLoaded', () => setT());
+    document.addEventListener('DOMContentLoaded', setT);
 })()"""
 _register(
     "collect_debug_title",
@@ -147,10 +156,20 @@ _register(
 _ACCOUNT_TITLE_JS = """(() => {
     const T = '__LABEL__';
     const setT = () => { if (document.title !== T) document.title = T; };
-    const obs = new MutationObserver(() => setT());
-    obs.observe(document, { childList: true, characterData: true, subtree: true });
+    // R-6.72：与 collect_debug_title 同一改法——观察整棵 document 在上述瀑布流页面上
+    // 是主线程 CPU 杀手（每个 DOM 微变一次回调）。改为拦截 title 赋值，零观察。
+    try {
+        const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
+        if (d && d.get && d.set && d.configurable) {
+            Object.defineProperty(Document.prototype, 'title', {
+                configurable: true, enumerable: d.enumerable,
+                get() { return d.get.call(this); },
+                set() { d.set.call(this, T); },
+            });
+        }
+    } catch (e) {}
     setT();
-    document.addEventListener('DOMContentLoaded', () => setT());
+    document.addEventListener('DOMContentLoaded', setT);
 })()"""
 _register(
     "account_window_title",
@@ -167,13 +186,20 @@ _register(
 _SHELL_TITLE_JS = """(() => {
     const T = 'XHS Leads · 小红书获客助手';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.48i：事件级守护替代 setInterval 轮询（同 collect_debug_title）。
-    // 锚点必须是 document（documentElement/head 早期可能为 null，observe(null)
-    // 抛 TypeError 中断 IIFE → observer 从未挂载，实测坑）。
-    const obs = new MutationObserver(() => setT());
-    obs.observe(document, { childList: true, characterData: true, subtree: true });
+    // R-6.72：同 collect_debug_title——整棵 document 的 MutationObserver 是主线程 CPU
+    // 杀手，壳窗虽轻也统一改成零观察的 title 赋值拦截。
+    try {
+        const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
+        if (d && d.get && d.set && d.configurable) {
+            Object.defineProperty(Document.prototype, 'title', {
+                configurable: true, enumerable: d.enumerable,
+                get() { return d.get.call(this); },
+                set() { d.set.call(this, T); },
+            });
+        }
+    } catch (e) {}
     setT();
-    document.addEventListener('DOMContentLoaded', () => setT());
+    document.addEventListener('DOMContentLoaded', setT);
 })()"""
 _register(
     "shell_title",
