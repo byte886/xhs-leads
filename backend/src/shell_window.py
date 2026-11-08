@@ -60,8 +60,10 @@ async def open_collect_window(
 
     双窗口形态：窗口一=APP/登录（壳窗口应用模式，keep_shell_tab 监护固定不可关）；
     窗口二=采集（应用模式独立 CFT 窗口，同引擎同 profile —— 登录态/Cookie 完全
-    共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关，被手动关闭时按
-    开关状态由 keep_shell_tab 事件监护重建。
+    共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关。
+    R-6.73 用户拍板（方案 A）：窗口二被手动关闭后**不自动重建**，且关窗即中断本次
+    采集；要接着采就重新点「开始采集」——collect_start 走 engine.new_page() 天然
+    会新建一页。
 
     应用模式实现：Chrome 无「为既有 target 创建 app 窗口」API，window.open 只能
     开普通窗口（带地址栏/标签条）。采用**命令行路由**：向已运行的引擎实例
@@ -239,7 +241,7 @@ class WindowCoordinator:
     - guard（login_guard）与 engine_pool.cleanup_tabs 是**读取方**：shell()/collect_win()
       判活取引用，不再各自遍历 ctx.pages 找窗口（窗口竞态/震荡的历史根源）；
     - 引用失效：page 关闭后判活返回 None，由 keeper 按需重建/重新登记；
-    - 命令式方法：navigate_collect_win / close_orphan_explore。
+    - 命令式方法：navigate_collect_win。
     """
 
     def __init__(self):
@@ -447,30 +449,6 @@ class WindowCoordinator:
         if t2 is None:
             return
         await t2.goto(url, wait_until="domcontentloaded", timeout=timeout)
-
-
-def _is_orphan_explore_url(u: str) -> bool:
-    """R-6.37i：URL 是否孤儿 explore 页（小红书域且非 /login）。"""
-    return "xiaohongshu.com" in u and "/login" not in u
-
-
-async def _close_if_orphan_explore(p, shell, t2) -> None:
-    """R-6.37i 拆自 close_orphan_explore：单页若为孤儿 explore 则关闭（壳/采集窗 保留）。"""
-    if p is shell or p is t2 or p.is_closed():
-        return
-    if _is_orphan_explore_url(p.url or ""):
-        try:
-            await p.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-    async def close_orphan_explore(self, ctx) -> None:
-        """未登录时关闭孤儿 explore 判定页（login_status 轮询可能新开）；
-        壳窗与 采集窗 引用无条件保留。"""
-        shell, t2 = self.shell(), self.collect_win()
-        for p in list(ctx.pages):
-            await _close_if_orphan_explore(p, shell, t2)
 
 
 _COORD: WindowCoordinator | None = None
