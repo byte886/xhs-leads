@@ -1,3 +1,12 @@
 # CC baseline for quality-gates/tools/check_cc.sh
 # rows below are accepted debt; delete a row as soon as that function is split.
 # rule: new over-8 function, or a listed one getting worse, fails the gate.
+# R-6.75 首次登记（crapper 口径实测，2026-11-08）。只许减不许增：
+# 拆空一行就立刻删掉该行，此后该函数即受 ≤8 硬拦。
+server.collect_clients 14
+login_session.LoginSession._run 13
+server.accounts_refresh_identity 11
+browser_client.clients 10
+engine_pool.AccountEngine._place_account_window 10
+engine_window.set_window 10
+collect_pipeline._merge_detail_core 9

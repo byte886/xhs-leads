@@ -17,14 +17,20 @@
         阈值: "R-6.37g 实测：server 79% / engine_pool 45% / collect_pipeline 以实测为准"
       非核心登记:
         模块: [shell_window, mirror, browser_client]
-        阈值: "可达值阈值（R-6.37g 实测）：shell_window 19% / mirror 82% / browser_client 27%；
-          不低于本实测值即放行"
-        豁免理由: "重度 GUI/Playwright 运行时依赖，单测不可达；由 scripts/ui_tests 套件
-          在真实浏览器上守护行为（G1-G7 门），此处按可达值阈值登记"
+        阈值: "可达值阈值：shell_window 60%（R-6.74 实测，此前 19%）/ mirror 82% /
+          browser_client 27%；不低于本实测值即放行"
+        豁免理由: "重度 GUI/Playwright 运行时依赖，剩余 40% 集中在 ensure_shell、
+          _guard_monitor_loop、_keeper_rebuild_shell、keep_shell_tab 等长事件循环路径，
+          单测不可达；由 scripts/ui_tests t12/t13/t14 在真实浏览器上守护行为"
       其余模块: { 阈值: "≥60%", 说明: "config/logger/score/risk/license/injections/intent/jsonio/llm_service" }
   变异测试:
-    when: merge
+    when: optional
     存活变异体: { 阈值: "=0", 说明: "等价变异体人工登记后豁免（EQUIVALENT-MUTANTS.md）" }
+    不适用理由: "R-6.75 实测（2026-11-08）：全项目 1579 个变异站点，单轮全量测试
+      19.2s → 单轮变异约 8.8 小时（单机）。本项目历史 bug 绝大多数是行为回归
+      （采集链路、窗口状态、登录态），由 scripts/ui_tests t01-t14 在真实浏览器上
+      守护；分支级变异的边际收益低于成本，故不进 CI。需要时本地按改动范围收窄：
+      <GAUNTLET>/tooling/vendor/mutator/mutator -s backend/src --changed"
   架构依赖:
     when: merge
     依赖违规: { 阈值: "=0", 说明: "契约见 backend/pyproject.toml [tool.importlinter]" }

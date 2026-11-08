@@ -1,0 +1,56 @@
+# 质量门禁 CI — 基线来源：clean-code-gauntlet skill
+# 本地等价命令：bash <GAUNTLET_DIR>/tooling/bin/quality-check.sh --stage commit
+#                    (cd backend && lint-imports)
+name: quality-gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-commit-gate:
+    name: commit 门（CRAP/CC + 覆盖率）+ 架构契约
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 装后端测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov pytest-timeout coverage import-linter \
+            playwright fastapi httpx "pydantic>=2" uvicorn starlette anyio
+
+      # skill 硬规矩：工具 vendor 必须放在项目外（放项目内会被 crapper 当源码扫描）。
+      # 本地用技能目录的 tooling/vendor；CI 用 $RUNNER_TEMP/gauntlet。
+      # 这里只取 commit/merge 门真正用到的 crapper，不装全 7 件套（其余维度的工具
+      # 由本地按需安装，避免每次 CI 多花几分钟克隆用不上的仓库）。
+      - name: 取质量工具链
+        run: |
+          GAUNTLET="$RUNNER_TEMP/gauntlet"
+          git clone --depth 1 https://github.com/byte886/clean-code-gauntlet.git "$GAUNTLET"
+          git clone --depth 1 --branch master https://github.com/unclebob/crapper.git \
+                    "$GAUNTLET/tooling/vendor/crapper"
+          echo "GAUNTLET_DIR=$GAUNTLET" >> "$GITHUB_ENV"
+
+      - name: commit 门（圈复杂度 ≤8 且 CRAP<30，覆盖率 ≥60%）
+        run: bash "$GAUNTLET_DIR/tooling/bin/quality-check.sh" --stage commit
+
+      - name: merge 门 · 架构契约（依赖违规=0、循环依赖=0）
+        run: (cd backend && lint-imports)
+
+# 变异测试刻意不在 CI 跑：全项目 1579 个变异站点，每个站点要跑一轮完整测试
+# （单轮 19s），合计约 8.8 小时/轮（实测 2026-11-08，见 gates.yaml「变异测试」条目）。
+# 需要时本地按需执行，按改动范围收窄：
+#   <GAUNTLET>/tooling/vendor/mutator/mutator -s backend/src --changed

@@ -13,13 +13,13 @@ mutation_tool: mutator
 mutation_cmd: <GAUNTLET_DIR>/tooling/vendor/mutator/mutator -s backend/src
 
 coverage_tool: coverage.py
-coverage_install: backend/.venv/bin/python（已装 pytest+coverage）
-coverage_cmd: (cd backend && ../backend/.venv/bin/python -m coverage run -m pytest -q && ../backend/.venv/bin/python -m coverage report --fail-under=60)
+coverage_install: backend/.venv/bin/python（已装 pytest+coverage）；CI 用 setup-python 的 python3
+coverage_cmd: (cd backend && if [ -x ../backend/.venv/bin/python ]; then PY=../backend/.venv/bin/python; else PY=python3; fi; $PY -m coverage run -m pytest -q && $PY -m coverage report --fail-under=60)
 
 architecture_tool: import-linter
-architecture_install: backend/.venv 已装 importlinter
+architecture_install: backend/.venv 已装 importlinter；CI 由 pip 装到 PATH
 architecture_config: backend/pyproject.toml  # [tool.importlinter]
-architecture_cmd: (cd backend && ../backend/.venv/bin/lint-imports)
+architecture_cmd: (cd backend && if [ -x ../backend/.venv/bin/lint-imports ]; then ../backend/.venv/bin/lint-imports; else lint-imports; fi)
 
 dry_tool: dryer
 dry_cmd: <GAUNTLET_DIR>/tooling/vendor/dryer/dryer --edn backend/src
