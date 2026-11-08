@@ -29,8 +29,13 @@ jobs:
       - name: 装后端测试依赖
         run: |
           python -m pip install --upgrade pip
+          # 只列测试链路真正用到的（源码/测试的第三方 import 实测：
+          # fastapi / httpx / pydantic / playwright）。python-multipart 是
+          # FastAPI Form/UploadFile 的解析依赖，缺了会让 20 个测试 collection 报错。
+          # 刻意不装 pyobjc / pyinstaller / pywebview 等 macOS 打包与 GUI 运行时专用包。
           pip install pytest pytest-cov pytest-timeout coverage import-linter \
-            playwright fastapi httpx "pydantic>=2" uvicorn starlette anyio
+            fastapi httpx "pydantic>=2" playwright python-multipart \
+            uvicorn starlette anyio cryptography
 
       # skill 硬规矩：工具 vendor 必须放在项目外（放项目内会被 crapper 当源码扫描）。
       # 本地用技能目录的 tooling/vendor；CI 用 $RUNNER_TEMP/gauntlet。
