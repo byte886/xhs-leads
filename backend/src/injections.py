@@ -265,7 +265,11 @@ def decide_block(hits_panel: bool, hits_mask: bool) -> bool:
 
 _FORCE_LOGIN_JS = (
     "(function(){"
-    "if(window.__xhs_leads_lock_ok)return;window.__xhs_leads_lock_ok=true;"
+    "if(window.__xhs_leads_lock_ok)return;"
+    # 域名守卫：context.add_init_script 会作用于同 context 所有页面（含 127.0.0.1 壳窗前端），
+    # 非小红书页面直接退出，避免拦截壳窗自身点击（R-6.68 回归修复）。
+    "if(!/(^|\\.)xiaohongshu\\.com$/.test(location.hostname))return;"
+    "window.__xhs_leads_lock_ok=true;"
     "function ensureStyle(){"
     "if(document.head&&!document.querySelector('#xhs-leads-lock')){"
     "var st=document.createElement('style');st.id='xhs-leads-lock';"

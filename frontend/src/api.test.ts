@@ -53,6 +53,10 @@ describe('api 端点契约（表驱动）', () => {
     ['apiClone', '/api/clone', 'POST', () => api.apiClone('f1')],
     ['apiLogs', '/api/publish_logs', 'GET', () => api.apiLogs()],
     ['apiMirrorOpen', '/api/mirror/open', 'POST', () => api.apiMirrorOpen()],
+    ['apiMirrorClose', '/api/mirror/close', 'POST', () => api.apiMirrorClose('acc_a')],
+    ['apiListAccounts', '/api/accounts', 'GET', () => api.apiListAccounts()],
+    ['apiAddAccount', '/api/accounts', 'POST', () => api.apiAddAccount()],
+    ['apiDeleteAccount', '/api/accounts/acc_a', 'DELETE', () => api.apiDeleteAccount('acc_a')],
     ['apiGetAppConfig', '/api/app_config', 'GET', () => api.apiGetAppConfig()],
     ['apiStatusNow', '/api/status_now', 'GET', () => api.apiStatusNow()],
     ['apiCleanupImages', '/api/cleanup_images', 'POST', () => api.apiCleanupImages()],
@@ -105,5 +109,56 @@ describe('api 请求体映射契约', () => {
     await api.apiAiGenerate('改写', { a: 'b' })
     expect(u).toBe('/api/ai_generate')
     expect(body).toMatchObject({ action: '改写', note: { a: 'b' } })
+  })
+})
+
+describe('账号管理 API 契约', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('apiAddAccount：POST body 带 account_id 与 role', async () => {
+    let body: any = null
+    mockFetch(async (_u, init) => {
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true, account_id: 'acc_a' })
+    })
+    const r = await api.apiAddAccount('acc_a', 'mixed')
+    expect(body).toEqual({ account_id: 'acc_a', role: 'mixed' })
+    expect(r.account_id).toBe('acc_a')
+  })
+
+  it('apiAddAccount：留空时 account_id 为空字符串（后端自动生成）', async () => {
+    let body: any = null
+    mockFetch(async (_u, init) => {
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true })
+    })
+    await api.apiAddAccount()
+    expect(body).toEqual({ account_id: '', role: 'mixed' })
+  })
+
+  it('apiDeleteAccount：account_id 进路径且编码', async () => {
+    let u = ''
+    mockFetch(async (uu) => { u = String(uu); return okRes({ ok: true }) })
+    await api.apiDeleteAccount('my-acc_1')
+    expect(u).toBe('/api/accounts/my-acc_1')
+  })
+
+  it('apiMirrorClose：account_id 进 query 且编码', async () => {
+    let u = ''
+    mockFetch(async (uu) => { u = String(uu); return okRes({ ok: true }) })
+    await api.apiMirrorClose('a b')
+    expect(u).toContain('/api/mirror/close?account_id=a%20b')
+  })
+
+  it('apiListAccounts：解包 accounts 与 port_map', async () => {
+    mockFetch(async () => okRes({
+      accounts: [{ account_id: 'default', running: true, headless: false }],
+      port_map: { default: 9223 },
+      active: 'default',
+    }))
+    const r = await api.apiListAccounts()
+    expect(r.accounts).toHaveLength(1)
+    expect(r.port_map.default).toBe(9223)
+    expect(r.active).toBe('default')
   })
 })

@@ -6,10 +6,12 @@ import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
   apiLicenseStatus, apiLicenseActivate,
-  apiMirrorWindow,
+  apiMirrorWindow, apiMirrorOpen, apiMirrorClose,
   apiLoginStatus, apiLoginBegin,
   apiGetAppConfig, apiSetAppConfig,
+  apiListAccounts, apiAddAccount, apiDeleteAccount,
 } from '../api'
+import type { AccountItem } from '../types'
 
 // ---- 左侧分类导航 ----
 const cats = [
@@ -52,6 +54,93 @@ async function relogin() {
     }
   } catch (e) {
     toast('重新登录失败：' + (e as Error).message, 'error')
+  }
+}
+
+// ---- 多账号管理 ----
+const accounts = ref<AccountItem[]>([])
+const acctBusy = ref(false)
+const newAcctId = ref('')
+
+async function loadAccounts() {
+  try {
+    const r = await apiListAccounts()
+    accounts.value = r.accounts
+  } catch (e) {
+    toast('账号列表加载失败：' + (e as Error).message, 'error')
+  }
+}
+
+async function addAccountFn() {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiAddAccount(newAcctId.value.trim())
+    if (!r.ok) {
+      toast(r.error || '新增失败', 'error')
+      return
+    }
+    toast(`已新增账号 ${r.account_id}（CDP 端口 ${r.debug_port}）`)
+    newAcctId.value = ''
+    await loadAccounts()
+  } catch (e) {
+    toast('新增失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
+async function removeAccountFn(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiDeleteAccount(aid)
+    if (!r.ok) {
+      toast(r.error || '删除失败', 'error')
+      return
+    }
+    toast(r.note || '已删除')
+    await loadAccounts()
+  } catch (e) {
+    toast('删除失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
+async function openAccountFn(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiMirrorOpen(aid)
+    if (!r.ok) {
+      toast(r.error || '开窗失败', 'error')
+      return
+    }
+    toast(`已打开账号 ${aid}，未登录可在窗口扫码`)
+    await loadAccounts()
+  } catch (e) {
+    toast('开窗失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
+async function closeAccountFn(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiMirrorClose(aid)
+    if (!r.ok) {
+      toast(r.error || '收窗失败', 'error')
+      return
+    }
+    toast(r.note || '已收起')
+    await loadAccounts()
+  } catch (e) {
+    toast('收窗失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
   }
 }
 
@@ -242,7 +331,7 @@ async function savePersona() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadPersona(), loadLicense(), loadAcct(), loadAppCfg()])
+  await Promise.all([loadAi(), loadPersona(), loadLicense(), loadAcct(), loadAppCfg(), loadAccounts()])
   fillAiForm()
 })
 </script>
@@ -276,6 +365,66 @@ onMounted(async () => {
             <p class="set-hint">
               「重新登录」是唯一主动入口：进入小红书官方登录页（右上角「✕」可关闭，登录态不变）。
               未登录 / 被踢 / 采集异常时，APP 会自动弹出强制登录对话框（不可关闭）。
+            </p>
+          </div>
+
+          <!-- 多账号管理 -->
+          <div class="set-row">
+            <div class="row-main">
+              <span class="row-label">账号管理（{{ accounts.length }}）</span>
+              <span class="cur-val">每个账号独立进程 / profile / 登录态 / CDP 端口</span>
+            </div>
+
+            <div class="acct-list">
+              <div v-for="a in accounts" :key="a.account_id" class="acct-item">
+                <div class="acct-meta">
+                  <span class="acct-id">{{ a.account_id }}</span>
+                  <span class="tag-pill" :class="{ run: a.running }">
+                    {{ a.running ? '运行中' : '已停止' }}
+                  </span>
+                  <span v-if="a.running" class="tag-pill" :class="{ hl: !a.headless }">
+                    {{ a.headless ? '无头' : '有头' }}
+                  </span>
+                  <span class="port-pill">CDP {{ a.debug_port ?? '—' }}</span>
+                </div>
+                <div class="acct-ops">
+                  <button
+                    v-if="!a.running"
+                    class="btn sm"
+                    :disabled="acctBusy"
+                    @click="openAccountFn(a.account_id)"
+                  >开窗</button>
+                  <button
+                    v-else
+                    class="btn sm"
+                    :disabled="acctBusy || a.account_id === 'default'"
+                    :title="a.account_id === 'default' ? '主账号承载 APP 壳窗，不可收起' : ''"
+                    @click="closeAccountFn(a.account_id)"
+                  >收窗</button>
+                  <button
+                    v-if="a.account_id !== 'default'"
+                    class="btn danger sm"
+                    :disabled="acctBusy"
+                    @click="removeAccountFn(a.account_id)"
+                  >删除</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="add-acct">
+              <input
+                v-model="newAcctId"
+                class="acct-name-input"
+                placeholder="留空自动生成；自定义仅小写字母/数字/_-，≤32 字符"
+                @keyup.enter="addAccountFn"
+              />
+              <button class="btn primary sm" :disabled="acctBusy" @click="addAccountFn">
+                新增账号
+              </button>
+            </div>
+            <p class="set-hint">
+              新增账号默认独立 profile；开窗后未登录可扫码，登录成功会自动切无头常驻。
+              删除会把 profile 移入回收区（可回滚），不直接清除登录态。
             </p>
           </div>
         </section>
@@ -496,6 +645,32 @@ input:not([type="checkbox"]) {
   padding: 4px 12px; border-radius: 999px; background: #fdf0ef;
 }
 .acct-status.on { color: #1a7f4c; background: #eaf7ef; }
+
+/* 多账号列表 */
+.acct-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.acct-item {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--line, #ececec); border-radius: 10px;
+  padding: 10px 12px; background: #fafafa;
+}
+.acct-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acct-id { font-size: 13px; font-weight: 700; color: #333; min-width: 72px; }
+.tag-pill {
+  font-size: 11px; font-weight: 600; color: #888;
+  padding: 2px 9px; border-radius: 999px; background: #eee;
+}
+.tag-pill.run { color: #1a7f4c; background: #eaf7ef; }
+.tag-pill.hl { color: #b45409; background: #fdf2e2; }
+.port-pill {
+  font-size: 11px; color: #666; font-family: ui-monospace, Menlo, monospace;
+  background: #f0f0f3; padding: 2px 8px; border-radius: 6px;
+}
+.acct-ops { display: flex; gap: 6px; }
+.add-acct {
+  display: flex; gap: 8px; margin-top: 12px; align-items: center;
+}
+.acct-name-input { flex: 1; margin-top: 0 !important; }
 .set-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .import-result { font-size: 12px; color: #1a7f4c; margin: auto 0 0 4px; }
 .limit { color: #b08a4d; font-weight: 500; font-size: 12px; }

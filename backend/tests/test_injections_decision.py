@@ -64,6 +64,14 @@ class TestForceLoginSelectors:
         # 若 JS 里出现硬编码但常量已改，旧值残留说明生成未插值（漂移信号）
         assert ", '.container," not in js  # 常量 CSV 以常量拼接，不应出现游离旧写法
 
+    def test_domain_guard_embedded(self):
+        """R-6.68：force_login 必须含域名守卫，非小红书页面不安装拦截（防壳窗点击被拦）。"""
+        js = injections.get("force_login")
+        assert r"xiaohongshu\.com" in js
+        assert "location.hostname" in js
+        # 守卫必须在设置幂等标记之前生效（非小红书页面不留下任何副作用）
+        assert js.index("location.hostname") < js.index("__xhs_leads_lock_ok=true")
+
 
 class TestLoginFitSelectors:
     """login_fit 并入常量表（R-6.48n）：querySelector 插值常量；CSS 类名防漂移。"""

@@ -141,3 +141,23 @@ export interface LicenseStatus {
   has_activation: boolean
   activated_at: string | null
 }
+
+/** 账号注册表项（GET /api/accounts 的每一项） */
+export interface AccountItem {
+  account_id: string
+  role: string
+  status: string
+  debug_port: number | null
+  user_data_dir: string
+  cookie_expires_at?: string | number | null
+  /** 引擎是否在运行 */
+  running: boolean
+  /** 当前是否无头 */
+  headless: boolean
+}
+
+export interface AccountListResp {
+  accounts: AccountItem[]
+  port_map: Record<string, number>
+  active: string
+}

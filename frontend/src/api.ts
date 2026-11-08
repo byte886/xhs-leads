@@ -1,4 +1,4 @@
-import type { Author, ClientUser, ClientsAgg, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams } from './types'
+import type { AccountItem, AccountListResp, Author, ClientUser, ClientsAgg, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams } from './types'
 
 const BASE = ''
 
@@ -166,7 +166,7 @@ export async function apiPublishStatsSync(): Promise<{
 
 // ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----
 /** 登录小窗/调试视图打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪） */
-export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string }> {
+export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string; note?: string; error?: string }> {
   return j(await fetch(`${BASE}/api/mirror/open?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
 }
 
@@ -177,6 +177,32 @@ export async function apiMirrorWindow(on: boolean, account = 'default'): Promise
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ on, account_id: account }),
   }))
+}
+
+/** 收起账号引擎（R-6.60）：关闭引擎、释放 CDP 端口；default 不可收 */
+export async function apiMirrorClose(account: string): Promise<{ ok: boolean; note?: string; error?: string }> {
+  return j(await fetch(`${BASE}/api/mirror/close?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
+}
+
+// ---- 账号注册表管理（R-6.61 / 账号管理界面） ----
+export async function apiListAccounts(): Promise<AccountListResp> {
+  return j(await fetch(`${BASE}/api/accounts`))
+}
+
+export async function apiAddAccount(accountId = '', role = 'mixed'): Promise<{
+  ok: boolean; account_id?: string; debug_port?: number; user_data_dir?: string; error?: string
+}> {
+  return j(await fetch(`${BASE}/api/accounts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, role }),
+  }))
+}
+
+export async function apiDeleteAccount(accountId: string): Promise<{
+  ok: boolean; note?: string; error?: string
+}> {
+  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }))
 }
 
 /** R-6.18 双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
