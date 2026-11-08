@@ -1208,10 +1208,42 @@ def _finalize_stopped(state: dict, req, account_id: str) -> None:
     取消时无需再批量抢救——「采集多少、处理多少、进入列表多少」恒等（所见即所得）；
     未处理的候选（含 search 已提取但未评分入库的）按用户口径不进入结果。
     """
+    abort_note = state.get("abort_note")
+    if abort_note:
+        # R-6.72：用户关掉采集窗这类「外部原因中断」有自己的文案，不能被覆盖成
+        # 「已停止：采集到 N 条」——否则用户会以为自己点了停止。
+        state["status"] = "stopped"
+        state["note"] = abort_note
+        state["phase"] = "done"
+        return
     processed = state.get("saved", 0)
     state["status"] = "stopped"
     state["note"] = f"已停止：采集到 {processed} 条" if processed else "已停止（未采到结果）"
     state["phase"] = "done"
+
+
+def abort_collect_on_window_close() -> int:
+    """R-6.72：采集窗口被用户关闭 → 中止进行中的任务，并明确告知需重新采集。
+
+    用户拍板口径：关掉的窗**不再自动重建**（自动重开窗口本身就是「守护」行为，
+    与「完全抛弃守护、一问一答」冲突）。关窗即等于本次采集中断；要接着采就重新
+    点「开始采集」——collect_start 经 _page → engine.new_page()，天然会新建一页。
+
+    返回值：被中止的任务数（0 表示当时没有任务在跑）。
+    """
+    hit = 0
+    for st in list(_COLLECT_TASKS.values()):
+        if st.get("status") != "running":
+            continue
+        st["abort_note"] = "采集窗口已关闭，本次采集中断，请重新开始采集"
+        st["stop_event"] = True
+        task = st.get("task")
+        if task and not task.done():
+            task.cancel()
+        hit += 1
+    if hit:
+        log.info("采集窗口被关闭：已中止 %d 个进行中的采集任务", hit)
+    return hit
 
 
 def _collect_orphans() -> tuple[list, set]:

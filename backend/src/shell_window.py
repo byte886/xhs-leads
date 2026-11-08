@@ -359,8 +359,10 @@ class WindowCoordinator:
         if self._stop is not None and self._stop.is_set():
             return
         if not is_shell:
-            log.info("右侧调试窗被关闭（应用保持运行，按需重建）")
-            self._schedule_collect_win_rebuild()
+            # R-6.72 用户拍板（方案 A）：关窗不自动重建，且关窗即中断本次采集。
+            # 自动把窗口开回来本身属于「守护」行为，与「完全抛弃守护、一问一答」冲突。
+            log.info("右侧调试窗被关闭（不自动重建；关窗即中断本次采集，需重新点「开始采集」）")
+            self._abort_collect_on_win_close()
             return
         # R-6.53c：引擎崩溃时壳窗 close 事件随引擎进程死亡触发，不能立即退出——
         # 延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
@@ -377,50 +379,21 @@ class WindowCoordinator:
             pass
 
 
-    def _collect_win_should_rebuild(self) -> bool:
-        """右窗关闭后是否重建：登录流程进行中视为「用户取消登录」，不重建。"""
+    def _abort_collect_on_win_close(self) -> None:
+        """R-6.72：右窗被关闭 → 中止本次采集，且绝不自动重建。
+
+        用户拍板（方案 A）：关掉的窗不再偷偷重开——自动重建属于「守护」行为，
+        与「完全抛弃守护、一问一答」冲突。关窗即本次采集中断；要接着采重新点
+        「开始采集」即可（collect_start 经 _page → engine.new_page() 天然新建一页）。
+        """
         try:
             from src import server as _server  # noqa: PLC0415（延迟导入规避循环依赖）
-
-            return not bool(_server._LOGIN_GATE.get("pending"))
-        except Exception:  # noqa: BLE001（状态源不可用：按需要重建处理）
-            return True
-
-    def _schedule_collect_win_rebuild(self) -> None:
-        """右窗关闭后的重建调度（一次性定时，不是周期轮询）。
-
-        采集中 → 立即重建（采集不能没有窗口）；空闲 → 15s 后重建（用户口径
-        「关掉了左边也能打开它」，留出误关的反悔窗口）。
-        """
-        if self._loop is None or not self._collect_win_should_rebuild():
-            return
-        delay = 0.0 if _server_has_running_collect() else 15.0
-        try:
-            self._loop.call_later(delay, lambda: asyncio.ensure_future(self._rebuild_collect_win_once()))
-        except Exception:  # noqa: BLE001（loop 关闭中：不重建）
-            pass
-
-    @xlog.tagged("win:collect:rebuild")
-    async def _rebuild_collect_win_once(self) -> None:
-        """真正重建右窗：已存在则跳过（15s 窗口内用户可能已手动开回来）。"""
-        if self._stop is not None and self._stop.is_set():
-            return
-        if self.collect_win() is not None:
+        except Exception:  # noqa: BLE001（状态源不可用：应用继续运行，不强求）
             return
         try:
-            from src import config, engine_pool  # noqa: PLC0415
-
-            eng = await engine_pool.pool.get("default")
-            ctx = await eng.context()
-            p = await ctx.new_page()
-            self.register_collect_win(p)
-            self.watch(p, is_shell=False)
-            _watch_collect_win_login(p)
-            url = await _keeper_collect_target_url(config, engine_pool)
-            await p.goto(url, wait_until="domcontentloaded", timeout=8000)
-            log.info(f"右侧调试窗已重建（{url}）")
-        except Exception as e:  # noqa: BLE001（重建失败下次关闭事件再试，不做周期重试）
-            log.warning(f"右侧调试窗重建失败: {e!r}")
+            _server.abort_collect_on_window_close()
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"关窗中止采集失败（不影响应用运行）: {e!r}")
     def _handle_crash(self, page, is_shell: bool) -> None:
         """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
         App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
@@ -1538,16 +1511,6 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
 
 
 
-def _server_has_running_collect() -> bool:
-    """R-6.53o：采集执行期间 keeper 暂停 collect_win 治理/崩溃清理，避免与采集器 CDP
-    并发触发引擎假死、且崩溃恢复清理误关采集中的搜索页。延迟导入规避循环依赖。"""
-    try:
-        from src import server as _server  # noqa: PLC0415（运行时 server 已加载，取任务注册表）
-        return any(st.get("status") == "running" for st in _server._COLLECT_TASKS.values())
-    except Exception:  # noqa: BLE001（状态源不可用视为不采集，keeper 正常治理）
-        return False
-
-
 @xlog.tagged("win:shell")
 async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed: "Callable[[], None] | None" = None) -> None:
     """R-6.22p 窗口监护：关主窗=关闭应用（on_shell_closed 退出）；关采集窗=仅关采集窗不复活。
@@ -1574,6 +1537,7 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
             await asyncio.sleep(2.0)
 
     # R-6.53z8d：取消 5s 兜底轮询。「壳窗被关=退出应用」由 close 事件驱动
-    # （_handle_close → 3s 校验 → _shell_closed_verify）；右窗被关由 close 事件
-    # 按需重建（_schedule_collect_win_rebuild）。此处只阻塞等待停止信号，零周期查询。
+    # （_handle_close → 3s 校验 → _shell_closed_verify）。
+    # R-6.72：右窗被关不再自动重建（关窗即中断采集，见 _abort_collect_on_win_close）。
+    # 此处只阻塞等待停止信号，零周期查询。
     await asyncio.to_thread(stop.wait)
