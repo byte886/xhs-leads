@@ -490,6 +490,13 @@ class AccountEngine:
             await self._context.add_init_script(injections.get("stealth"))
         except Exception as se:  # noqa: BLE001
             log.warning("stealth 注入失败（不影响引擎启动）: %s", se)
+        # 登录框遮罩锁：复用 shell_window 同款 force_login（隐藏关闭按钮 + 拦截
+        # .reds-mask 点击与 ESC），防止扫码时点空白误关登录框。第三类账号引擎
+        # 此前只注 stealth、缺这层锁，是真机点空白登录框消失的根因。
+        try:
+            await self._context.add_init_script(injections.get("force_login"))
+        except Exception as fe:  # noqa: BLE001
+            log.warning("force_login 注入失败（不影响引擎启动）: %s", fe)
         await self._replay_saved_cookies()
 
 

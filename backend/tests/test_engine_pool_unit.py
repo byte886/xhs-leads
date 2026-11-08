@@ -1,8 +1,9 @@
 """engine_pool 纯函数特征测试（R-6.36b：屏幕探测/窗口几何现行行为固化）。"""
+import asyncio
 import json
 
 from src import server  # noqa: F401（先导入 server 打破循环）
-from src import engine_pool
+from src import engine_pool, injections
 
 
 class TestProbeScreenSize:
@@ -85,3 +86,43 @@ class TestClearSessionRestore:
         assert (default / "Preferences").read_text() == json.dumps(
             {"exit_type": "Normal", "profile": {"exit_type": "Normal"}}
         )
+
+
+class TestLaunchAfterStartInjects:
+    """启动后注入：stealth + force_login（登录框遮罩锁，防点空白误关）。"""
+
+    def _build_engine(self, monkeypatch):
+        eng = engine_pool.AccountEngine.__new__(engine_pool.AccountEngine)
+        eng.account_id = "acc_x"
+        calls = []
+
+        class FakeCtx:
+            async def add_init_script(self, js):
+                calls.append(js)
+
+        eng._context = FakeCtx()
+        eng._injected = calls
+
+        async def _noop():
+            return None
+
+        monkeypatch.setattr(eng, "_replay_saved_cookies", _noop)
+        return eng
+
+    def test_injects_stealth_and_force_login(self, monkeypatch):
+        eng = self._build_engine(monkeypatch)
+        asyncio.run(eng._launch_after_start())
+        assert injections.get("stealth") in eng._injected
+        assert injections.get("force_login") in eng._injected
+
+    def test_force_login_failure_does_not_break_start(self, monkeypatch):
+        eng = self._build_engine(monkeypatch)
+
+        class BoomCtx:
+            async def add_init_script(self, js):
+                if "reds-mask" in js or "xhs_leads_lock" in js:
+                    raise RuntimeError("cdp down")
+
+        eng._context = BoomCtx()
+        # 注入失败只告警，不抛（引擎启动与 cookie 回注照常）
+        asyncio.run(eng._launch_after_start())
