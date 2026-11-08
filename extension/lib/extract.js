@@ -310,21 +310,30 @@ if (typeof window !== 'undefined') {
   };
 }
 
-// ===== R-6.26 调试窗标题固定：不随搜索词变化（避免「翡翠_小红书」类误读） =====
+// ===== R-6.72 调试窗标题固定：不随搜索词变化（零观察 / 零轮询） =====
 (function () {
   if (window.__xhs_leads_title_locked) return;
   window.__xhs_leads_title_locked = true;
   var FIXED_TITLE = '小红书';
-  function fixTitle() {
+  function setTitle() {
     try {
       if (document.title !== FIXED_TITLE) document.title = FIXED_TITLE;
     } catch (e) { /* ignore */ }
   }
-  fixTitle();
+  setTitle();
+  // 原做法是 MutationObserver 观察 <title> + 2 秒 setInterval 兜底。观察型守护
+  // 在瀑布流页上会把主线程拖死（见 injections.py 同款改动的实测 CPU 130%→1%），
+  // 改为拦截 Document.prototype.title 赋值：页面一写标题就被替换成固定值，
+  // 零观察、零轮询、零定时器，标题显示效果不变。
   try {
-    var titleEl = document.querySelector('title');
-    new MutationObserver(function () { fixTitle(); })
-      .observe(titleEl || document.head, { childList: true, subtree: true, characterData: true });
+    var d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
+    if (d && d.get && d.set && d.configurable) {
+      Object.defineProperty(Document.prototype, 'title', {
+        configurable: true, enumerable: d.enumerable,
+        get: function () { return d.get.call(this); },
+        set: function () { d.set.call(this, FIXED_TITLE); },
+      });
+    }
   } catch (e) { /* ignore */ }
-  setInterval(fixTitle, 2000);
+  document.addEventListener('DOMContentLoaded', setTitle);
 })();
