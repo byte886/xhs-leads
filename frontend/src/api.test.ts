@@ -174,18 +174,23 @@ describe('账号管理 API 契约', () => {
     expect(body).toEqual({ name: '' })
   })
 
-  it('apiRefreshNickname：POST 到 nickname 子路径且编码', async () => {
+  it('apiRefreshIdentity：POST 到 identity 子路径，回昵称+小红书号+主名称', async () => {
     let u = ''
     let method = ''
     mockFetch(async (uu, init) => {
       u = String(uu)
       method = String(init!.method)
-      return okRes({ ok: true, account_id: 'acc_a', nickname: '普通人' })
+      return okRes({
+        ok: true, account_id: 'acc_a', nickname: '小红薯',
+        red_id: '123456789', display_name: '小红薯',
+      })
     })
-    const r = await api.apiRefreshNickname('acc_a')
-    expect(u).toBe('/api/accounts/acc_a/nickname')
+    const r = await api.apiRefreshIdentity('acc_a')
+    expect(u).toBe('/api/accounts/acc_a/identity')
     expect(method).toBe('POST')
-    expect(r.nickname).toBe('普通人')
+    expect(r.nickname).toBe('小红薯')
+    expect(r.red_id).toBe('123456789')
+    expect(r.display_name).toBe('小红薯')
   })
 
   it('apiDeleteAccount：account_id 进路径且编码', async () => {

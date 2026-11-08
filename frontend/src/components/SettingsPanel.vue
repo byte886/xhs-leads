@@ -10,7 +10,7 @@ import {
   apiLoginStatus, apiLoginBegin,
   apiGetAppConfig, apiSetAppConfig,
   apiListAccounts, apiAddAccount, apiDeleteAccount, apiRenameAccount,
-  apiRefreshNickname,
+  apiRefreshIdentity,
 } from '../api'
 import type { AccountItem } from '../types'
 
@@ -111,19 +111,20 @@ async function saveRename(aid: string) {
   }
 }
 
-async function refreshNicknameFn(aid: string) {
+async function refreshIdentityFn(aid: string) {
   if (acctBusy.value) return
   acctBusy.value = true
   try {
-    const r = await apiRefreshNickname(aid)
+    const r = await apiRefreshIdentity(aid)
     if (!r.ok) {
-      toast(r.error || '识别昵称失败', 'error')
+      toast(r.error || '识别失败', 'error')
       return
     }
-    toast(`已识别平台昵称「${r.nickname}」`)
+    const parts = [r.nickname, r.red_id ? '@' + r.red_id : ''].filter(Boolean)
+    toast(`已识别：${parts.join(' ')}`)
     await loadAccounts()
   } catch (e) {
-    toast('识别昵称失败：' + (e as Error).message, 'error')
+    toast('识别失败：' + (e as Error).message, 'error')
   } finally {
     acctBusy.value = false
   }
@@ -437,11 +438,14 @@ onMounted(async () => {
             <div class="acct-list">
               <div v-for="a in accounts" :key="a.account_id" class="acct-item">
                 <div class="acct-row">
-                  <!-- 主标题 = 业务名（可中文、可改）；技术 id 降为副标题 -->
+                  <!-- 主标题 = 自动派生名称（平台昵称 → @小红书号 → 内部 id），不需要人工起名 -->
                   <div class="acct-main">
-                    <span class="acct-name" :title="a.account_id">{{ a.name || a.account_id }}</span>
+                    <span class="acct-name" :title="a.account_id">
+                      {{ a.display_name || a.account_id }}
+                      <span v-if="a.name && a.name !== a.account_id" class="acct-note">{{ a.name }}</span>
+                    </span>
                     <span class="acct-sub">
-                      <span v-if="a.nickname" class="acct-nick">{{ a.nickname }}</span>
+                      <span v-if="a.red_id" class="acct-redid" title="小红书号，可在 App「我」页面核对">@{{ a.red_id }}</span>
                       <span class="acct-id">{{ a.account_id }}</span>
                       <span class="acct-role">{{ roleLabel(a.role) }}</span>
                     </span>
@@ -457,12 +461,13 @@ onMounted(async () => {
                   </div>
                 </div>
 
-                <!-- 改名：行内输入，改完写注册表 name，不搬目录不动登录态 -->
+                <!-- 备注：行内输入，只写注册表 name 当后缀，不搬目录不动登录态；
+                     主名称永远来自平台，备注只是给人添个「哪个店」的记号 -->
                 <div v-if="editingAcct === a.account_id" class="acct-rename">
                   <input
                     v-model="editName"
                     class="acct-name-input"
-                    placeholder="业务名，如「珠宝主号」「二号店·翡翠」"
+                    placeholder="备注（可选），如「襄阳店」「二号店」"
                     maxlength="24"
                     @keyup.enter="saveRename(a.account_id)"
                     @keyup.esc="cancelRename"
@@ -471,14 +476,14 @@ onMounted(async () => {
                   <button class="btn sm" @click="cancelRename">取消</button>
                 </div>
                 <div v-else class="acct-ops">
-                  <button class="btn sm" :disabled="acctBusy" @click="startRename(a)">改名</button>
+                  <button class="btn sm" :disabled="acctBusy" @click="startRename(a)">备注</button>
                   <button
-                    v-if="a.running && !a.nickname"
+                    v-if="a.running && !a.red_id"
                     class="btn sm"
                     :disabled="acctBusy"
-                    title="读一次该账号的小红书昵称，用来认出这是哪个号"
-                    @click="refreshNicknameFn(a.account_id)"
-                  >识别昵称</button>
+                    title="读一次该账号的昵称与小红书号，用来认出这是哪个号"
+                    @click="refreshIdentityFn(a.account_id)"
+                  >识别身份</button>
                   <button
                     v-if="!a.running"
                     class="btn sm"
@@ -504,25 +509,26 @@ onMounted(async () => {
 
             <div class="add-acct">
               <input
-                v-model="newAcctName"
-                class="acct-name-input"
-                placeholder="业务名，如「珠宝主号」（可中文，≤24 字符）"
-                maxlength="24"
-              />
-              <input
                 v-model="newAcctId"
                 class="acct-id-input"
                 placeholder="内部 id 留空自动生成"
                 @keyup.enter="addAccountFn"
+              />
+              <input
+                v-model="newAcctName"
+                class="acct-name-input"
+                placeholder="备注（可选），如「襄阳店」"
+                maxlength="24"
               />
               <button class="btn primary sm" :disabled="acctBusy" @click="addAccountFn">
                 新增账号
               </button>
             </div>
             <p class="set-hint">
-              业务名是给人看的名字，随时可改，不搬 profile 目录、不影响登录态；
+              名字不用你起：开窗扫码登录后，APP 会自动记下这个号的<b>小红书昵称</b>和
+              <b>小红书号</b>，列表和窗口标题都按它显示；还没登录的账号先显示自动生成的唯一 id。
+              备注只是给自己加个记号（如「襄阳店」），可留空、可随时改，不搬目录、不影响登录态。
               内部 id 才是目录名（仅小写字母/数字/_-，≤32 字符）。
-              开窗后未登录可扫码，登录成功会自动切无头常驻并记下平台昵称。
               删除会把 profile 移入回收区（可回滚），不直接清除登录态。
             </p>
           </div>
@@ -762,6 +768,14 @@ input:not([type="checkbox"]) {
   max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .acct-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acct-note {
+  font-size: 11px; font-weight: 400; color: #666; margin-left: 6px;
+}
+.acct-redid {
+  font-size: 12px; font-weight: 600; color: #b45409;
+  background: #fdf2e2; padding: 1px 8px; border-radius: 999px;
+  font-family: ui-monospace, Menlo, monospace;
+}
 .acct-nick {
   font-size: 12px; font-weight: 600; color: #b45409;
   background: #fdf2e2; padding: 1px 8px; border-radius: 999px;

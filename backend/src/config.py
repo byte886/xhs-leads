@@ -396,6 +396,9 @@ def add_account(account_id: str, role: str = "mixed",
     data["accounts"][account_id] = {
         "role": role,
         "name": name,
+        "nickname": "",
+        "red_id": "",
+        "platform_uid": "",
         "user_data_dir": user_data_dir,
         "status": status,
         "cookie_expires_at": None,
@@ -456,6 +459,50 @@ def set_account_nickname(account_id: str, nickname: str) -> bool:
     if get_account(account_id) is None:
         return False
     return update_account(account_id, nickname=(nickname or "").strip()) is not None
+
+
+def account_red_id(account_id: str) -> str:
+    """小红书号（user/me 的 ``red_id``，如 123456789）。
+
+    这是用户在 App「我」页面能直接看到的号，**唯一且稳定**，用来核对“这个号是谁”。
+    """
+    return str((get_account(account_id) or {}).get("red_id") or "").strip()
+
+
+def set_account_red_id(account_id: str, red_id: str) -> bool:
+    """缓存小红书号（登录事件或手动识别时写入）。"""
+    if get_account(account_id) is None:
+        return False
+    return update_account(account_id, red_id=str(red_id or "").strip()) is not None
+
+
+def account_platform_uid(account_id: str) -> str:
+    """平台内部 user_id（24 位 hex）。平台内唯一但用户在界面上看不到，
+    仅作 red_id 缺失时的兜底标识，不用于展示主名称。"""
+    return str((get_account(account_id) or {}).get("platform_uid") or "").strip()
+
+
+def set_account_platform_uid(account_id: str, uid: str) -> bool:
+    if get_account(account_id) is None:
+        return False
+    return update_account(account_id, platform_uid=str(uid or "").strip()) is not None
+
+
+def account_display_name(account_id: str) -> str:
+    """界面主名称 —— 全部自动派生，不需要人工起名（用户 R-6.69b 拍板）。
+
+    优先级：**平台昵称 → 小红书号 → 内部 id**。昵称是平台给的（会变），
+    red_id 稳定唯一（用户能核对），account_id 是自动生成的唯一符（如 acc_3f2a91），
+    三者都来自平台或系统，不需要人手工填。
+    人工备注（name）按用户要求**不参与主名称**，只在界面上作后缀补充用途。
+    """
+    nick = account_nickname(account_id)
+    if nick:
+        return nick
+    red = account_red_id(account_id)
+    if red:
+        return f"@{red}"
+    return account_id
 
 
 def account_headless(account_id: str = "default") -> bool:

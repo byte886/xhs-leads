@@ -497,6 +497,12 @@ class AccountEngine:
             await self._context.add_init_script(injections.get("force_login"))
         except Exception as fe:  # noqa: BLE001
             log.warning("force_login 注入失败（不影响引擎启动）: %s", fe)
+        # 窗口标题带账号身份：刚开窗时还没有任务页，初始页就是用户看到的那个窗口，
+        # 不在这里注入的话，标题会一直是平台的「小红书 - 你的生活兴趣社区」。
+        # default 跳过——它承载 APP 壳窗，标题由 shell_title 恒定守护（用户 R-6.48h 拍板）。
+        if self.account_id != "default":
+            for pg in list(self._context.pages)[:1]:
+                await self._apply_account_title(pg)
         await self._replay_saved_cookies()
 
 
@@ -686,6 +692,7 @@ class AccountEngine:
             # 现在不再最小化任何窗口：壳窗保持可见承接登录引导；
             # 任务页在引擎内新建（不建独立调试窗），登录墙由左 APP ForceLogin 承接。
             p = await ctx.new_page()
+            await self._apply_account_title(p)
             self._task_page = p
             return p
         # R-6.53r：采集工作页改普通 tab（新 tab 前台激活、渲染完整、CDP 会话稳定）。
@@ -694,6 +701,7 @@ class AccountEngine:
         # ② CDP 会话不稳——wait_cards 第二轮 evaluate 挂起触发假死强杀。
         # 独立采集调试窗（keeper 采集窗）保留为展示窗，采集执行页与之解耦。
         p = await ctx.new_page()
+        await self._apply_account_title(p)
         # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
         # R-6.57：多账号时不能用统一的右半屏——否则第二个账号的窗口会被摆回
         # default 采集窗的位置（实测启动后定位成功又被这里的 960,25 覆盖）。
@@ -716,6 +724,45 @@ class AccountEngine:
             pass
         self._task_page = p
         return p
+
+    def _account_window_label(self) -> str:
+        """账号窗口标题文字：一眼看出这个窗口是哪个号（R-6.69b 用户要求）。
+
+        昵称会改也不唯一，所以带上小红书号才能核对「这到底是哪个号」；
+        未登录账号没有昵称/号，自动退到内部 id（acc_xxxx 这类唯一符）。
+        """
+        name = config.account_display_name(self.account_id)
+        red = config.account_red_id(self.account_id)
+        suffix = f" (@{red})" if red and name != f"@{red}" else ""
+        return f"{name}{suffix} · 运营窗口"
+
+    async def _apply_account_title(self, page) -> None:
+        """给账号窗口挂标题守护（幂等；失败只告警不阻断开窗）。
+
+        为什么必须做：多个运营账号窗口并排时，用户只能靠内容判断是哪个号，
+        而内容页长得都差不多。标题栏是唯一稳定的身份标识。
+        """
+        try:
+            js = injections.account_window_title_js(self._account_window_label())
+            if not getattr(page, "_acct_title_installed", False):
+                await page.add_init_script(js)  # 对后续导航自动生效
+                page._acct_title_installed = True
+            await page.evaluate(js)  # 当前文档立即生效
+        except Exception as te:  # noqa: BLE001（标题美化失败不影响窗口可用）
+            log.warning("账号 %s 窗口标题守护注入失败: %s", self.account_id, te)
+
+    async def refresh_window_title(self) -> None:
+        """身份（昵称/小红书号）刚落盘时，让已开的窗口标题立刻跟上。
+
+        不这么做的话标题只在开窗那一刻算一次：登录前是内部 id，登录后还是内部 id，
+        必须重开窗口才更新——用户要的正是「窗口上能看出这是哪个号」。
+        """
+        try:
+            ctx = await self.context()
+            for pg in list(ctx.pages):
+                await self._apply_account_title(pg)
+        except Exception as te:  # noqa: BLE001（标题刷新失败不影响业务）
+            log.warning("账号 %s 刷新窗口标题失败: %s", self.account_id, te)
 
     async def _debug_window_blocked(self, ctx) -> bool:
         """R-6.36e 拆自 new_page()：未登录/风控需验证时不开独立采集窗（判定失败保守阻塞）。"""

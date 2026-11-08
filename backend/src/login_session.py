@@ -36,7 +36,7 @@ def is_real_login_me(payload: dict) -> bool:
 def login_nickname(payload: dict) -> str:
     """纯函数：从 user/me 响应取平台昵称（非字符串/空白一律返回空串）。
 
-    登录成功那一刻 data.nickname 就是真实昵称（实测 default 为「普通人」），
+    登录成功那一刻 data.nickname 就是真实昵称（实测为中文昵称），
     顺手缓存进注册表，账号列表就不用为 N 个账号各连一次 CDP。
     """
     data = (payload or {}).get("data")
@@ -44,6 +44,49 @@ def login_nickname(payload: dict) -> str:
         return ""
     nickname = data.get("nickname")
     return nickname.strip() if isinstance(nickname, str) else ""
+
+
+def login_identity(payload: dict) -> dict:
+    """纯函数：从 user/me 响应取账号的三种标识（登录成功那一刻一次性落盘）。
+
+    - ``nickname`` 平台昵称（用户可见，会变，界面主名称首选）
+    - ``red_id``   小红书号（App「我」页面能看到的那串数字，唯一且稳定，用来核对）
+    - ``uid``      平台内部 ``user_id``（24 位 hex，界面不直接展示，仅兜底）
+
+    实测 default 响应：``{user_id: "abcdef...0001", nickname: "<昵称>", red_id: "123456789"}``。
+    非字符串/空白一律返回空串——宁可为空，也不写脏值进注册表。
+    """
+    data = (payload or {}).get("data")
+    if not isinstance(data, dict):
+        return {"nickname": "", "red_id": "", "uid": ""}
+
+    def _str_field(key: str) -> str:
+        v = data.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    return {
+        "nickname": _str_field("nickname"),
+        "red_id": _str_field("red_id"),
+        "uid": _str_field("user_id"),
+    }
+
+
+def cache_identity(account_id: str, payload: dict) -> dict:
+    """把 user/me 里的账号标识写进注册表，返回实际解析出的三者。
+
+    只在**非空且与现值不同**时写：平台偶发不返回某个字段时，已有的值不该被空值冲掉
+    （昵称尤其——它比 red_id 更容易缺失）。
+    """
+    from src import config  # noqa: PLC0415（避免循环导入）
+
+    ident = login_identity(payload)
+    if ident["nickname"] and config.account_nickname(account_id) != ident["nickname"]:
+        config.set_account_nickname(account_id, ident["nickname"])
+    if ident["red_id"] and config.account_red_id(account_id) != ident["red_id"]:
+        config.set_account_red_id(account_id, ident["red_id"])
+    if ident["uid"] and config.account_platform_uid(account_id) != ident["uid"]:
+        config.set_account_platform_uid(account_id, ident["uid"])
+    return ident
 
 
 async def capture_user_me(account_id: str, timeout: float = 20.0) -> dict | None:
@@ -115,11 +158,15 @@ class LoginSession:
                 return
             if is_real_login_me(payload):
                 log.info("账号 %s 捕获 user/me guest=false 登录事件", self.account_id)
-                nickname = login_nickname(payload)
-                if nickname:
-                    # 业务锚点：昵称落盘后，账号列表能显示「这是哪个号」，无需再连 CDP
-                    config.set_account_nickname(self.account_id, nickname)
-                    log.info("账号 %s 缓存平台昵称 %s", self.account_id, nickname)
+                # 业务锚点：昵称 + 小红书号 + 内部 uid 一次性落盘，
+                # 账号列表与窗口标题零额外请求即可显示「这是哪个号」
+                ident = cache_identity(self.account_id, payload)
+                if ident["nickname"] or ident["red_id"]:
+                    log.info("账号 %s 缓存身份 昵称=%s 小红书号=%s",
+                             self.account_id, ident["nickname"] or "-",
+                             ident["red_id"] or "-")
+                # 标题立刻跟上身份：登录前窗口标题是内部 id，登录后要变成昵称+小红书号
+                await eng.refresh_window_title()
                 logged_in.set()
 
         def _on_response(resp):

@@ -145,10 +145,14 @@ export interface LicenseStatus {
 /** 账号注册表项（GET /api/accounts 的每一项） */
 export interface AccountItem {
   account_id: string
-  /** 业务展示名（可中文、可改，不落路径）；没设过等于 account_id */
+  /** 界面主名称：自动派生（平台昵称 → 小红书号 → 内部 id），不需要人工起名 */
+  display_name: string
+  /** 人工备注（可选，界面作后缀补充用途）；没设过等于 account_id */
   name: string
   /** 平台昵称（登录事件顺带缓存，未登录为空） */
   nickname: string
+  /** 小红书号（App「我」页面能看到的那串数字，唯一稳定，用来核对） */
+  red_id: string
   role: string
   status: string
   debug_port: number | null

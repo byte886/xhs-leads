@@ -217,11 +217,12 @@ export async function apiDeleteAccount(accountId: string): Promise<{
   return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }))
 }
 
-/** 识别平台昵称（R-6.69）：账号在跑时读一次 user/me 并缓存，用于认号 */
-export async function apiRefreshNickname(accountId: string): Promise<{
-  ok: boolean; account_id?: string; nickname?: string; error?: string
+/** 识别账号身份（R-6.69b）：账号在跑时读一次 user/me，缓存昵称+小红书号 */
+export async function apiRefreshIdentity(accountId: string): Promise<{
+  ok: boolean; account_id?: string; nickname?: string; red_id?: string
+  display_name?: string; error?: string
 }> {
-  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}/nickname`, {
+  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}/identity`, {
     method: 'POST',
   }))
 }

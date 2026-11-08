@@ -1538,10 +1538,14 @@ async def accounts_list():
         acc = accounts.get(aid) or {}
         return {
             "account_id": aid,
-            # 业务展示名（可中文、可改，不落路径）；没设过回退 id，不编造业务含义
+            # 界面主名称：自动派生（平台昵称 → 小红书号 → 内部 id），不需要人工起名
+            "display_name": config.account_display_name(aid),
+            # 人工备注（可选，只在界面作后缀补充用途）；没设过回退 id
             "name": config.account_name(aid),
             # 平台昵称：登录事件顺带缓存，用来一眼认出「这个号是谁」
             "nickname": config.account_nickname(aid),
+            # 小红书号：用户能在 App「我」页面看到，唯一且稳定，用来核对
+            "red_id": config.account_red_id(aid),
             "role": acc.get("role", "mixed"),
             "status": acc.get("status", "ok"),
             "debug_port": port_map.get(aid),
@@ -1613,11 +1617,11 @@ async def accounts_rename(account_id: str, req: AccountRenameReq):
     return {"ok": True, "account_id": account_id, "name": config.account_name(account_id)}
 
 
-@app.post("/api/accounts/{account_id}/nickname")
-async def accounts_refresh_nickname(account_id: str):
-    """识别平台昵称（R-6.69）：账号在跑时读一次 user/me 并缓存进注册表。
+@app.post("/api/accounts/{account_id}/identity")
+async def accounts_refresh_identity(account_id: str):
+    """识别账号身份（R-6.69b）：账号在跑时读一次 user/me，缓存昵称+小红书号+uid。
 
-    为什么需要手动入口：昵称默认由登录事件顺带写入，但在此机制上线**之前**
+    为什么需要手动入口：这些标识默认由登录事件顺带写入，但在此机制上线**之前**
     就已登录的账号（如 default）没有缓存，列表里认不出是哪个号。
     不自动刷新的原因：每个账号要 reload 一次页面，账号多时开销与风控都不划算。
     """
@@ -1626,20 +1630,29 @@ async def accounts_refresh_nickname(account_id: str):
     if config.get_account(account_id) is None:
         return {"ok": False, "error": f"账号不存在：{account_id}"}
     if engine_pool.pool.peek(account_id) is None:
-        return {"ok": False, "error": "账号引擎未运行，先开窗再识别昵称"}
+        return {"ok": False, "error": "账号引擎未运行，先开窗再识别"}
     for _st in list(_COLLECT_TASKS.values()):
         if _st.get("status") == "running" and _st.get("account_id", "default") == account_id:
-            return {"ok": False, "error": "有采集任务进行中，稍后再识别昵称"}
+            return {"ok": False, "error": "有采集任务进行中，稍后再识别"}
     payload = await login_session.capture_user_me(account_id)
     if payload is None:
         return {"ok": False, "error": "未能读取账号信息（页面未响应或超时）"}
     if not login_session.is_real_login_me(payload):
         return {"ok": False, "error": "该账号尚未登录，请扫码登录后再识别"}
-    nickname = login_session.login_nickname(payload)
-    if not nickname:
-        return {"ok": False, "error": "已登录但未取到昵称"}
-    config.set_account_nickname(account_id, nickname)
-    return {"ok": True, "account_id": account_id, "nickname": nickname}
+    ident = login_session.cache_identity(account_id, payload)
+    if not (ident["nickname"] or ident["red_id"]):
+        return {"ok": False, "error": "已登录但未取到昵称与小红书号"}
+    # 标题跟上身份：已开的窗口不用重开也能显示昵称 + 小红书号
+    eng = engine_pool.pool.peek(account_id)
+    if eng is not None:
+        await eng.refresh_window_title()
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "nickname": ident["nickname"],
+        "red_id": ident["red_id"],
+        "display_name": config.account_display_name(account_id),
+    }
 
 
 @app.delete("/api/accounts/{account_id}")

@@ -49,6 +49,16 @@ def get(name: str) -> str:
         raise KeyError(f"未登记的注入脚本: {name!r}（注册表: {sorted(_REGISTRY)}）") from e
 
 
+def account_window_title_js(label: str) -> str:
+    """账号窗口标题守护 JS：把 ``__LABEL__`` 换成调用方给的标题。
+
+    标题含用户/平台给的字符串（昵称可能带引号、反斜杠），必须转义后再嵌进
+    单引号字符串字面量，否则 JS 语法错误导致整个守护脚本不执行。
+    """
+    safe = str(label).replace("\\", "\\\\").replace("'", "\\'")
+    return get("account_window_title").replace("__LABEL__", safe)
+
+
 # ---- 1. 页面提取脚本（文件单一事实源：extension/lib/extract.js） ----
 _EXTRACT_SRC = (_ROOT / "extension" / "lib" / "extract.js").read_text(encoding="utf8")
 _register(
@@ -128,6 +138,27 @@ _register(
     note="事件级守护（MutationObserver，R-6.48i 替代 setInterval 轮询）。page.add_init_script"
          " + 当前文档立即 evaluate；Python 侧 _debug_title_installed 标志防重——"
          "不走 inject_once 的 window 标记。",
+)
+
+# ---- 3a2. 账号窗口标题守护（R-6.69b）：文案含账号身份，由调用方拼好传入 ----
+# 与 collect_debug_title 完全同一套守护机制（事件级 MutationObserver、锚点必须是
+# document）。差别只在 T 是占位符——第三类账号每个窗口要显示“这是哪个号”，
+# 昵称/小红书号是运行时才知道的，无法在源码里写死。
+_ACCOUNT_TITLE_JS = """(() => {
+    const T = '__LABEL__';
+    const setT = () => { if (document.title !== T) document.title = T; };
+    const obs = new MutationObserver(() => setT());
+    obs.observe(document, { childList: true, characterData: true, subtree: true });
+    setT();
+    document.addEventListener('DOMContentLoaded', () => setT());
+})()"""
+_register(
+    "account_window_title",
+    _ACCOUNT_TITLE_JS,
+    kind="page_init",
+    note="账号窗口标题守护：标题带账号身份（昵称/@小红书号/内部 id）。"
+         "调用方必须用 accounts_window_title_js(label) 取，禁止直接 get 后注入——"
+         "直接取会把 __LABEL__ 原样显示到标题栏。",
 )
 
 # ---- 3b. 壳窗口标题守护（page 级 init script）：主窗口无论 APP 页还是小红书登录页，

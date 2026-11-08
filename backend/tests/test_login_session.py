@@ -30,7 +30,7 @@ class TestLoginNickname:
     """R-6.69：登录事件顺带取昵称——账号列表靠它认出「这个号是谁」。"""
 
     @pytest.mark.parametrize("payload,expected", [
-        ({"data": {"guest": False, "nickname": "普通人"}}, "普通人"),  # 已登录真实昵称
+        ({"data": {"guest": False, "nickname": "小红薯"}}, "小红薯"),  # 已登录样例昵称
         ({"data": {"guest": True, "user_id": "x"}}, ""),              # 游客无昵称
         ({"data": {"nickname": "  珠宝号  "}}, "珠宝号"),             # 去首尾空白
         ({"data": {"nickname": ""}}, ""),                             # 空昵称
@@ -73,12 +73,17 @@ class _FakeEng:
     def __init__(self, cookies):
         self._ctx = _FakeCtx()
         self._cookies = cookies
+        self.title_refreshes = 0
 
     async def context(self):
         return self._ctx
 
     async def read_cookies(self):
         return self._cookies
+
+    async def refresh_window_title(self):
+        """登录后立刻刷新窗口标题（标题要显示昵称+小红书号）。"""
+        self.title_refreshes += 1
 
 
 def _patch_common(monkeypatch, eng):
@@ -122,6 +127,8 @@ class TestLoginSessionRun:
         assert switched["v"] == ("acc_x", False)
         # R-6.69：登录事件顺带把昵称写进注册表（游客响应不应写）
         assert cached == {"acc_x": "珠宝主号"}
+        # R-6.69b：身份落盘后要让已开窗口的标题立刻跟上（昵称+小红书号）
+        assert eng.title_refreshes == 1
         # 监听已清理
         assert "response" in sess._ctx.removed
 
@@ -210,7 +217,7 @@ class TestCaptureUserMe:
         eng = _FakeEng([])
         ctx = eng._ctx  # 页面必须挂在**同一个** context 上，监听才收得到
         monkeypatch.setattr(engine_pool.pool, "peek", lambda _a: eng)
-        page = _FakePage(ctx, {"data": {"guest": False, "nickname": "普通人"}})
+        page = _FakePage(ctx, {"data": {"guest": False, "nickname": "小红薯"}})
 
         async def _login_page(_aid):
             return page
@@ -219,7 +226,7 @@ class TestCaptureUserMe:
 
         payload = asyncio.run(login_session.capture_user_me("acc_z", timeout=5))
         assert payload is not None
-        assert payload["data"]["nickname"] == "普通人"
+        assert payload["data"]["nickname"] == "小红薯"
         assert page.reloaded == 1
         # 监听必须被摘掉，否则账号常驻时会不断累积
         assert ctx.removed == ["response"]
@@ -260,3 +267,54 @@ class TestSessionRegistry:
 
     def test_stop_missing_returns_false(self):
         assert asyncio.run(login_session.stop_login_session("nope")) is False
+
+
+class TestLoginIdentity:
+    """user/me → 三种标识（昵称 / 小红书号 / 内部 uid），登录那刻一次性落盘。"""
+
+    @pytest.mark.parametrize("payload,nick,red,uid", [
+        ({"data": {"guest": False, "nickname": "小红薯", "red_id": "123456789",
+                   "user_id": "abcdef0000000000000001"}},
+         "小红薯", "123456789", "abcdef0000000000000001"),
+        ({"data": {"guest": True}}, "", "", ""),               # 游客：三项全空
+        ({"data": {}}, "", "", ""),
+        ({}, "", "", ""),
+        ({"data": {"nickname": 123, "red_id": None, "user_id": ["x"]}},
+         "", "", ""),                                          # 非字符串一律当空
+        ({"data": {"nickname": "  小红薯  ", "red_id": " 123456789 ",
+                   "user_id": " u1 "}},
+         "小红薯", "123456789", "u1"),                          # 两侧空白剥掉
+    ])
+    def test_matrix(self, payload, nick, red, uid):
+        from src import login_session
+
+        ident = login_session.login_identity(payload)
+        assert ident == {"nickname": nick, "red_id": red, "uid": uid}
+
+    def test_cache_writes_all_three(self, monkeypatch, tmp_path):
+        from src import config, login_session
+
+        monkeypatch.setattr(config, "ACCOUNTS_FILE", tmp_path / "accounts.json")
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        config.add_account("acc_a")
+        ident = login_session.cache_identity("acc_a", {"data": {
+            "guest": False, "nickname": "小红薯", "red_id": "123456789",
+            "user_id": "abcdef0000000000000001"}})
+        assert ident["red_id"] == "123456789"
+        assert config.account_nickname("acc_a") == "小红薯"
+        assert config.account_red_id("acc_a") == "123456789"
+        assert config.account_platform_uid("acc_a") == "abcdef0000000000000001"
+        assert config.account_display_name("acc_a") == "小红薯"
+
+    def test_cache_does_not_blank_existing_values(self, monkeypatch, tmp_path):
+        """平台偶发只回昵称不回 red_id：已有的小红书号不能被空值冲掉。"""
+        from src import config, login_session
+
+        monkeypatch.setattr(config, "ACCOUNTS_FILE", tmp_path / "accounts.json")
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        config.add_account("acc_a")
+        config.set_account_red_id("acc_a", "123456789")
+        login_session.cache_identity("acc_a", {"data": {
+            "guest": False, "nickname": "新昵称"}})
+        assert config.account_red_id("acc_a") == "123456789"
+        assert config.account_nickname("acc_a") == "新昵称"

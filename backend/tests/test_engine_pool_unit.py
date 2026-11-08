@@ -91,12 +91,15 @@ class TestClearSessionRestore:
 class TestLaunchAfterStartInjects:
     """启动后注入：stealth + force_login（登录框遮罩锁，防点空白误关）。"""
 
-    def _build_engine(self, monkeypatch):
+    def _build_engine(self, monkeypatch, account_id="acc_x", pages=None):
         eng = engine_pool.AccountEngine.__new__(engine_pool.AccountEngine)
-        eng.account_id = "acc_x"
+        eng.account_id = account_id
         calls = []
 
         class FakeCtx:
+            def __init__(self):
+                self.pages = pages or []
+
             async def add_init_script(self, js):
                 calls.append(js)
 
@@ -119,6 +122,8 @@ class TestLaunchAfterStartInjects:
         eng = self._build_engine(monkeypatch)
 
         class BoomCtx:
+            pages = []
+
             async def add_init_script(self, js):
                 if "reds-mask" in js or "xhs_leads_lock" in js:
                     raise RuntimeError("cdp down")
@@ -126,3 +131,82 @@ class TestLaunchAfterStartInjects:
         eng._context = BoomCtx()
         # 注入失败只告警，不抛（引擎启动与 cookie 回注照常）
         asyncio.run(eng._launch_after_start())
+
+    def test_account_window_title_uses_identity(self, monkeypatch):
+        """非 default 账号：初始页也要挂标题守护，标题里带昵称与小红书号。"""
+        from src import config
+
+        monkeypatch.setattr(config, "ACCOUNTS_FILE", config.DATA_DIR / "_t.json")
+        got = []
+
+        class FakePage:
+            async def add_init_script(self, js):
+                got.append(js)
+
+            async def evaluate(self, js):
+                got.append(js)
+
+        monkeypatch.setattr(config, "account_display_name", lambda _a: "小红薯")
+        monkeypatch.setattr(config, "account_red_id", lambda _a: "123456789")
+        eng = self._build_engine(monkeypatch, account_id="verify_c", pages=[FakePage()])
+        asyncio.run(eng._launch_after_start())
+        assert got, "初始页必须挂标题守护"
+        assert "__LABEL__" not in got[0], "占位符必须被替换，否则标题栏显示 __LABEL__"
+        assert "小红薯" in got[0] and "123456789" in got[0]
+
+    def test_default_skips_account_title(self, monkeypatch):
+        """default 承载 APP 壳窗，标题由 shell_title 恒定守护，不能被账号标题覆盖。"""
+        got = []
+
+        class FakePage:
+            async def add_init_script(self, js):
+                got.append(js)
+
+            async def evaluate(self, js):
+                got.append(js)
+
+        eng = self._build_engine(monkeypatch, account_id="default", pages=[FakePage()])
+        asyncio.run(eng._launch_after_start())
+        assert got == []
+
+
+class TestRefreshWindowTitle:
+    """登录成功/手动识别后，已开的窗口标题要立刻显示昵称+小红书号。"""
+
+    def test_applies_to_every_open_page(self, monkeypatch):
+        from src import config
+
+        monkeypatch.setattr(config, "account_display_name", lambda _a: "小红薯")
+        monkeypatch.setattr(config, "account_red_id", lambda _a: "123456789")
+        eng = engine_pool.AccountEngine.__new__(engine_pool.AccountEngine)
+        eng.account_id = "verify_c"
+        hits = []
+
+        class FakePage:
+            async def add_init_script(self, js):
+                hits.append("init")
+
+            async def evaluate(self, js):
+                hits.append("eval:" + js[:20])
+
+        class FakeCtx:
+            pages = [FakePage(), FakePage()]
+
+        async def _ctx():
+            return FakeCtx()
+
+        monkeypatch.setattr(eng, "context", _ctx)
+        asyncio.run(eng.refresh_window_title())
+        # 两个页面各 evaluate 一次（防重标记只挡 init script）
+        assert sum(1 for h in hits if h.startswith("eval:")) == 2
+        assert sum(1 for h in hits if h == "init") == 2
+
+    def test_failure_is_swallowed(self, monkeypatch):
+        eng = engine_pool.AccountEngine.__new__(engine_pool.AccountEngine)
+        eng.account_id = "verify_c"
+
+        async def _boom():
+            raise RuntimeError("cdp down")
+
+        monkeypatch.setattr(eng, "context", _boom)
+        asyncio.run(eng.refresh_window_title())  # 不抛

@@ -92,8 +92,8 @@ class TestNickname:
     def test_read_write(self, reg):
         config.add_account("acc_a")
         assert config.account_nickname("acc_a") == ""
-        assert config.set_account_nickname("acc_a", "普通人") is True
-        assert config.account_nickname("acc_a") == "普通人"
+        assert config.set_account_nickname("acc_a", "小红薯") is True
+        assert config.account_nickname("acc_a") == "小红薯"
 
     def test_blank_nickname(self, reg):
         config.add_account("acc_a", name="珠宝主号")
@@ -103,3 +103,55 @@ class TestNickname:
     def test_unknown_account(self, reg):
         assert config.set_account_nickname("nope", "x") is False
         assert config.account_nickname("nope") == ""
+
+
+class TestPlatformIdentity:
+    """小红书号 / 内部 uid 读写 + 主名称自动派生（R-6.69b）。"""
+
+    def test_red_id_read_write(self, reg):
+        config.add_account("acc_a")
+        assert config.account_red_id("acc_a") == ""
+        assert config.set_account_red_id("acc_a", "123456789") is True
+        assert config.account_red_id("acc_a") == "123456789"
+
+    def test_red_id_blank_and_unknown(self, reg):
+        config.add_account("acc_a")
+        config.set_account_red_id("acc_a", "  ")
+        assert config.account_red_id("acc_a") == ""
+        assert config.set_account_red_id("nope", "1") is False
+        assert config.account_red_id("nope") == ""
+
+    def test_platform_uid_read_write(self, reg):
+        config.add_account("acc_a")
+        assert config.set_account_platform_uid("acc_a", "abcdef0000000000000001") is True
+        assert config.account_platform_uid("acc_a") == "abcdef0000000000000001"
+        assert config.set_account_platform_uid("nope", "x") is False
+
+
+class TestDisplayName:
+    """主名称完全自动：昵称 → @小红书号 → 内部 id，人工备注不参与（用户拍板）。"""
+
+    def test_prefers_nickname(self, reg):
+        config.add_account("acc_a")
+        config.set_account_red_id("acc_a", "123456789")
+        config.set_account_nickname("acc_a", "小红薯")
+        assert config.account_display_name("acc_a") == "小红薯"
+
+    def test_falls_back_to_red_id(self, reg):
+        config.add_account("acc_a")
+        config.set_account_red_id("acc_a", "123456789")
+        assert config.account_display_name("acc_a") == "@123456789"
+
+    def test_falls_back_to_internal_id(self, reg):
+        config.add_account("acc_3f2a91")
+        assert config.account_display_name("acc_3f2a91") == "acc_3f2a91"
+
+    def test_manual_note_does_not_hijack_display_name(self, reg):
+        """人工备注只是后缀，主名称仍旧来自平台——避免“必须手工起名”的死路。"""
+        config.add_account("acc_a", name="襄阳店")
+        config.set_account_nickname("acc_a", "小红薯")
+        assert config.account_display_name("acc_a") == "小红薯"
+        assert config.account_name("acc_a") == "襄阳店"
+
+    def test_unknown_account_falls_back_to_its_id(self, reg):
+        assert config.account_display_name("ghost") == "ghost"
