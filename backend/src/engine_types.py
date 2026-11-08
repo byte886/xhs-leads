@@ -37,3 +37,37 @@ def builtin_cft_candidates() -> str | None:
         if c and pathlib.Path(c).exists():
             return c
     return None
+
+
+# ---------------------------------------------------------------------------
+# 可选未打包扩展（R-6.70）：启动时 --load-extension 自动加载，默认关闭。
+# 与 CFT 同为随应用分发的资产，故候选解析风格一致（打包态优先、开发态兜底）。
+# ---------------------------------------------------------------------------
+EXTENSION_DIR_NAME = "extension"
+
+
+def builtin_extension_candidates() -> list[str]:
+    """扩展目录候选：打包态（随包 Resources）优先，其次项目根 extension（开发态）。
+
+    PyInstaller 布局：macOS datas 落在 Contents/Resources（_MEIPASS.parent/Resources），
+    Windows/onedir 的 datas 直接在 _MEIPASS 下——故两种打包路径都尝试，跨平台一致。
+    """
+    candidates: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = pathlib.Path(meipass)
+        candidates.append(str(mp / EXTENSION_DIR_NAME))
+        candidates.append(str(mp.parent / "Resources" / EXTENSION_DIR_NAME))
+    # 开发态：backend/src/engine_types.py 的 parents[2] = 项目根。
+    candidates.append(
+        str(pathlib.Path(__file__).resolve().parents[2] / EXTENSION_DIR_NAME)
+    )
+    return candidates
+
+
+def builtin_extension_dir() -> str | None:
+    """返回第一个含 manifest.json 的扩展目录；无则 None（不追加 flag，行为不变）。"""
+    for c in builtin_extension_candidates():
+        if c and (pathlib.Path(c) / "manifest.json").exists():
+            return c
+    return None

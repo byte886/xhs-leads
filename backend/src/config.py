@@ -401,6 +401,7 @@ def add_account(account_id: str, role: str = "mixed",
         "platform_uid": "",
         "user_data_dir": user_data_dir,
         "status": status,
+        "extension_enabled": False,
         "cookie_expires_at": None,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -540,6 +541,20 @@ def set_account_auto_headless(account_id: str, on: bool) -> bool:
     if get_account(account_id) is None:
         return False
     update_account(account_id, auto_headless=bool(on))
+    return True
+
+
+def extension_enabled(account_id: str) -> bool:
+    """该账号启动时是否自动加载未打包扩展（R-6.70）。默认 False——开关不打开，
+    现有账号、窗口与测试行为零变化。老账号缺该字段时按 False 处理，无需迁移。"""
+    return bool((get_account(account_id) or {}).get("extension_enabled"))
+
+
+def set_extension_enabled(account_id: str, on: bool) -> bool:
+    """设置/清除该账号的扩展自动加载标记；账号不存在返回 False。"""
+    if get_account(account_id) is None:
+        return False
+    update_account(account_id, extension_enabled=bool(on))
     return True
 
 

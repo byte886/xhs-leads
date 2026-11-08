@@ -26,7 +26,7 @@ from playwright.async_api import async_playwright
 
 from src import config, injections, logger as xlog, risk
 from src.cdp_timeouts import CDP_QUICK, cdp_call
-from src.engine_types import builtin_cft_candidates
+from src.engine_types import builtin_cft_candidates, builtin_extension_dir
 
 # 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
 _SCREEN: tuple[int, int] | None = None
@@ -483,6 +483,18 @@ class AccountEngine:
         # R-6.53j：Playwright driver 默认 args 也含 --no-first-run，须显式忽略
         launch_kwargs["ignore_default_args"] = ["--no-first-run"]
 
+    def _launch_apply_extension(self, launch_kwargs: dict) -> None:
+        """R-6.70：可选自动加载未打包扩展（默认关闭，由 config.extension_enabled 控制）。
+
+        仅当扩展目录含 manifest.json 时才追加两个 flag；目录缺失则什么都不做，
+        启动行为与开关关闭时完全一致。不引入 daemon/WebSocket，也不改变进程模型。
+        """
+        ext_dir = builtin_extension_dir()
+        if not ext_dir:
+            log.info("扩展开关已开但未找到含 manifest 的扩展目录，跳过加载")
+            return
+        launch_kwargs["args"].append(f"--load-extension={ext_dir}")
+        launch_kwargs["args"].append(f"--disable-extensions-except={ext_dir}")
 
     async def _launch_after_start(self) -> None:
         """启动后注入 stealth（R 批 v1.4 降低风控识别）并回注持久化 Cookie。"""
@@ -520,6 +532,8 @@ class AccountEngine:
             self._launch_apply_shell_window(launch_kwargs)
         self._launch_apply_chrome_log(launch_kwargs)
         self._launch_apply_binary(launch_kwargs, headless)
+        if config.extension_enabled(self.account_id):
+            self._launch_apply_extension(launch_kwargs)
         self._context = await pw.chromium.launch_persistent_context(
             self.user_data_dir, **launch_kwargs
         )
