@@ -1655,6 +1655,18 @@ async def accounts_refresh_identity(account_id: str):
     }
 
 
+@app.post("/api/accounts/{account_id}/scan_login")
+async def accounts_scan_login(account_id: str):
+    """扫码登录入口（R-6.71）：无头账号先切有头，再打开登录页，一次调用完成。
+
+    供未登录首次扫码、登录态过期重新扫码使用；default 承载壳窗本就有头，
+    直接打开登录页。采集任务运行中不打断。
+    """
+    from src import engine_window
+
+    return await engine_window.scan_login(account_id)
+
+
 @app.delete("/api/accounts/{account_id}")
 async def accounts_remove(account_id: str):
     """删除账号（R-6.61）：引擎在跑先关掉；profile 移进回收区，不直接删。

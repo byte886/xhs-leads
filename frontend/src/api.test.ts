@@ -193,6 +193,20 @@ describe('账号管理 API 契约', () => {
     expect(r.display_name).toBe('小红薯')
   })
 
+  it('apiScanLogin：POST 到 scan_login 子路径，回扫码提示', async () => {
+    let u = ''
+    let method = ''
+    mockFetch(async (uu, init) => {
+      u = String(uu)
+      method = String(init!.method)
+      return okRes({ ok: true, account: 'acc_a', note: '已打开扫码窗口，请扫码登录' })
+    })
+    const r = await api.apiScanLogin('acc_a')
+    expect(u).toBe('/api/accounts/acc_a/scan_login')
+    expect(method).toBe('POST')
+    expect(r.note).toBe('已打开扫码窗口，请扫码登录')
+  })
+
   it('apiDeleteAccount：account_id 进路径且编码', async () => {
     let u = ''
     mockFetch(async (uu) => { u = String(uu); return okRes({ ok: true }) })

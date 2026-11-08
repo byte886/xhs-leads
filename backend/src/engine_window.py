@@ -54,6 +54,30 @@ async def open_login(account: str = "default") -> dict:
     return {"ok": True, "account": account}
 
 
+async def scan_login(account: str) -> dict:
+    """扫码登录统一入口（R-6.71）：先确保有头、再打开登录页，一次调用完成。
+
+    无头账号直接 open_login 没有可见窗口、无法扫码，故先 set_window(on=True)
+    切回有头（重启引擎、回注 cookie）；本就有头则跳过切换。覆盖两类场景：
+    未登录首次扫码、登录态过期重新扫码。
+    """
+    from src import config
+    from src.server import _COLLECT_TASKS
+
+    if config.get_account(account) is None:
+        return {"ok": False, "error": f"账号 {account} 不在注册表中"}
+    for _st in list(_COLLECT_TASKS.values()):
+        if _st.get("status") == "running" and _st.get("account_id", "default") == account:
+            return {"ok": False, "error": "有采集任务进行中，请先停止再扫码登录"}
+    if config.account_headless(account):
+        win = await set_window(account, on=True)
+        if not win.get("ok"):
+            return win
+    await open_login(account)
+    xlog.audit(account, action="scan_login", ok=True)
+    return {"ok": True, "account": account, "note": "已打开扫码窗口，请扫码登录"}
+
+
 async def set_window(account: str = "default", on: bool = True) -> dict:
     """调试实时窗口开关（R-6.15）：有头小窗 ↔ 无头，引擎重启生效。
 

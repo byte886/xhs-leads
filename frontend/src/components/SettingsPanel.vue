@@ -10,7 +10,7 @@ import {
   apiLoginStatus, apiLoginBegin,
   apiGetAppConfig, apiSetAppConfig,
   apiListAccounts, apiAddAccount, apiDeleteAccount, apiRenameAccount,
-  apiRefreshIdentity,
+  apiRefreshIdentity, apiScanLogin,
 } from '../api'
 import type { AccountItem } from '../types'
 
@@ -181,6 +181,24 @@ async function openAccountFn(aid: string) {
     await loadAccounts()
   } catch (e) {
     toast('开窗失败：' + (e as Error).message, 'error')
+  } finally {
+    acctBusy.value = false
+  }
+}
+
+async function scanLoginFn(aid: string) {
+  if (acctBusy.value) return
+  acctBusy.value = true
+  try {
+    const r = await apiScanLogin(aid)
+    if (!r.ok) {
+      toast(r.error || '扫码登录失败', 'error')
+      return
+    }
+    toast(r.note || '已打开扫码窗口，请扫码登录')
+    await loadAccounts()
+  } catch (e) {
+    toast('扫码登录失败：' + (e as Error).message, 'error')
   } finally {
     acctBusy.value = false
   }
@@ -477,6 +495,13 @@ onMounted(async () => {
                 </div>
                 <div v-else class="acct-ops">
                   <button class="btn sm" :disabled="acctBusy" @click="startRename(a)">备注</button>
+                  <button
+                    v-if="a.account_id !== 'default'"
+                    class="btn primary sm"
+                    :disabled="acctBusy"
+                    :title="a.red_id ? '登录态过期可重新扫码' : '打开有头窗口扫码登录'"
+                    @click="scanLoginFn(a.account_id)"
+                  >扫码登录</button>
                   <button
                     v-if="a.running && !a.red_id"
                     class="btn sm"

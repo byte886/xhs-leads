@@ -333,3 +333,82 @@ def test_login_page_reuses_existing_xhs_page(monkeypatch):
     pg = asyncio.run(engine_window.login_page("acc_x"))
     assert isinstance(pg, _P)
     assert eng.new_called is False
+
+
+# ------------------------------------------------ R-6.71 scan_login 扫码登录
+
+def test_scan_login_rejects_unknown(monkeypatch):
+    monkeypatch.setattr(config, "get_account", lambda _a: None)
+    r = asyncio.run(engine_window.scan_login("ghost"))
+    assert r["ok"] is False
+    assert "不在注册表" in r["error"]
+
+
+def test_scan_login_refuses_while_collecting(monkeypatch):
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    server._COLLECT_TASKS["t1"] = {"status": "running", "account_id": "acc_x"}
+    try:
+        r = asyncio.run(engine_window.scan_login("acc_x"))
+    finally:
+        server._COLLECT_TASKS.pop("t1", None)
+    assert r["ok"] is False
+    assert "采集任务进行中" in r["error"]
+
+
+def test_scan_login_headless_switches_first(monkeypatch):
+    """无头账号：先 set_window 切有头，再 open_login。"""
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    monkeypatch.setattr(config, "account_headless", lambda _a: True)
+    calls = []
+
+    async def _set_window(_a, on):
+        calls.append(("window", on))
+        return {"ok": True, "window": on}
+
+    async def _open_login(_a):
+        calls.append(("open", _a))
+
+    monkeypatch.setattr(engine_window, "set_window", _set_window)
+    monkeypatch.setattr(engine_window, "open_login", _open_login)
+    r = asyncio.run(engine_window.scan_login("acc_x"))
+    assert r["ok"] is True
+    assert calls == [("window", True), ("open", "acc_x")]
+
+
+def test_scan_login_headed_skips_switch(monkeypatch):
+    """有头账号：不重启切窗，直接 open_login。"""
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    monkeypatch.setattr(config, "account_headless", lambda _a: False)
+    calls = []
+
+    async def _set_window(_a, on):
+        calls.append("window")
+
+    async def _open_login(_a):
+        calls.append("open")
+
+    monkeypatch.setattr(engine_window, "set_window", _set_window)
+    monkeypatch.setattr(engine_window, "open_login", _open_login)
+    r = asyncio.run(engine_window.scan_login("acc_x"))
+    assert r["ok"] is True
+    assert calls == ["open"]
+
+
+def test_scan_login_propagates_window_failure(monkeypatch):
+    """切有头失败：透传错误，不继续 open_login。"""
+    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
+    monkeypatch.setattr(config, "account_headless", lambda _a: True)
+
+    async def _set_window(_a, on):
+        return {"ok": False, "error": "有采集任务进行中"}
+
+    opened = []
+
+    async def _open_login(_a):
+        opened.append(_a)
+
+    monkeypatch.setattr(engine_window, "set_window", _set_window)
+    monkeypatch.setattr(engine_window, "open_login", _open_login)
+    r = asyncio.run(engine_window.scan_login("acc_x"))
+    assert r["ok"] is False
+    assert opened == []

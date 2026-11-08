@@ -227,6 +227,15 @@ export async function apiRefreshIdentity(accountId: string): Promise<{
   }))
 }
 
+/** 扫码登录（R-6.71）：无头账号先切有头、再打开登录页，一次调用完成 */
+export async function apiScanLogin(accountId: string): Promise<{
+  ok: boolean; account?: string; note?: string; error?: string
+}> {
+  return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}/scan_login`, {
+    method: 'POST',
+  }))
+}
+
 /** R-6.18 双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
 export async function apiGetAppConfig(): Promise<{ ok: boolean; collect_tab_visible?: boolean; error?: string }> {
   try {
