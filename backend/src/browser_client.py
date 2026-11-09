@@ -533,6 +533,23 @@ async def _close_filter_panel(page) -> None:
     await asyncio.sleep(1.2)
 
 
+_LOCATION_FILTER_LABEL = "位置距离"
+
+
+def _filter_warn(label: str, val: str) -> dict:
+    """未生效的筛选项 → 给前端看的人话提示。
+
+    「位置距离」整组（同城 / 附近）依赖浏览器定位，失败原因单一且用户可自助排查，
+    单独给一条可执行提示；其他组只说明「可能没被过滤」。
+    """
+    if label == _LOCATION_FILTER_LABEL:
+        hint = (f"「{val}」没生效：浏览器没拿到定位坐标，结果仍是「不限」。"
+                f"检查账号定位配置后重试。")
+    else:
+        hint = f"筛选「{label}·{val}」没有生效，结果可能没有被过滤。"
+    return {"label": label, "value": val, "hint": hint}
+
+
 async def _apply_filters(page, filters: dict):
     """搜索页应用筛选（排序 / 笔记类型 / 发布时间 / 搜索范围 / 位置距离）。
 
@@ -546,7 +563,9 @@ async def _apply_filters(page, filters: dict):
     现在优先按 data-hp-kind 精确锁定、用真鼠标点坐标；取不到坐标再退回首段文本比较。
     """
     wanted = _wanted_filters(filters)
+    warns: list[dict] = []
     if not wanted:
+        setattr(page, "_xhs_filter_warns", warns)
         return
     for label, val in wanted:
         await _open_filter_panel(page)
@@ -563,9 +582,12 @@ async def _apply_filters(page, filters: dict):
                 log.info("筛选已选 %s=%s 面板选中态=%s", label, val, active)
             else:
                 log.warning("筛选未生效 %s=%s 面板选中态=%s", label, val, active)
+                warns.append(_filter_warn(label, val))
         else:
             log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
+            warns.append(_filter_warn(label, val))
         await asyncio.sleep(2.5)
+    setattr(page, "_xhs_filter_warns", warns)
     await _close_filter_panel(page)
 
 
@@ -1058,7 +1080,7 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     page = await _search_prepare(keyword, filters, account_id)
     if page is None:
         return {"keyword": keyword, "count": 0, "items": [],
-                "stopped": bool(should_stop and should_stop())}
+                "stopped": bool(should_stop and should_stop()), "filter_warnings": []}
     items: list = []
     seen: set = set()
     try:
@@ -1069,7 +1091,10 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
             _remember_page(page, account_id)
         log.info("搜索结束 url=%s cards=%d", _page_url_now(page), len(items))
         return {"keyword": keyword, "count": len(items), "items": items,
-                "stopped": bool(should_stop and should_stop())}
+                "stopped": bool(should_stop and should_stop()),
+                # 没生效的筛选（尤其「位置距离」组）必须带出去，前端才能提示用户；
+                # 静默失败是这一类问题最坑的地方（结果不对但没有任何反馈）。
+                "filter_warnings": getattr(page, "_xhs_filter_warns", []) or []}
     finally:
         if not keep_page:
             _forget_page(account_id)

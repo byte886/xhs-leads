@@ -28,6 +28,10 @@ const distanceOptions = ['不限', '同城', '附近']
 /** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
 const showFilters = ref(false)
 
+/** R-6.81：筛选没生效时的用户提示。位置距离组（同城/附近）依赖浏览器定位，
+ *  失败必须让人看得见——否则结果不对却毫无反馈，比报错更难排查。 */
+const filterWarning = ref('')
+
 /** 已选 chips 折叠阈值：>3 个折叠为「+N」，保持面板高度可预测（参考 Marigold/TDesign） */
 const CHIP_LIMIT = 3
 const chipsExpanded = ref(false)
@@ -137,8 +141,17 @@ function scheduleListRefresh() {
   }, 400)
 }
 
+/** 把后端带回的「筛选未生效」渲染成一条可读提示（重复推送同一份不重复弹）。 */
+function syncFilterWarning(warnings: unknown) {
+  if (!Array.isArray(warnings) || warnings.length === 0) { filterWarning.value = ''; return }
+  filterWarning.value = (warnings as any[])
+    .map((w: any) => w?.hint || `${w?.label || '筛选'}「${w?.value || ''}」没有生效`)
+    .join('；')
+}
+
 /** 收到一条采集状态：按状态分派（进行中只更新数字，终态统一收尾）。 */
 async function handleCollectUpdate(pr: any) {
+  syncFilterWarning(pr.filter_warnings)
   if (pr.status === 'ended_need_login') {
     // R-6.53z8p：撞到登录墙 = 本次采集就此结束（已采保留）。
     // 必须让左窗知道，否则它会一直停在「正在采集」；同时弹登录引导，用户登录后可重新采集。
@@ -216,6 +229,7 @@ async function doCollect() {
   if (!appState.params.keyword.trim()) { toast('请先输入关键词', 'error'); return }
   appState.collecting = true
   appState.endedNeedLogin = false
+  filterWarning.value = ''
   appState.status = '正在采集'
   appState.selected = {}
   // R-6.53w：开始新采集先清空旧列表——采集窗口干净进入「正在采集」，
@@ -356,6 +370,13 @@ onMounted(async () => {
             </select>
           </div>
         </div>
+      </div>
+
+      <!-- R-6.81：筛选未生效提示（位置距离组依赖浏览器定位，失败不能静默） -->
+      <div v-if="filterWarning" class="filter-warn" role="alert">
+        <span class="fw-icon">!</span>
+        <span class="fw-text">{{ filterWarning }}</span>
+        <button class="fw-close" type="button" title="关闭提示" @click="filterWarning = ''">×</button>
       </div>
 
       <!-- 开始采集：独立整行 -->
@@ -516,6 +537,24 @@ onMounted(async () => {
 .chip-clear:hover { color: #c2410c; }
 
 /* 开始采集：独立整行 */
+/* R-6.81 筛选未生效提示：琥珀底（区别于错误红与常规金），不抢主按钮 */
+.filter-warn {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 10px; border: 1px solid #F0C27B; border-radius: 8px;
+  background: #FFF7E8; color: #8A5A00;
+  font-size: 12px; line-height: 1.55;
+}
+.fw-icon {
+  flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%;
+  background: #E8A33D; color: #fff; font-size: 11px; font-weight: 700;
+  text-align: center; line-height: 16px;
+}
+.fw-text { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.fw-close {
+  flex: none; padding: 0 2px; border: none; background: transparent;
+  color: #8A5A00; font-size: 14px; line-height: 1; cursor: pointer;
+}
+
 .btn-search {
   width: 100%;
   box-sizing: border-box;

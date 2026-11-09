@@ -123,7 +123,8 @@ async def search_via_browser(keyword: str, limit: int = 20, on_progress=None, sh
             "collected_count": 0,
             "cover_url": it.get("img", ""),
         })
-    return {"items": notes, "stopped": data.get("stopped", False)}
+    return {"items": notes, "stopped": data.get("stopped", False),
+            "filter_warnings": data.get("filter_warnings", []) or []}
 
 
 async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id: str = "default",

@@ -1012,6 +1012,8 @@ def _state_snapshot(state: dict) -> dict:
         "keyword": state.get("keyword", ""),
         "note": state.get("note", ""),
         "need_login": state.get("status") == "ended_need_login",
+        # R-6.81：未生效的筛选项（含「位置距离」组），前端渲染提示条
+        "filter_warnings": state.get("filter_warnings", []),
     }
 
 
@@ -1461,6 +1463,10 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
             account_id=account_id,
             keep_page=True,
         )
+        # R-6.81：没生效的筛选（「位置距离」组依赖浏览器定位）要带到进度快照里，
+        # 前端据此在 APP 窗口提示用户，而不是静默出一份没过滤的结果。
+        if res.get("filter_warnings"):
+            state["filter_warnings"] = res["filter_warnings"]
         candidates = res["items"]
         if not candidates:
             _collect_finalize_empty(state, res)

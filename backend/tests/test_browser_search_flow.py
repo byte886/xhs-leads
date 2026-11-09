@@ -163,7 +163,8 @@ class TestSearchEntry:
 
         monkeypatch.setattr(bc, "_search_prepare", fake_prep)
         r = _run(bc.search("翡翠", 5, should_stop=lambda: True))
-        assert r == {"keyword": "翡翠", "count": 0, "items": [], "stopped": True}
+        assert r == {"keyword": "翡翠", "count": 0, "items": [], "stopped": True,
+                     "filter_warnings": []}
 
     def test_page_closed_and_count_reported(self, monkeypatch):
         closed = []
@@ -375,3 +376,20 @@ class TestSearchFailGuard:
         monkeypatch.setattr(bc, "_search_prepare", fake_prepare)
         got = _run(bc.search("翡翠", limit=10))
         assert got["count"] == 0 and got["items"] == []
+        assert got["filter_warnings"] == []
+
+
+class TestFilterWarn:
+    """R-6.81：筛选未生效要给用户能自助排查的提示，位置距离组必须点明定位。"""
+
+    def test_location_group_explains_geolocation(self):
+        for val in ("同城", "附近"):
+            w = bc._filter_warn("位置距离", val)
+            assert w["label"] == "位置距离" and w["value"] == val
+            assert "定位" in w["hint"]
+            assert val in w["hint"]
+
+    def test_other_group_generic_without_location_blame(self):
+        w = bc._filter_warn("笔记类型", "图文")
+        assert "定位" not in w["hint"]
+        assert "笔记类型" in w["hint"] and "图文" in w["hint"]
