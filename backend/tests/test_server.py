@@ -6,7 +6,7 @@ import pytest
 
 from src import server
 from src.server import (
-    _cleanup_orphan_images, _cookie_items, _duplicate_published, _img_name,
+    _cleanup_orphan_images, _duplicate_published, _img_name,
     _last_publish_ago_minutes, _publish_count_today,
     _publish_guard, _publish_guard_quota, _publish_guard_time, _publish_week_days,
     _rank_and_insert, _risk_blocked_until,
@@ -57,16 +57,6 @@ class TestCleanupOrphanImages:
         assert (tmp_images / "ref_p1.jpg").exists()
         assert not (tmp_images / "orphan_cover.jpg").exists()
 
-
-class TestCookieItems:
-    def test_sorted_and_ws(self):
-        cookies = [
-            {"name": "zz", "value": "1"},
-            {"name": "web_session", "value": "0123456789abcdef"},
-        ]
-        items, ws = _cookie_items(cookies)
-        assert ws == "0123456789abcdef"
-        assert items[0]["name"] == "web_session"  # 排序后 web_session 在前
 
 
 def _now_fixed(monkeypatch, dt=NOON):

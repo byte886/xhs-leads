@@ -79,42 +79,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .btn-search.stop { background: #333; }
 .btn-search.stop:hover { background: #111; }
 
-/* Cookie 区 */
-.cookie-box { display: flex; flex-direction: column; gap: 8px; }
-.cookie-val {
-  font-family: Menlo, Consolas, monospace; font-size: 11px; background: #FAFAFA;
-  border: 1px dashed #DDD; border-radius: 6px; padding: 8px; word-break: break-all;
-  max-height: 72px; overflow: auto; display: none;
-}
-.cookie-val.show { display: block; }
-.cookie-val .secret { background: #111; color: #111; border-radius: 3px; padding: 0 2px; }
-.cookie-val textarea { width: 100%; min-height: 120px; font-family: Menlo, monospace; font-size: 11px; line-height: 1.5; color: #111; background: #F7F7F5; border: 1px solid #E5E5E2; border-radius: 6px; padding: 8px; box-sizing: border-box; resize: vertical; }
-.cookie-val.show .secret { color: inherit; background: inherit; }
-.cookie-actions {
-  display: flex; flex-direction: column; gap: 6px;
-}
-.c-btn {
-  border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px;
-  font-size: 12px; background: #fff; text-align: left;
-}
-.c-btn:hover { border-color: var(--red); color: var(--red); }
-.c-btn.primary { background: var(--red); color: #fff; border-color: var(--red); font-weight: 600; text-align: center; }
-.c-btn.primary:hover { background: #E51F3A; color: #fff; }
-.c-btn.icon { min-width: 28px; padding: 3px 6px; font-size: 12px; line-height: 1; }
-.c-btn:disabled { opacity: .55; cursor: not-allowed; }
-.cookie-import { display: flex; flex-direction: column; gap: 8px; }
-.cookie-import textarea {
-  width: 100%; min-height: 96px; font-family: Menlo, monospace; font-size: 11px; line-height: 1.5;
-  color: #111; background: #F7F7F5; border: 1px solid #E5E5E2; border-radius: 6px; padding: 8px;
-  box-sizing: border-box; resize: vertical;
-}
-.cookie-import-actions { display: flex; gap: 6px; }
-.cookie-import-actions .c-btn { flex: 1; text-align: center; }
-.import-result { font-size: 12px; color: var(--red); line-height: 1.5; margin: 0; }
-.import-result:not(.err) { color: #2A9D47; }
-.import-hint { font-size: 11px; color: var(--ink-3); line-height: 1.6; margin: 0; }
-.cookie-save { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
-.cookie-save input { width: 14px; height: 14px; accent-color: var(--red); }
 
 /* 右工作区：只保留左右/底部 padding，顶部 padding 设为 0——
    这样内部 sticky 工具栏 top:0 直接吸到滚动视口最顶端，不会因 padding-top 留缝

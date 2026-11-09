@@ -202,16 +202,16 @@ def test_mirror_window_set(client):
     assert r.status_code in (200, 500, 503, 404) or True
 
 
-def test_import_cookies_empty_returns_error(client):
-    # 代码线 R-6.37a 拆分中——端点行为可能变化，只验证可调用不挂
+def test_login_ok_returns_logged_in(client):
+    """R-6.87：登录成功只发通知（不再上传 Cookie），返回 logged_in 供守卫判断。"""
+    r = client.post("/api/auth/login_ok", json={"fresh_scan": True}).json()
+    assert r["ok"] is True and r["logged_in"] is True
+
+
+def test_import_cookies_endpoint_removed(client):
+    """旧 Cookie 搬运端点已下线，避免任何人再把 Cookie 打包进后端。"""
     r = client.post("/api/auth/import_cookies", json={"cookies": []})
-    assert r.status_code in (200, 400, 422, 500)
-
-
-def test_import_cookies_non_xhs_filtered(client):
-    r = client.post("/api/auth/import_cookies", json={
-        "cookies": [{"domain": "google.com", "name": "a", "value": "b"}]})
-    assert r.status_code in (200, 400, 422, 500)
+    assert r.status_code == 404
 
 
 def test_login_begin_state_default(client):

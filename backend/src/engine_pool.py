@@ -292,8 +292,8 @@ def _clear_session_restore(user_data_dir: str) -> None:
     上次异常退出（exit_type=Crashed，如 pkill 停实例）时 Chrome 默认恢复上次全部
     tab（可能停在 xiaohongshu.com 登录页/首页）并弹「要恢复页面吗？Chromium未正确
     关闭」横幅 → 用户反馈「启动看到小红书一闪而过」。故启动前一次性清掉会话恢复
-    三件套，并把 exit_type 修正为 Normal。不动 Cookies/DB——登录态由
-    _replay_saved_cookies 以 cookies.json 为权威源回注，跨重启保留不受影响（R-6.6）。
+    三件套，并把 exit_type 修正为 Normal。不动 Cookies/DB——登录态就存在账号
+    profile 里（Cookie 由浏览器自己写盘），跨重启天然保留，无需外部搬运（R-6.87）。
     """
     default_dir = os.path.join(user_data_dir, "Default")
     _purge_sessions_dir(default_dir)
@@ -634,7 +634,6 @@ class AccountEngine:
         if self.account_id != "default":
             for pg in list(self._context.pages)[:1]:
                 await self._apply_account_title(pg)
-        await self._replay_saved_cookies()
 
 
     async def _launch_context(self, pw):
@@ -771,37 +770,6 @@ class AccountEngine:
         return await self.set_window_state(
             "normal", {"left": left, "top": top, "width": win_w, "height": win_h})
 
-
-    async def _replay_saved_cookies(self) -> None:
-        """R-6.37g 拆自 _launch_context：启动后回注持久化 Cookie（跨重启保留登录态）。
-
-        R-6.72：原口径「以 cookies.json 为权威源、启动即回注」有个致命副作用——
-        cookies.json 是**旧快照**，启动时无条件回注会把 profile 里浏览器自己
-        持久化的**新**会话覆盖成旧值。实测表现：扫码登录后 profile 的 Cookies
-        文件持续写盘（mtime 就是当下），但一重启页面就退回登录页，用户每次
-        都要重扫。改为：profile 已有 web_session 就跳过回注，只在 profile 空
-        （导入 cookie 到新账号这类场景）时兜底。
-        """
-        # 注意：回注必须读持久化文件（cookie_file property），绝不能读内存。
-        try:
-            cur = []
-            if self._context is not None:
-                cur = await self._context.cookies()
-            if any(c.get("name") == "web_session" for c in cur):
-                log.info("账号 %s profile 已有会话，跳过 Cookie 回注", self.account_id)
-                return
-            saved = []
-            cf = self.cookie_file
-            if cf.exists():
-                data = json.loads(cf.read_text())
-                saved = data.get("cookies", data) if isinstance(data, dict) else data
-            if saved:
-                await self._context.add_cookies(saved)
-                log.info("账号 %s 回注持久化 Cookie %d 条", self.account_id, len(saved))
-            else:
-                log.info("账号 %s 无持久化 Cookie 可回注", self.account_id)
-        except Exception as re:  # noqa: BLE001
-            log.warning("账号 %s 回注持久化 Cookie 失败: %s", self.account_id, re)
 
     async def close(self):
         """优雅关闭：ctx.close() 落盘登录态（pkill -9 会丢登录态，已实证）。"""
@@ -1105,15 +1073,6 @@ class AccountEngine:
 
     # ---------------- Cookie 辅助（按账号落盘） ----------------
 
-    @property
-    def cookie_file(self):
-        """该账号的 Cookie 文件：data/cookies/<account_id>.json（default 兼容旧单份）。"""
-        if self.account_id == "default":
-            p = config.DATA_DIR / "cookies.json"
-        else:
-            p = config.DATA_DIR / "cookies" / f"{self.account_id}.json"
-        return p
-
     async def read_cookies(self, timeout: float = 10.0) -> list[dict]:
         """通过 CDP 读该账号引擎当前全部小红书 Cookie（只读，不关闭页面）。
 
@@ -1132,15 +1091,6 @@ class AccountEngine:
             ]
         return await asyncio.wait_for(_impl(), timeout=timeout)
 
-    async def inject_cookies(self, cookies: list[dict]) -> bool:
-        """把 Cookie 注入该账号引擎（幂等，供校验/恢复用）。"""
-        try:
-            ctx = await self.context()
-            await ctx.add_cookies(cookies)
-            return True
-        except Exception as e:  # noqa: BLE001
-            log.warning("账号 %s 注入 Cookie 失败: %s", self.account_id, e)
-            return False
 
 
 class EnginePool:

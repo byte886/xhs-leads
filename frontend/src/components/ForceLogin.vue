@@ -44,7 +44,7 @@ function applyState(lg: any) {
   const realOk = !!lg.logged_in && !lg.risk_verify
   if (wentLogin.value && realOk) {
     stopTimer()
-    appState.cookieRefreshTick += 1
+    appState.authRefreshTick += 1
     emit('done')
     return
   }

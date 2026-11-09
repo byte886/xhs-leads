@@ -64,56 +64,24 @@ def test_login_begin_state_default_not_pending(client):
     assert r == {"pending": False, "force": False}
 
 
-# ------------------------------------------------------- import_cookies 分支
+# ------------------------------------------------------- 登录成功通知（R-6.87）
 
-class _FakeEng:
-    def __init__(self, inject_ok=True, pages=()):
-        self._inject_ok = inject_ok
-        self._pages = list(pages)
-    async def inject_cookies(self, cookies):
-        return self._inject_ok
-    async def context(self):
-        e = self
-        class Ctx:
-            pages = e._pages
-        return Ctx()
-
-
-def _monkeypatch_engine(monkeypatch, eng):
-    async def fake_get(*a, **k):
-        return eng
-    monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
-
-
-def test_import_cookies_no_xhs_domain(client, monkeypatch):
-    """过滤后无小红书域 cookie → ok:False 不注入。"""
-    eng = _FakeEng()
-    _monkeypatch_engine(monkeypatch, eng)
-    r = client.post("/api/auth/import_cookies",
-                     json={"cookies": [{"name": "a", "value": "b", "domain": "example.com"}]})
-    assert r.json()["ok"] is False and "未捕获到" in r.json()["error"]
-
-
-def test_import_cookies_inject_fails(client, monkeypatch):
-    _monkeypatch_engine(monkeypatch, _FakeEng(inject_ok=False))
-    r = client.post("/api/auth/import_cookies",
-                     json={"cookies": [{"name": "web_session", "value": "x", "domain": ".xiaohongshu.com"}]})
-    assert r.json()["ok"] is False and "注入引擎失败" in r.json()["error"]
-
-
-def test_import_cookies_logged_in_success(client, monkeypatch):
-    """注入+判定通过 → logged_in 且 gate 清。"""
+def test_login_ok_clears_gate_and_invalid(client, monkeypatch):
+    """登录成功通知：清登录门、解失效记忆，且不需要任何 Cookie 参数。"""
     monkeypatch.setattr(server, "_LOGIN_GATE", {"pending": True, "force": True})
-    _monkeypatch_engine(monkeypatch, _FakeEng(pages=[]))
-
-    async def state_ok(eng):
-        return True, True, False, False
-    monkeypatch.setattr(server, "_engine_login_state", state_ok)
-    r = client.post("/api/auth/import_cookies",
-                     json={"cookies": [{"name": "web_session", "value": "x", "domain": ".xiaohongshu.com"}]})
+    monkeypatch.setattr(server, "_LOGIN_INVALID", True)
+    r = client.post("/api/auth/login_ok", json={"fresh_scan": True})
     j = r.json()
-    assert j["ok"] is True and j["logged_in"] is True and j["status"] == "logged_in"
-    assert server._LOGIN_GATE["pending"] is False
+    assert j["ok"] is True and j["logged_in"] is True
+    assert server._LOGIN_GATE["pending"] is False and server._LOGIN_GATE["force"] is False
+    assert server._LOGIN_INVALID is False
+
+
+def test_login_ok_accepts_empty_body(client):
+    """守卫轮询发的是空 JSON，端点必须容忍。"""
+    r = client.post("/api/auth/login_ok", json={})
+    assert r.status_code == 200 and r.json()["ok"] is True
+
 
 # ------------------------------------------- R-6.53z8b 登录态判定口径统一
 

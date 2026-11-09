@@ -297,7 +297,7 @@ class ShellWindow:
 
     async def cookies(self) -> list:
         # Playwright cookie dict：name/value/domain/path/secure/httpOnly/sameSite/expires
-        # ——与后端 /api/auth/import_cookies 期望格式一致，无需再转换。
+        # ——只用于就地判断「是否已登录」，不再上传给后端（R-6.87）。
         return await self.page.context.cookies()
 
     async def clear_domain_cookies(self, domain_frag: str) -> int:
@@ -929,15 +929,20 @@ def has_login_cookie(cookies) -> bool:
         return False
 
 
-async def _guard_try_import_cookies(win: "ShellWindow", base: str, cs, state) -> bool:
-    """id_token 出现且满 0.5s → 注入引擎；成功返回 True。state 持 _t_last_import。"""
+async def _guard_try_notify_login(win: "ShellWindow", base: str, cs, state) -> bool:
+    """出现登录 Cookie 且满 0.5s → 通知后端「登录成功」；成功返回 True。
+
+    R-6.87：不再把 Cookie POST 给后端搬运。壳窗/采集窗/引擎是同一个 CFT 实例、
+    同一个 profile，Cookie 由浏览器自己写盘；这里只做一个**不带 Cookie** 的通知，
+    让后端解除失效记忆、推事件给前端。state 持 _t_last_import 做节流。
+    """
     if not has_login_cookie(cs):
         return False
     now = time.monotonic()
     if now - state["import"] < 0.5:
         return False
     state["import"] = now
-    r = await _guard_post_json(base, "/api/auth/import_cookies", {"cookies": cs})
+    r = await _guard_post_json(base, "/api/auth/login_ok", {})
     return bool(r and r.get("logged_in"))
 
 
@@ -947,7 +952,7 @@ async def _guard_monitor_voluntary(win: "ShellWindow", base: str, cs, state) -> 
     if now - state["inject"] >= 5.0:
         state["inject"] = now
         await _guard_inject_active_close(win, base)
-    if await _guard_try_import_cookies(win, base, cs, state):
+    if await _guard_try_notify_login(win, base, cs, state):
         log.info("主动重登成功，Cookie 已注入引擎，返回 APP")
         return True
     try:
@@ -967,7 +972,7 @@ async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
         await injections.inject_once(win.page, "waiting_overlay")
     except Exception:  # noqa: BLE001
         pass
-    if await _guard_try_import_cookies(win, base, cs, state):
+    if await _guard_try_notify_login(win, base, cs, state):
         log.info("登录成功，Cookie 已注入引擎，返回 APP")
         return True
     log.info("已捕获登录 Cookie 但引擎验证未通过")
@@ -1177,7 +1182,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
       用户点「去登录」才导航登录页（不再自动导航）；已登录启动守卫待命。
     - 运行时被踢不直接导航（前端弹强制登录框，用户点击触发）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
-    - 登录成功：id_token → 等待遮罩 → import_cookies 注入引擎 → 回 APP。
+    - 登录成功：id_token → 等待遮罩 → 通知后端 login_ok（不搬 Cookie）→ 回 APP。
     - R-6.48q：pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
       （含 asyncio.Event），用户点「去登录」→ login_begin 置位 evt → 守卫 `await
       evt.wait()` 醒来导航，主循环零轮询。gate 为 None（测试/无壳直跑）退化为
@@ -1487,7 +1492,7 @@ async def _probe_collect_win_login(page) -> None:
     xhs = await _login_cookies_on_browsing_page(page)
     if not xhs:
         return
-    await _post_import_cookies(xhs, fresh_scan=was_login)
+    await _post_login_ok(fresh_scan=was_login)
 
 
 async def _login_cookies_on_browsing_page(page) -> list:
@@ -1518,18 +1523,18 @@ async def _xhs_cookies(page) -> list:
     return [c for c in cs if "xiaohongshu" in (c.get("domain") or "")]
 
 
-async def _post_import_cookies(cookies, fresh_scan: bool = False) -> None:
-    """POST /api/auth/import_cookies（触发登录成功链路：解除失效记忆/唤醒续采/推事件）。
+async def _post_login_ok(fresh_scan: bool = False) -> None:
+    """POST /api/auth/login_ok（登录成功通知：解除失效记忆/唤醒续采/推事件）。
 
-    fresh_scan=True 表示这次是真的从登录页扫码跳过来的；False 是启动/重建时
-    恢复既有登录态的例行同步。
+    R-6.87：不再上传 Cookie——Cookie 由浏览器写在各账号 profile 里，后端不需要
+    也不应该再搬运一份。fresh_scan=True 表示这次是真的从登录页扫码跳过来的。
     """
     from src import config  # noqa: PLC0415
 
     base = f"http://127.0.0.1:{config.front_port()}"
-    body = json.dumps({"cookies": cookies}).encode()
+    body = json.dumps({"fresh_scan": bool(fresh_scan)}).encode()
     req = urllib.request.Request(
-        f"{base}/api/auth/import_cookies", data=body,
+        f"{base}/api/auth/login_ok", data=body,
         headers={"Content-Type": "application/json"})
 
     def _do() -> bytes:
@@ -1539,9 +1544,9 @@ async def _post_import_cookies(cookies, fresh_scan: bool = False) -> None:
     try:
         await asyncio.to_thread(_do)
         if fresh_scan:
-            log.info("扫码成功——Cookie 已自动导入引擎（未点「去登录」路径）")
+            log.info("扫码成功——登录态已生效（Cookie 由 profile 自行保存）")
         else:
-            log.info("登录态恢复——引擎 Cookie 已同步（非本次扫码）")
+            log.info("登录态已就绪（profile 内既有会话，非本次扫码）")
     except Exception as e:  # noqa: BLE001
         log.warning(f"扫码自动导入 Cookie 失败: {e!r}")
 

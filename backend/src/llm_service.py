@@ -1,7 +1,7 @@
 """LLM 配置与 OpenAI 兼容调用（O1 AI 模块，Key 门控）。
 
 设计（参考 O1 设计定稿 §3.1）：
-- 配置存 data/llm_config.json（本地明文，与 cookies.json 同级别信任域）
+- 配置存 data/llm_config.json（本地明文，与账号 profile 同级别信任域）
 - GET /api/llm_config 不返回明文 key（掩码展示）
 - 未配置时 require_llm() 抛 ValueError → 上层转 HTTP 400（前端 AI 按钮灰态+提示）
 - 调用走 OpenAI 兼容 chat/completions（httpx 直连，不引 openai SDK）

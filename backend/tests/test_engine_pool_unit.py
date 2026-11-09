@@ -122,8 +122,6 @@ class TestLaunchAfterStartInjects:
 
         async def _noop():
             return None
-
-        monkeypatch.setattr(eng, "_replay_saved_cookies", _noop)
         return eng
 
     def test_injects_stealth_and_force_login(self, monkeypatch):

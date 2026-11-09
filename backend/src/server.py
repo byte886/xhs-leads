@@ -265,7 +265,7 @@ _LOGIN_CACHE = {"t": 0.0, "data": None}
 _LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半（CDP inner_text 开销可控）
 # R-6.26 登录失效记忆：登录失效（被踢/风控拦截/页面被平台重定向登录页）是**权威事实**。
 # 即使随后采集调试窗被收起、页面信号消失（id_token 残留 → 判定假阳性 logged_in），
-# 也必须**持续判失效**直到用户真正重新登录成功（import_cookies 引擎验证通过）才解除——
+# 也必须**持续判失效**直到用户真正重新登录成功（login_ok 通知 + 引擎实况复核）才解除——
 # 否则 ForceLogin 文案会误显示「当前已登录」、登录引导无法形成重新登录闭环。
 _LOGIN_INVALID = False
 
@@ -454,7 +454,7 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
         _LOGIN_INVALID = True
     elif logged_in:
         # R-6.72（用户口径：未登录就直说，不要等来等去）：实测已登录 → **立即**解除
-        # 失效记忆。旧实现只在 import_cookies 成功时复位，于是「用户已在引擎窗口
+        # 失效记忆。旧实现只在注入链路成功时复位，于是「用户已在引擎窗口
         # 扫码成功、引擎 Cookie 与页面都有效」仍被判未登录，只能重启 app 才恢复——
         # 表现为「扫了码左边还在等、点开始采集一直被拦」。
         _LOGIN_INVALID = False
@@ -481,14 +481,16 @@ def _login_status_unknown(raw):
     return {"status": "unknown", "logged_in": False, "nickname": "", "raw": raw}
 
 
-async def _login_status_store_cache(now, result, kicked, risk_verify, eng):
-    """正常态写 15s 缓存；已登录时按 5min 节流把 Cookie 落回权威源（R-6.53m）。"""
+def _login_status_store_cache(now, result, kicked, risk_verify):
+    """正常态写 15s 缓存。
+
+    R-6.87：不再把引擎内存 Cookie 落回 cookies.json——profile 本身就是权威源，
+    浏览器会把 Cookie 写在账号目录里；落盘只是一份会过期的旧快照。
+    """
     if kicked or risk_verify:
         return
     _LOGIN_CACHE["t"] = now
     _LOGIN_CACHE["data"] = result
-    if result.get("logged_in"):
-        await _persist_session_cookies_if_stale(eng)
 
 
 @app.get("/api/login_status")
@@ -523,7 +525,7 @@ async def login_status():
         if kicked and not risk_verify and await _engine_on_login_page(eng):
             result = dict(result, status="not_logged_in", kicked=False)
             result["raw"] = str(result.get("raw", "")) + "（页面停在登录页→按未登录）"
-        await _login_status_store_cache(now, result, kicked, risk_verify, eng)
+        _login_status_store_cache(now, result, kicked, risk_verify)
         return result
     except Exception as e:  # noqa: BLE001
         return _login_status_unknown(f"引擎判定失败: {str(e)[:80]}")
@@ -540,20 +542,17 @@ async def login_status():
 
 # ================= 真实登录页方案（R-6.5）=================
 # 用户拍板：登录交互改为「壳窗口内打开真实小红书登录页」（原生扫码/手机号+获取验证码），
-# 登录后 Cookie 注入无头引擎独立 profile（两套会话闭环：WebView 登录 → CDP 注入 → 引擎复用）。
+# 登录会话闭环（R-6.87 起不再搬运 Cookie）：Cookie 由浏览器写在各账号 profile 里，
+# 壳窗/采集窗/引擎共用同一个 CFT 实例与 profile，登录态天然共享。
 # 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫导航登录页
 #       （R-6.48q：evt=asyncio.Event 事件驱动唤醒，主循环零轮询）→ 守卫轮询
-#       get_cookies 出现 web_session → import_cookies 注入引擎 → 真实判定登录态 → 回 APP 前端。
+#       get_cookies 出现 web_session → POST login_ok（仅通知）→ 真实判定登录态 → 回 APP 前端。
 # evt 由 launcher 启动守卫前注入（同进程同 loop）；无壳/测试直跑 evt=None，守卫退化低频轮询。
 _LOGIN_GATE: dict = {"pending": False, "force": False, "evt": None}
 
 
 class LoginBeginReq(BaseModel):
     force: bool = False
-
-
-class ImportCookiesReq(BaseModel):
-    cookies: list[dict]  # WebView SimpleCookie 转 dict：name/value/domain/path/expires/secure/httpOnly/sameSite
 
 
 @app.post("/api/auth/login_begin")
@@ -610,93 +609,14 @@ async def login_cancel():
     return {"ok": True}
 
 
-def _to_playwright_cookie(c) -> dict | None:
-    """R-6.37i 拆自 _filter_xhs_cookies：单 cookie 转 Playwright 格式（非小红书域返回 None）。"""
-    dom = str(c.get("domain", ""))
-    if "xiaohongshu" not in dom and "xhscdn" not in dom:
-        return None
-    item = {
-        "name": str(c.get("name", "")),
-        "value": str(c.get("value", "")),
-        "domain": dom,
-        "path": str(c.get("path", "/")),
-    }
-    exp = c.get("expires")
-    if exp is not None:
-        try:
-            item["expires"] = float(exp)
-        except (TypeError, ValueError):
-            pass  # 解析失败则 session cookie（不持久）
-    if c.get("secure"):
-        item["secure"] = True
-    if c.get("httpOnly"):
-        item["httpOnly"] = True
-    ss = c.get("sameSite")
-    if ss in ("Lax", "Strict", "None"):
-        item["sameSite"] = ss
-    return item
-
-
-def _filter_xhs_cookies(raw) -> list:
-    """R-6.37a 拆自 import_cookies：过滤小红书/xhscdn 域 Cookie 并转 Playwright 格式。"""
-    pw = []
-    for c in raw:
-        item = _to_playwright_cookie(c)
-        if item is not None:
-            pw.append(item)
-    return pw
-
-
-def _collect_running() -> bool:
-    """是否有采集任务正在跑。
-
-    R-6.86z：采集期间容不得任何页面被刷新/导航——采集就发生在那个任务页里。
-    """
-    return any(st.get("status") == "running" for st in _COLLECT_TASKS.values())
-
-
-async def _refresh_engine_after_inject(eng) -> None:
-    """R-6.37a 拆自 import_cookies：注入后刷新引擎小红书页使登录态生效（无则开 explore）。"""
-    from src import engine_pool  # noqa: PLC0415
-    # R-6.86z（Nov 9 实测）：采集进行中一律不动页面。cookie 是 context 级，采集页的
-    # 后续请求自然带上；这里若去开 /login，会把正在搜索的任务页导航走——实测「搜索
-    # 回车刚落进 search_result，1 秒后被踢回 explore，于是把首页推荐流当关键词结果
-    # 采集入库」，用户侧看到的就是「采回来的跟关键词无关」。同时也能避免采集期间
-    # 多开一个小红书窗口。
-    if _collect_running():
-        log.info("采集进行中，跳过注入后的页面刷新（Cookie 已在 context 级生效）")
-        return
-    ctx = await eng.context()
-    # R-6.53z8：注入 cookie 后需要新文档才生效，但禁止 reload / URL 直进。
-    # 关键：**不能关闭任何既有页面**——壳窗本身可能正被登录守卫导航到 /login，
-    # 关掉它会被 keeper 判定「壳窗被关闭」直接退出应用（用户实测踩坑）。
-    # 已有 /login 页（含壳窗）时直接复用：cookie 是 context 级，新请求自然带上。
-    for p in ctx.pages:
-        if p.is_closed():
-            continue
-        u = p.url or ""
-        if "xiaohongshu" in u and "/login" in u:
-            return
-    page = await eng.new_page()
-    await page.goto("https://www.xiaohongshu.com/login",
-                    wait_until="domcontentloaded", timeout=30000)
-    # R-6.22/R-6.85：新开小红书窗口校准到采集窗记录位置（默认右半屏）
-    _cb = engine_pool.window_bounds("collect")
-    await _shell_window._calibrate_window(
-        page, _cb["left"], _cb["top"], _cb["width"], _cb["height"],
-    )
-    await asyncio.sleep(3)
-
-
 def _mark_login_ok() -> None:
-    """登录验证通过后的统一收尾：解失效记忆、清登录门、推事件。
+    """登录成功后的统一收尾：解失效记忆、清登录门、推事件（R-6.87 不再搬运 Cookie）。
 
     R-6.72：**不唤醒、不续采**——采集早已改成「撞墙即收尾」，没有挂起等待的任务
     可唤醒；这里只是把登录门复位并通知前端登录态已恢复。
     """
     global _LOGIN_INVALID
     _emit_event("login", {"logged_in": True})  # 登录态变化推一次，前端不再定时查
-    # R-6.26：真实重新登录成功（引擎验证通过）→ 解除失效记忆，登录引导闭环完成
     _LOGIN_INVALID = False
     _LOGIN_GATE["pending"] = False
     _LOGIN_GATE["force"] = False
@@ -705,55 +625,20 @@ def _mark_login_ok() -> None:
         evt.clear()
 
 
-async def _apply_cookies_to_engine(cookies: list, account_id: str = "default") -> dict:
-    """把 Cookie 注入运行中的引擎并真实判定（扫码捕获与粘贴导入共用这一条链路）。"""
-    from src import engine_pool  # noqa: PLC0415（与 login_status 同源延迟导入）
+@app.post("/api/auth/login_ok")
+async def login_ok():
+    """登录成功通知（壳窗/采集窗页面离开 /login 后由守卫调用）。
 
-    pw = _filter_xhs_cookies(cookies)
-    if not pw:
-        return {"ok": False, "error": "未捕获到小红书域 Cookie"}
-    eng = await engine_pool.pool.get(account_id)
-    if not await eng.inject_cookies(pw):
-        return {"ok": False, "error": "注入引擎失败"}
-    try:
-        await _refresh_engine_after_inject(eng)
-    except Exception as e:  # noqa: BLE001
-        log.warning("注入后刷新引擎页面失败（不影响判定）: %s", e)
-    has_ws, page_logged_in, kicked = await _judge_after_inject(eng)
-    # R-6.8：被踢（登录超限/请重新登录）→ 视为未通过，守卫留在登录页重新登录
-    logged_in = has_ws and page_logged_in and not kicked
-    _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清 30s 缓存）
-    if logged_in:
-        _mark_login_ok()
-    return _import_cookies_result(has_ws, page_logged_in, kicked, logged_in)
-
-
-@app.post("/api/auth/import_cookies")
-async def import_cookies(req: ImportCookiesReq):
-    """登录页 Cookie 注入引擎（幂等）：过滤小红书域 → Playwright add_cookies → 刷新 → 真实判定。"""
-    return await _apply_cookies_to_engine(req.cookies)
-
-
-async def _judge_after_inject(eng) -> tuple[bool, bool, bool]:
-    """R-6.37a 拆自 import_cookies：注入后真实判定（异常按未通过处理）。"""
-    try:
-        has_ws, page_logged_in, kicked, _risk_verify = await _engine_login_state(eng)
-    except Exception as e:  # noqa: BLE001（引擎页面刷新/判定时序异常：返回未通过，守卫留在登录页重试）
-        log.warning("注入后引擎登录判定异常（不中断，按未通过处理）: %s", e)
-        has_ws, page_logged_in, kicked = False, False, False
-    return has_ws, page_logged_in, kicked
-
-
-def _import_cookies_result(has_ws: bool, page_logged_in: bool, kicked: bool, logged_in: bool) -> dict:
-    """R-6.37a 拆自 import_cookies：组装注入结果 dict（状态+raw 诊断文案）。"""
-    return {
-        "ok": True,
-        "logged_in": logged_in,
-        "status": "kicked" if kicked else ("logged_in" if logged_in else "not_logged_in"),
-        "raw": f"注入后 engine-cdp web_session={'有' if has_ws else '无'} 页面登录={'是' if page_logged_in else '否'} 被踢={'是' if kicked else '否'}",
-    }
-
-
+    R-6.87：这里不再搬运 Cookie。壳窗、采集窗、引擎是**同一个 CFT 实例、同一个
+    profile**，「守卫从壳窗读 cookie → POST → 后端 add_cookies 回同一个 context」
+    是旧架构（引擎曾是独立 Playwright context）遗留的自导自演，还会在注入后导航
+    页面刷新登录态、把正在采集的搜索页踢回首页。现在 Cookie 全交给浏览器写进
+    各账号 profile；本接口只负责「登录成功」这一件事——解除失效记忆、清登录门、
+    推一次事件给前端，让 APP 立刻回到可用状态。
+    """
+    _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清缓存）
+    _mark_login_ok()
+    return {"ok": True, "logged_in": True}
 
 
 @app.post("/api/mirror/open")
@@ -865,8 +750,8 @@ async def _engine_on_login_page(eng) -> bool:
 async def _real_login_probe() -> dict:
     """真实登录探针（无超时包装）：一次引擎 Cookie 读取 + 一次登录态判定。
 
-    纸面登录态（本地 cookies.json 副本）≠ 引擎独立 profile 内真实会话有效：
-    小红书 Cookie 有效期短（数小时~数天），副本可能「未过期」而真实会话早已失效，
+    纸面登录态（外部留存的旧 Cookie 快照）≠ 引擎 profile 内真实会话有效：
+    小红书 Cookie 有效期短（数小时~数天），旧快照可能「未过期」而真实会话早已失效，
     导致采集打开页面停在登录界面、一条都采不到。
 
     R 批 v1.4：登录态 100% 只依赖引擎独立 profile，不读系统 Chrome
@@ -894,9 +779,10 @@ async def _real_login_probe() -> dict:
             }
         return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（id_token）"}
     if any(c.get("name") == "web_session" for c in mem):
-        r = await _verify_cookies_or_raise(mem, "default")
-        if r.get("logged_in"):
-            return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（CDP）"}
+        # R-6.87：不再把 Cookie 搬去无头浏览器/临时 context 校验（同 context 自导自演）。
+        # 有 web_session 且页面不在登录页即视为会话可用；真失效由采集撞墙兜底。
+        if not await _engine_on_login_page(eng):
+            return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（web_session）"}
     return {
         "ok": False, "code": "not_logged_in",
         "note": "独立 profile 无有效小红书登录态：请在 app 内登录小窗扫码/手机号/微信登录（任一途径）",
@@ -2476,118 +2362,6 @@ def clients_agg():
 
 
 # ================= Cookie（显示 / 一键从 Chrome 导入） =================
-_COOKIE_ORDER = ["web_session", "last_web_session", "a1", "webId", "gid", "id_token", "acw_tc", "websectiga"]
-
-
-def _mask_cookie_value(v: str) -> str:
-    """Cookie 值掩码：短值全遮，长值留前 3 后 3（足够判断是哪条，又不泄露会话）。"""
-    if not v:
-        return ""
-    if len(v) <= 8:
-        return "******"
-    return v[:3] + "****" + v[-3:]
-
-
-def _cookie_items(cookies: list) -> tuple[list, str]:
-    """把本地 cookie 列表整理成诊断项（按 _COOKIE_ORDER 排序）+ 提取 web_session 摘要。
-
-    只给诊断用的最小信息：名称 + 域 + 有效期 + 掩码值（前 3 位/后 3 位）。
-    不返回完整值——Cookie 是引擎内部实现细节（用户拍板：需求层面不需要 Cookie 管理），
-    排障只需要判断「哪一条在、到没到期」，不需要拿到会话原文。
-    """
-    items = []
-    for i, c in enumerate(cookies):
-        nm = c.get("name", "")
-        exp = c.get("expires")
-        if isinstance(exp, (int, float)) and exp < 0:
-            exp = None
-        items.append({
-            "name": nm,
-            "value": _mask_cookie_value(str(c.get("value", ""))),  # 掩码，不吐原文
-            "domain": str(c.get("domain", ".xiaohongshu.com")),
-            "expires": exp if isinstance(exp, (int, float)) else None,  # 会话级 = None
-            "ord": i,
-        })
-    items.sort(key=lambda x: (_COOKIE_ORDER.index(x["name"]) if x["name"] in _COOKIE_ORDER else 99, x["name"]))
-    ws = next((c.get("value", "") for c in cookies if c.get("name") == "web_session"), "") or ""
-    return items, ws
-
-
-@app.get("/api/cookie_info")
-async def cookie_info():
-    """只读展示 Cookie 摘要：读本地 data/cookies.json，不连浏览器、不打开页面。
-
-    原实现每次调 browser_client.cookies() → 内部 _load(explore) 会在 Chrome 打开小红书
-    首页 tab 再关闭——APP 每次刷新都触发「小红书 tab 闪开又消失」（用户痛点）。改为纯本地读取。"""
-    try:
-        p = DATA_DIR / "cookies.json"
-        data = {}
-        if p.exists():
-            data = json.loads(p.read_text(encoding="utf8"))
-        cookies = data.get("cookies", []) or []
-        items, ws = _cookie_items(cookies)
-        return {
-            "ok": True,
-            "count": len(cookies),
-            "saved_at": data.get("saved_at", ""),
-            "account": (ws[:8] + "…") if ws else "",
-            "cookies": items,
-        }
-    except Exception as e:
-        return {"ok": False, "count": 0, "saved_at": "", "cookies": [], "error": f"本地读取失败: {str(e)[:100]}"}
-
-
-def _save_cookies_file(cookies: list[dict]):
-    """备份旧文件后保存 cookies.json（供 profile 模式启动自动载入）。"""
-    dest = DATA_DIR / "cookies.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        dest.replace(dest.with_suffix(".json.bak"))
-    dest.write_text(json.dumps(
-        {"cookies": cookies, "imported_at": datetime.datetime.now().isoformat(timespec="seconds")},
-        ensure_ascii=False, indent=2,
-    ))
-
-
-async def _persist_session_cookies_if_stale(eng, stale_seconds: float = 300.0) -> None:
-    """R-6.53m：登录态有效时把引擎内存完整 Cookie（含 web_session）落回 cookies.json。
-
-    仅在文件「距上次落盘超 stale_seconds」且内存含 web_session 时写盘（幂等、节流）。
-    失败不阻塞 login_status（落盘是尽力而为的持久化加固，不影响登录判定）。
-    """
-    try:
-        p = DATA_DIR / "cookies.json"
-        if p.exists():
-            try:
-                old = json.loads(p.read_text())
-                imported_at = old.get("imported_at", "")
-                if imported_at:
-                    dt = datetime.datetime.fromisoformat(imported_at)
-                    if (datetime.datetime.now() - dt).total_seconds() < stale_seconds:
-                        return
-            except Exception:  # noqa: BLE001（旧文件解析失败：视为需重写）
-                pass
-        mem = await eng.read_cookies(timeout=8.0)
-        if any(c.get("name") == "web_session" for c in mem):
-            _save_cookies_file(mem)
-            log.info("R-6.53m 登录态有效，已落盘 cookies.json（含 web_session，%d 条）", len(mem))
-    except Exception:  # noqa: BLE001（落盘失败不影响登录判定）
-        pass
-
-
-async def _verify_cookies_or_raise(cookies: list, account_id: str = "default") -> dict:
-    """校验导入/读取的 Cookie（headless 优先、回退账号引擎），失败抛 502。
-
-    引擎生命周期由 shutdown 钩子统一管理（不再"用后即停"，防止中断引擎登录态）。
-    """
-    from src import browser_client
-
-    try:
-        return await browser_client.verify_cookies(cookies, account_id)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"校验失败（浏览器未就绪）：{str(e)[:100]}")
-
-
 class PublishReq(BaseModel):
     title: str
     content: str = ""

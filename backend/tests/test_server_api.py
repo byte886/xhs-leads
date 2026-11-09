@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import server
-from src.server import _persist_notes, _save_cookies_file
+from src.server import _persist_notes
 
 
 @pytest.fixture()
@@ -55,12 +55,6 @@ class TestApiSmoke:
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})  # 重置 30s 缓存
         r = client.get("/api/login_status").json()
         assert r["logged_in"] is False and r["status"] == "kicked" and r["kicked"] is True
-
-    def test_cookie_info_empty(self, client, monkeypatch, tmp_path):
-        monkeypatch.setattr(server, "BASE", tmp_path)
-        monkeypatch.setattr(server, "DATA_DIR", tmp_path / "data")
-        r = client.get("/api/cookie_info")
-        assert r.json()["ok"] is True and r.json()["count"] == 0
 
     def test_cleanup_api(self, client, monkeypatch, tmp_path):
         monkeypatch.setattr(server, "IMAGES_DIR", tmp_path / "img")
@@ -118,18 +112,6 @@ class TestPersistNotes:
         assert added == 2 and total == 2 and len(top) == 2
         assert top[0]["feed_id"] == "a1"  # 高分在前
 
-
-class TestSaveCookiesFile:
-    def test_writes_and_backup(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(server, "BASE", tmp_path)
-        monkeypatch.setattr(server, "DATA_DIR", tmp_path / "data")
-        _save_cookies_file([{"name": "web_session", "value": "v1"}])
-        p = tmp_path / "data" / "cookies.json"
-        assert p.exists()
-        _save_cookies_file([{"name": "a1", "value": "v2"}])
-        assert (tmp_path / "data" / "cookies.json.bak").exists()
-        data = json.loads(p.read_text(encoding="utf8"))
-        assert data["cookies"][0]["name"] == "a1"
 
 
 class TestImgProxy:

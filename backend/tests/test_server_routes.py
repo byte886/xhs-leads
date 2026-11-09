@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import server
-from src.server import _rank_and_insert, _startup_cleanup, _verify_cookies_or_raise
+from src.server import _rank_and_insert, _startup_cleanup
 
 
 @pytest.fixture()
@@ -611,26 +611,6 @@ class TestCollectClients:
         r = client.post("/api/clients", json={"feed_id": "x"})
         assert r.status_code == 502
 
-
-class TestCookieInfo:
-    def test_cookie_info_with_data(self, client, tmp_path):
-        (tmp_path / "data").mkdir()
-        (tmp_path / "data" / "cookies.json").write_text(
-            json.dumps({"cookies": [{"name": "web_session", "value": "abcdef012345"}]}))
-        r = client.get("/api/cookie_info")
-        j = r.json()
-        assert j["ok"] is True and j["count"] == 1 and j["account"].startswith("abcdef01")
-
-    def test_cookie_info_missing_file(self, client):
-        r = client.get("/api/cookie_info")
-        assert r.json()["ok"] is True and r.json()["count"] == 0
-
-    def test_cookie_info_bad_json(self, client, tmp_path):
-        (tmp_path / "data").mkdir()
-        (tmp_path / "data" / "cookies.json").write_text("{broken")
-        r = client.get("/api/cookie_info")
-        j = r.json()
-        assert j["ok"] is False and "失败" in j["error"]
 
 
 class TestSaveDraft:

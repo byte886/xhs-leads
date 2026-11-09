@@ -57,19 +57,6 @@ class TestBuiltinCftCandidates:
         assert r is None or "chrome.for.testing" in r.lower() or "Chrome for Testing" in r
 
 
-class TestSavedCookies:
-    def test_missing_file_returns_empty(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(bc.config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(bc.pool, "peek", lambda a: None)
-        assert bc._saved_cookies("default") == []
-
-    def test_reads_default_cookies_file(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(bc.config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(bc.pool, "peek", lambda a: None)
-        (tmp_path / "cookies.json").write_text(
-            '{"cookies": [{"name": "web_session", "value": "x"}]}', encoding="utf8")
-        out = bc._saved_cookies("default")
-        assert out == [{"name": "web_session", "value": "x"}]
 
 
 class TestHandleLoginWall:

@@ -173,7 +173,8 @@ def test_calibrate_window_gives_up_silently(monkeypatch):
 # ------------------------------------------------------------ Cookie 同步
 
 
-def test_post_import_cookies_hits_endpoint(monkeypatch):
+def test_post_login_ok_hits_endpoint_without_cookies(monkeypatch):
+    """R-6.87：登录成功只发通知，不再把 Cookie 上传给后端。"""
     monkeypatch.setattr(config, "front_port", lambda: 8791)
     seen = {}
 
@@ -183,12 +184,12 @@ def test_post_import_cookies_hits_endpoint(monkeypatch):
         return _Resp(b"{}")
 
     monkeypatch.setattr(sw.urllib.request, "urlopen", fake)
-    asyncio.run(sw._post_import_cookies([{"name": "web_session"}], fresh_scan=True))
-    assert "/api/auth/import_cookies" in seen["url"]
-    assert b"web_session" in seen["body"]
+    asyncio.run(sw._post_login_ok(fresh_scan=True))
+    assert "/api/auth/login_ok" in seen["url"]
+    assert b"web_session" not in seen["body"]
 
 
-def test_post_import_cookies_swallows_backend_error(monkeypatch):
+def test_post_login_ok_swallows_backend_error(monkeypatch):
     """后端未就绪时同步失败不能打断 keeper。"""
     monkeypatch.setattr(config, "front_port", lambda: 8791)
 
@@ -196,7 +197,7 @@ def test_post_import_cookies_swallows_backend_error(monkeypatch):
         raise RuntimeError("后端未就绪")
 
     monkeypatch.setattr(sw.urllib.request, "urlopen", boom)
-    asyncio.run(sw._post_import_cookies([], fresh_scan=False))  # 不抛
+    asyncio.run(sw._post_login_ok(fresh_scan=False))  # 不抛
 
 
 def test_goto_base_retries_then_succeeds(monkeypatch):
