@@ -1,4 +1,4 @@
-"""engine_types — 引擎层公共资产（R-6.36c 拆环）。
+"""engine_types — 引擎层公共资产。
 
 承载 engine_pool / browser_client / shell_window 三方共用、且不依赖任何一方的函数与类型，
 消除 engine_pool ↔ browser_client 的模块级互导环（原 browser_client._builtin_cft_candidates
@@ -14,7 +14,7 @@ import sys
 
 def builtin_cft_candidates() -> str | None:
     """内置 Chrome for Testing 候选：打包态（.app 随包分发）优先，其次引擎数据目录
-    旁的 CFT 副本（开发态）。R-6.11 引擎抽象层：CFT 独立身份
+    旁的 CFT 副本（开发态）。引擎抽象层：CFT 独立身份
     （com.google.chrome.for.testing）不占用用户日常 Chrome 的 LaunchServices 单实例。
     注意 PyInstaller BUNDLE 布局差异：sys._MEIPASS = EXE 目录（Contents/MacOS），
     而 datas 落在 Contents/Resources——故两种布局都尝试（_MEIPASS/engine 与
@@ -74,7 +74,7 @@ def builtin_extension_dir() -> str | None:
 
 
 def unpacked_extension_id(ext_dir: str) -> str:
-    """未打包扩展的扩展 ID（R-6.86）。
+    """未打包扩展的扩展 ID。
 
     Chromium 对 `--load-extension` 的目录型扩展，ID 由**绝对路径**的 SHA256 派生：
     取前 16 字节，每个 nibble 映射为 'a'+n。实测与运行时

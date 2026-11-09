@@ -1,6 +1,6 @@
 """统一登录会话（事件驱动）：扫码登录成功 → 自动切无头。
 
-替代 R-6.64 的轮询守护（每 2.5s read_cookies 查 id_token）。真机调研确认的信号：
+替代的轮询守护（每 2.5s read_cookies 查 id_token）。真机调研确认的信号：
 - 未登录 ``GET /api/sns/web/v2/user/me`` 返回 ``data.guest=true``；
 - 扫码登录成功后前端重新拉取该接口，返回 ``data.guest=false`` + 真实 nickname。
 监听挂在 **context 级**（页面导航/重建不影响），事件触发后再一次性 read_cookies

@@ -71,7 +71,7 @@ async def cleanup_tabs(account_id: str = "default") -> int:
 
 
 def _is_crash_error(e: BaseException) -> bool:
-    """R-6.53：判定 Playwright 页面/渲染崩溃类异常（Page crashed / Target closed）。
+    """判定 Playwright 页面/渲染崩溃类异常（Page crashed / Target closed）。
 
     真实采集取证（Nov 5）：CFT 156 在 macOS 上导航/运行小红书 search_result 页会
     概率性渲染进程崩溃（Playwright 报 Page crashed / Target page ... has been closed），
@@ -90,15 +90,15 @@ def _is_crash_error(e: BaseException) -> bool:
 
 
 async def recover_collect_window(account_id: str = "default") -> int:
-    """R-6.53v：停止后恢复采集窗口——清理残留采集页（搜索/笔记/探索页），
+    """停止后恢复采集窗口——清理残留采集页（搜索/笔记/探索页），
     引擎不再有采集页在导航/滚动（CDP 行为完全停止）。登录墙页保留。"""
     return await _cleanup_stale_xhs_pages(account_id)
 
 
 def _is_purgeable_xhs_page(url: str) -> bool:
-    """R-6.53 残留页判据：只清**搜索结果页 / 详情页 / 作者页**这类采集过程页。
+    """残留页判据：只清**搜索结果页 / 详情页 / 作者页**这类采集过程页。
 
-    R-6.53z8k+（Nov 6 实测）：原判据把 explore 首页也当残留，采集窗正停在该页时被
+    +（Nov 6 实测）：原判据把 explore 首页也当残留，采集窗正停在该页时被
     一起关掉 → keeper 判定「右窗被关闭」并重建 → 采集任务丢页直接终止。explore 首页
     与登录页是采集窗的正常驻留页，必须保留；登录墙 / 验证码页同样保留。
     """
@@ -112,9 +112,9 @@ def _is_purgeable_xhs_page(url: str) -> bool:
 async def _close_purgeable_pages(pages, keep=None) -> int:
     """逐页关闭可清理页并计数（关闭失败/采集窗页静默跳过）。
 
-    R-6.84d：**采集调试窗页不算残留**。2026-11-09 真机复现「开始采集→停止→立刻再开始」
+    **采集调试窗页不算残留**。2026-11-09 真机复现「开始采集→停止→立刻再开始」
     后右窗变黑（about:blank）：新一轮的清理把上一轮留下的 search_result / 详情页关了，
-    而采集窗里就那一页（R-6.84b 单标签），关完窗口空了。
+    而采集窗里就那一页，关完窗口空了。
 
     keep：协调器登记的采集窗任务页，引用判活（标题守护会与账号标题互覆盖，不作主判据）。
     """
@@ -143,7 +143,7 @@ def _collect_window_ref():
 
 
 async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
-    """R-6.53：采集前清理残留的小红书搜索/探索页（登录墙页保留）。
+    """采集前清理残留的小红书搜索/探索页（登录墙页保留）。
 
     取证（Nov 5）：历史采集崩溃/中断后残留 search_result 页会僵死（CDP WS 无响应）
     且 cleanup_tabs 按设计保留所有 xiaohongshu.com tab → 页面累积放大引擎负担，
@@ -162,7 +162,7 @@ async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
 
 
 async def _ensure_window_not_empty(ctx) -> bool:
-    """R-6.84d：清理后窗口一页不剩时补一个 explore 页，绝不把窗口留在 about:blank。
+    """清理后窗口一页不剩时补一个 explore 页，绝不把窗口留在 about:blank。
 
     空窗对用户就是一个黑窗口，既不可用也不像「在跑」，与「存在的窗口总是有用的」冲突。
     """
@@ -183,9 +183,9 @@ async def _ensure_window_not_empty(ctx) -> bool:
 # 页面加载与提取
 # ===========================================================================
 async def _load_focus(page, show_front: bool, tag: str = "load") -> None:
-    """焦点处理（R-6.18）：前台可见 or 后台切回壳窗口 Tab1。失败非阻断。
+    """焦点处理：前台可见 or 后台切回壳窗口 Tab1。失败非阻断。
 
-    R-6.53q：CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死直接
+    CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死直接
     触发点），焦点切换非关键路径，故统一走 cdp_call 绝对超时 + skip。
     """
     try:
@@ -202,7 +202,7 @@ async def _load_open(page, url: str, wait_ms: int, show_front: bool,
                      suffix: str = ""):
     """单次尝试：导航 + 焦点 + 注入提取脚本 + 等待渲染。
 
-    R-6.53s：统一 CDP 超时保护——引擎假死时 Playwright 内部 timeout 不触发
+    统一 CDP 超时保护——引擎假死时 Playwright 内部 timeout 不触发
     （CDP 无响应），cdp_call 以绝对超时强制打断并打 WARNING 溯源。
     suffix 用于区分首次与重试的日志标签（load.goto / load.goto_retry）。
     """
@@ -216,7 +216,7 @@ async def _load_open(page, url: str, wait_ms: int, show_front: bool,
 
 async def _load_retry(page, url: str, wait_ms: int, show_front: bool,
                       account_id: str, exc):
-    """R-6.53 崩溃重试：重开页面再试一次；仍失败则清理并抛第二次异常。
+    """崩溃重试：重开页面再试一次；仍失败则清理并抛第二次异常。
 
     触发背景：CFT 156 macOS 概率性崩溃，Nov 5 采集取证「导航 search_result 即
     Page crashed」——渲染进程崩溃后原 page 不可用，必须新开页面。
@@ -239,9 +239,9 @@ async def _load_retry(page, url: str, wait_ms: int, show_front: bool,
 
 async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
                 show_front: bool = True):
-    """打开页面并注入提取脚本（失败按 R-6.53 崩溃重试一次）。
+    """打开页面并注入提取脚本（失败按崩溃重试一次）。
 
-    show_front=False（R-6.18）：采集后台完成——不 bring_to_front 抢前台，
+    show_front=False：采集后台完成——不 bring_to_front 抢前台，
     采集 tab 留在壳窗口 采集窗（设置页开关控制是否显示）。
     """
     page = await _page(account_id)
@@ -257,7 +257,7 @@ async def _load(url: str, wait_ms: int = 5000, account_id: str = "default",
         raise
 
 def _find_shell_tab(page, base: str):
-    """R-6.37i 拆自 _switch_back_to_shell：定位壳窗口 Tab1（base 前缀、非当前页）。"""
+    """定位壳窗口 Tab1（base 前缀、非当前页）。"""
     for p in page.context.pages:
         if not p.is_closed() and p != page and base and (p.url or "").startswith(base):
             return p
@@ -268,7 +268,7 @@ async def _switch_back_to_shell(page) -> None:
     """后台采集：窗口焦点回到壳窗口 Tab1（base_url 前缀 tab），采集 tab 保持存在。
 
     注：Chrome 单窗口仅一个 active tab——切换后采集 tab 为后台，若实测渲染节流
-    导致采集 0 条，R-6.18 兜底由 collect_tab_visible=True（显示采集）承担。
+    导致采集 0 条，兜底由 collect_tab_visible=True（显示采集）承担。
     """
     try:
         base = (os.environ.get("XHS_SHELL_URL") or "").rstrip("/")
@@ -288,7 +288,7 @@ async def _switch_back_to_shell(page) -> None:
 def _wall_by_url(url: str) -> str:
     """按页面 URL 判定拦截原因（纯函数，便于单测与控圈复杂度）。
 
-    R-6.53z6：平台人机验证页实测不带 `/login`（地址是
+    平台人机验证页实测不带 `/login`（地址是
     `/website-login/captcha?...`），原判定只看 `/login` 与页面中文文案，
     两者都不命中 → 采集 0 条被误报成「限流」，用户不知道要去过验证。
     """
@@ -359,7 +359,7 @@ def _wanted_filters(filters: dict) -> list[tuple[str, str]]:
 async def _open_filter_panel(page) -> None:
     """展开筛选面板。
 
-    R-6.79（2026-11-09 真机回归）：R-6.77 把这里的展开动作从「JS 直接
+    （2026-11-09 真机回归）：把这里的展开动作从「JS 直接
     `div.filter.click()`」改成「Python 发鼠标事件」，结果 `search_result_ai`
     页上的「筛选」对程序化鼠标事件完全不响应（同坐标、同一手法，两天前那条
     JS click 通道每次都能展开：tags 0→35、可见选项 19 个、点完「图文」后
@@ -423,7 +423,7 @@ async def _apply_filters(page, filters: dict):
     跳过默认值（综合 / 全部 / 不限）：只在用户明确选择非默认条件时点击对应选项。
     点击条件后页面会刷新，每项点击后等待结果重新加载。
 
-    R-6.54（2026-11-08 实测）：平台每个筛选选项有两层 `div.tags`——可见层，以及一层
+    （2026-11-08 实测）：平台每个筛选选项有两层 `div.tags`——可见层，以及一层
     `data-hp-kind="xhs-filter-tag-<值>"` 的透明热区代理层。两层 innerText 都是
     「值\\n值」（可见层+代理层拼接），旧代码用 `.trim() === 值` 精确比较永远不命中，
     于是"选了图文/最新"实际一个筛选都没应用（用户看到 chips 变了、结果仍是视频）。
@@ -532,10 +532,9 @@ _FILTER_TAG_POINT_JS = """(val) => {
 
 
 def _handle_login_wall(account_id: str, wall: str) -> None:
-    """登录墙处置（R-6.22i：统一走软风控，不锁账号）。
+    """登录墙处置。
 
-    历史背景（已修复 `e2ec0cc`，2026-11-06 复核本函数只调 mark_manual）：R-6.15
-    拍板移除风控熔断后，曾有 24h 硬熔断（mark_hard→cooldown）残留在登录墙路径，
+    历史背景（已修复 `e2ec0cc`，2026-11-06 复核本函数只调 mark_manual）：    拍板移除风控熔断后，曾有 24h 硬熔断（mark_hard→cooldown）残留在登录墙路径，
     导致 _require_login 403「请 X 小时后再试」把账号锁死。
     现统一 mark_manual：任务中止但账号不熔断，页面保留供扫码/验证；
     登录成功后 login_status 自动 resolve，下个任务直接继续。
@@ -616,7 +615,7 @@ async def _page_needs_login(page) -> bool:
 async def _session_cookie_alive(page) -> bool:
     """会话 cookie（web_session）还在不在。
 
-    R-6.53z8q 实测盲区：被踢下线 / cookie 失效后，页面 DOM 仍停在登录态渲染（旧画面
+    实测盲区：被踢下线 / cookie 失效后，页面 DOM 仍停在登录态渲染（旧画面
     没刷新），只看渲染态会判成「已登录」，采集继续空跑到结束、最后当成「平台数据不足」
     正常收尾——正好与「需要登录就立刻结束本次采集」相反。故再核一次会话 cookie。
     读不到 cookie 时返回 True（不误杀，交给渲染态与后续请求兜底）。
@@ -644,7 +643,7 @@ async def _ensure_browse_page(page, account_id: str) -> bool:
 async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
     """模拟真人搜索：聚焦搜索框 → 清空残留 → 逐字输入 → 回车 → 核对真的进了结果页。
 
-    R-6.77（实机复现）：坐标点击搜索框会让焦点落在 BODY——`elementFromPoint(535,72)`
+    （实机复现）：坐标点击搜索框会让焦点落在 BODY——`elementFromPoint(535,72)`
     明明是 TEXTAREA（#search-input-in-feeds），点完 activeElement 却是 BODY，输入
     的文字一个都不进框、回车无效，页面停在 explore。旧代码只看「有没有卡片」，
     而 explore 首页本来就有 30 张推荐卡，于是把推荐流当成关键词结果入库
@@ -680,7 +679,7 @@ async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
 async def _wait_search_result_url(page, timeout_s: float = 10) -> bool:
     """等 URL 真的进到 search_result 再判定，别回车后一锤子查。
 
-    R-6.86z（Nov 9 实测）：回车后小红书 SPA 路由要 0.3~1s 才换 URL，而
+    （Nov 9 实测）：回车后小红书 SPA 路由要 0.3~1s 才换 URL，而
     `_wait_note_cards` 在 explore 首页立刻就能数到推荐卡片（首页本来就有）、于是
     立即返回，紧接着查 URL 时仍是 explore → 把已经搜成功的这一轮判成失败。用户侧
     看到的就是「右窗明明已经进了搜索结果页，左窗却说未采集到数据」。故这里轮询 URL。
@@ -696,7 +695,7 @@ async def _wait_search_result_url(page, timeout_s: float = 10) -> bool:
 async def _is_on_search_result(page) -> bool:
     """是否真的进了搜索结果页。
 
-    R-6.53z8k+（Nov 6 实测）：搜索没生效时 explore 首页本来就有 30 张推荐卡片，
+    +（Nov 6 实测）：搜索没生效时 explore 首页本来就有 30 张推荐卡片，
     只看「有卡片」会误判成功，把推荐流当成关键词结果入库（实测采到与关键词无关的
     笔记）。必须再核对 URL 已进入 search_result。
     """
@@ -737,7 +736,7 @@ _LOGO_JS = """() => {
 async def _back_to_feeds(page) -> bool:
     """在搜索结果页时点左上 logo 回首页（模拟点击；不用 URL、不刷新）。
 
-    R-6.53z8k+（Nov 6 实测）：结果页顶部搜索区的位置与首页不同，同坐标命中的是
+    +（Nov 6 实测）：结果页顶部搜索区的位置与首页不同，同坐标命中的是
     DIV、点下去焦点落在 BODY，直接点框不会聚焦输入框。回首页后搜索入口才是稳定
     可点的 #search-input-in-feeds。
     """
@@ -788,7 +787,7 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
 
 
 def _card_type_matches(it: dict, want_type: str | None) -> bool:
-    """搜索卡片是否符合「图文/视频」筛选（R-6.77 兜底）。
+    """搜索卡片是否符合「图文/视频」筛选。
 
     平台筛选是靠点击页面上的筛选按钮实现的，点击失败或没生效时视频就会混进来。
     这里在提取层再兜一道：卡片字段是 extract.js 给的 type='video'/'note'，
@@ -842,7 +841,7 @@ def _should_stop_collect(count: int, limit: int, stale: int, added: int, should_
 
 async def _open_search_page(keyword: str, filters, account_id: str,
                             label: str = "prepare_search_page"):
-    """准备搜索页：cdp_call 绝对超时保护（R-6.53s，引擎假死时内部 timeout 不触发）。"""
+    """准备搜索页：cdp_call 绝对超时保护。"""
     return await cdp_call(_prepare_search_page(keyword, filters, account_id),
                           timeout=CDP_PREP, label=label)
 
@@ -863,7 +862,7 @@ async def _search_prepare(keyword: str, filters, account_id: str):
 
 async def _search_recover(page, keyword: str, filters, account_id: str,
                           exc, kind: str, tries: int, max_tries: int):
-    """R-6.53 采集页崩溃恢复：重开搜索页返回新 page；非崩溃/超限/重开失败返回 None。
+    """采集页崩溃恢复：重开搜索页返回新 page；非崩溃/超限/重开失败返回 None。
 
     tries 为已用重开次数（调用方负责递增），语义与原 crash_tries 上限一致。
     """
@@ -951,7 +950,7 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
     - keep_page：True 时保留搜索页并留在活动页登记，供随后逐条点开补详情；
       False（默认）结束即登记清除并关页。配套释放走 release_search_page()。
     - 总时长上限 120s：平台 AI 搜索页渲染慢时的兜底，超时返回已采集部分
-    - R-6.53：渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
+    -渲染进程崩溃（Page crashed / Target closed）时自动重开搜索页继续，
       最多 2 次；已采 items 保留。
     """
     page = await _search_prepare(keyword, filters, account_id)
@@ -1086,7 +1085,7 @@ async def _close_stray_pages(page, before: set, account_id: str) -> int:
 async def _back_to_list(page) -> bool:
     """从详情页返回结果页：只在"确实站在详情页"时才后退，退完校验落点。
 
-    R-6.53z8k+（Nov 6 修）：原来是无条件 `go_back()` + 等 1.5s —— 点卡片落空时
+    +（Nov 6 修）：原来是无条件 `go_back()` + 等 1.5s —— 点卡片落空时
     会把搜索页直接退到 `/explore` 首页，后续所有详情都点不到卡片；平台多 push
     一条历史时又会退到中间态。改成：先断言当前位置是详情页，退一次，再校验是否
     落回搜索结果页，不落就如实打日志交给调用方降级（绝不连退）。
@@ -1112,7 +1111,7 @@ def _detail_url(feed_id: str, xsec_token: str) -> str:
 async def _open_detail_page(feed_id: str, xsec_token: str, account_id: str = "default"):
     """凭库里的 token 新开独立详情页；打不开则关页返回 None（调用方回退搜索页）。
 
-    R-6.56（2026-11-08 实测）：旧结论"详情页只能真鼠标点卡片、直链必 404"只对手工
+    （2026-11-08 实测）：旧结论"详情页只能真鼠标点卡片、直链必 404"只对手工
     拼的 URL 成立。用库里 xsec_token 拼回 feed_id 直开，新开 tab 实测正常——落地 URL
     未被重定向、`.note-scroller` 在、评论已渲染、无「当前笔记暂时无法浏览」。
     因此「采评论」不必再依赖采集留下的搜索页：开始采集与采集客户彻底解耦。
@@ -1140,7 +1139,7 @@ async def _open_detail_page(feed_id: str, xsec_token: str, account_id: str = "de
 async def _open_note_card(page, note_id: str) -> bool:
     """在搜索页点开目标卡片：先滚到视口内，再取坐标用真鼠标点击。
 
-    R-6.53z8k+（Nov 6 实测）：卡片 <a href> 是裸链接（无 xsec_token），JS `a.click()`
+    +（Nov 6 实测）：卡片 <a href> 是裸链接（无 xsec_token），JS `a.click()`
     走裸链接会被平台判非法直接跳 /404?source=/404/sec_...；真鼠标点击时平台自己补
     xsec_token，正常进入详情页。
     """
@@ -1205,7 +1204,7 @@ async def _wait_user_page(page, before: set, tries: int = 16):
 async def _read_author_profile(page, account_id: str = "default") -> dict:
     """详情页内点作者 → 平台新开一个作者页标签 → 在它上面取资料 → 立刻关掉。
 
-    R-6.53z8k+（Nov 6 实测）：点作者**不是同页跳转，而是新标签页**（引擎里一度堆了
+    +（Nov 6 实测）：点作者**不是同页跳转，而是新标签页**（引擎里一度堆了
     3 个作者页），所以不能靠等当前页 URL 变化；拿到新页后取完立即关闭，搜索页与历史栈
     都不受影响。搜索页上点作者会污染历史栈，所以只能在这里（详情页内）做。
     """
@@ -1238,7 +1237,7 @@ async def _read_author_fans(page, account_id: str = "default") -> str:
 
 
 async def _assert_logged_in(page, account_id: str) -> None:
-    """采集动作前的最小登录自检（R-6.53z8q）。
+    """采集动作前的最小登录自检。
 
     详情提取原本没有任何登录闸：会话失效后点不开卡片，只返回空 dict，调用方按
     「缺字段降级」处理——整批空跑完还报「采集完成」，与「需要登录就结束本次采集」
@@ -1486,7 +1485,7 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
 
     点卡片与详情补全走同一条路径（真鼠标点可见卡片，平台才会补 xsec_token）。
 
-    R-6.54：搜索页是"点卡片采评论"的唯一入口。采集完/被关掉/重启后没有活动搜索页时，
+    搜索页是"点卡片采评论"的唯一入口。采集完/被关掉/重启后没有活动搜索页时，
     过去是静默返回空，用户会误以为"这条笔记没人评论"。现在按库里关键词重开一次搜索页
     （仅搜索、不采集，keep_page 留页），仍失败则抛 ClientCollectError 交界面明说。
 
@@ -1494,7 +1493,7 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     不带条件重开得到的是综合排序的混合结果，原卡片多半不在里面，于是误报"笔记已不在
     搜索结果里"（2026-11-08 真机踩到：采集用「图文+最新」，重开无筛选 → 卡片未命中）。
 
-    R-6.56：首选凭入库 token **新开独立详情页**（不碰采集页，两个功能解耦）；
+    首选凭入库 token **新开独立详情页**（不碰采集页，两个功能解耦）；
     直开失败才回退到"活动搜索页点卡片 / 按关键词重开"的老路径。
     """
     if xsec_token:
@@ -1536,7 +1535,7 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
 
 
 def _ensure_detail_page(page) -> None:
-    """R-6.84c：点开卡片后必须真的进了详情页，否则前置失败要摆在明面上。
+    """点开卡片后必须真的进了详情页，否则前置失败要摆在明面上。
 
     2026-11-09 真机复现：在重开的搜索列表上点了卡片，详情层没出现，旧实现继续在
     列表页上跑 _drain_comments，返回 {"total":0,"users":[]} —— 界面显示「这条没人
@@ -1551,7 +1550,7 @@ def _ensure_detail_page(page) -> None:
 async def _drain_comments(page) -> dict:
     """评论区懒加载：滚到底 + 展开折叠回复，再提取。
 
-    R-6.55（2026-11-08 真机取证）：详情页评论在 `.note-scroller` 内部滚动
+    （2026-11-08 真机取证）：详情页评论在 `.note-scroller` 内部滚动
     （clientHeight 606 / scrollHeight 2931 起）。旧实现只把评论容器
     `scrollIntoView` 挪进视口、从不滚内部，懒加载永不触发——首屏仅渲染 20 条，
     66 条评论的笔记点「采集客户」只采到 4 个新人，用户看到的是"这篇没人评论"。

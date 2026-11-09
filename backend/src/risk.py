@@ -1,4 +1,4 @@
-"""每账号风控状态（架构改造 P1；R-6.53z3 清理为两态）。
+"""每账号风控状态（架构改造 P1；清理为两态）。
 
 把散落在 server（发布熔断）与 browser_client（登录墙检测）的风控信号，
 收拢为【按账号隔离】的**两态**记录：
@@ -6,10 +6,10 @@
     ok ──(Cookie 失效 / 登录墙 / 验证码)──► manual（需扫码或导 Cookie）
     manual ──(登录态恢复 / 人工确认)──► ok
 
-R-6.15 用户拍板：移除「拟人频率保护」任务间节流（90s）与「风控熔断/人工锁定」前置拦截。
-R-6.53z3 依「没有被调用的代码就是死代码」进一步删除已无调用方的 cooldown/throttle
+用户拍板：移除「拟人频率保护」任务间节流（90s）与「风控熔断/人工锁定」前置拦截。
+依「没有被调用的代码就是死代码」进一步删除已无调用方的 cooldown/throttle
 分支与 mark_soft / mark_hard / mark_risk / mark_throttle / check_throttle /
-BlockedError —— 状态机只剩 ok 与 manual，采集前置不再有任何闸（与 R-6.15 一致）。
+BlockedError —— 状态机只剩 ok 与 manual，采集前置不再有任何闸（与一致）。
 
 关键性质：
 - 每账号独立：A 号需登录不影响 B 号

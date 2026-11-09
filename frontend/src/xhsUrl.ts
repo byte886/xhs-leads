@@ -1,5 +1,5 @@
 /**
- * 小红书笔记链接构造（R-6.53z6）：生成前统一做参数检查。
+ * 小红书笔记链接构造：生成前统一做参数检查。
  * - feedId 为空 → 返回空串，调用方不打开链接；
  * - xsecToken 为空 / null / none / undefined 等脏值 → 不拼该参数；
  * - 值一律 encodeURIComponent，避免 token 里的特殊字符破坏 URL。

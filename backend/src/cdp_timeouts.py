@@ -1,4 +1,4 @@
-"""统一 CDP 调用超时保护（R-6.53s）。
+"""统一 CDP 调用超时保护。
 
 背景（Nov 5 实测取证）：Playwright 内部 timeout（TimeoutError）由 driver 子进程
 控制、依赖 CDP 消息往返；CFT 158 引擎假死（渲染进程冻结）时 CDP 无响应，内部
@@ -9,7 +9,7 @@ timeout 不触发，`await page.goto/evaluate/bring_to_front` 永久挂起——
 
 超时语义（借鉴 browser-control watchdog 经验）：
 - 超时只是放弃等待；底层 CDP 请求不取消、可能仍在引擎侧执行。
-- 超时后该 page/会话视为脏，不得复用——由 engine 假死检测（R-6.53l）接管重建。
+- 超时后该 page/会话视为脏，不得复用——由 engine 假死检测接管重建。
 - skip=True 用于非关键路径（焦点切换、窗口校准等），超时降级继续。
 """
 import asyncio

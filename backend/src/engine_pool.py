@@ -71,7 +71,7 @@ OFFSCREEN_LEFT = -4000
 XHS_HOST = "xiaohongshu.com"
 
 def shell_window_geometry() -> tuple[int, int, int, int]:
-    """双窗口并排布局（R-6.22，R-6.80 高度改为按屏幕自适应）。
+    """双窗口并排布局。
 
     主屏 SW×SH：壳窗口宽 = min(1280, SW // 2)，位置 (0, 0)（主屏左半）；
     采集调试窗口同宽，位置 (win_w, 0)（主屏右半）。两窗等宽并排、互不重叠。
@@ -99,7 +99,7 @@ _LAYOUT_CACHE: dict[str, dict] | None = None
 
 
 def window_bounds(role: str) -> dict:
-    """该窗口本次启动的生效位置（R-6.85）：上次退出前记录优先，否则默认分屏。
+    """该窗口本次启动的生效位置：上次退出前记录优先，否则默认分屏。
 
     只在启动期读一次并缓存：启动之后用户拖动窗口不应改变本次进程内的目标位置，
     否则后续任何一次「重建窗口」都会按拖动后的新位置重摆，产生漂移。
@@ -116,7 +116,7 @@ def window_bounds(role: str) -> dict:
 
 
 def account_window_geometry(account_id: str) -> tuple[int, int, int, int] | None:
-    """非 default 账号的有头窗口位置（R-6.57 多账号错开）。
+    """非 default 账号的有头窗口位置。
 
     default 账号仍走 shell_window_geometry（左壳窗 + 右采集窗）。其余账号从
     屏幕右下按序号级联偏移，保证每窗标题栏可见、可点击切换，不整窗压死在前一窗上。
@@ -170,7 +170,7 @@ async def _get_pw():
 
 
 def _is_blocked_risk_text(txt: str) -> bool:
-    """R-6.37i 拆自 _debug_window_blocked：正文是否命中风控/需验证关键词。"""
+    """正文是否命中风控/需验证关键词。"""
     return any(k in txt for k in ("登录后查看", "风控拦截", "需人工扫码",
                                   "人工验证", "验证后重试", "登录超限",
                                   "请重新登录", "登录已过期"))
@@ -179,7 +179,7 @@ def _is_blocked_risk_text(txt: str) -> bool:
 
 
 async def _any_blocked_page(ctx) -> bool:
-    """R-6.37i：任一小红书页正文命中风控关键词则 True。"""
+    """任一小红书页正文命中风控关键词则 True。"""
     for pg in ctx.pages:
         if "xiaohongshu" not in (pg.url or ""):
             continue
@@ -221,7 +221,7 @@ def _purge_current_session_files(default_dir: str) -> None:
 
 
 def _fix_exit_type(prefs):
-    """exit_type 非 Normal 时修正为 Normal；返回是否有改动。R-6.49b。"""
+    """exit_type 非 Normal 时修正为 Normal；返回是否有改动。。"""
     changed = False
     if prefs.get("exit_type") not in (None, "Normal"):
         prefs["exit_type"] = "Normal"
@@ -234,7 +234,7 @@ def _fix_exit_type(prefs):
 
 
 def _drop_window_restore(prefs) -> bool:
-    """删掉 Chrome 记下的「上次窗口摆放」，让命令行 --window-position 生效。R-6.85。
+    """删掉 Chrome 记下的「上次窗口摆放」，让命令行 --window-position 生效。。
 
     实测（2026-11-09 冷启动）：profile 里有 window placement 时 Chrome 按记录恢复
     窗口 bounds，**忽略 --window-position**——首个窗口仍在 (0,25) 完整显示
@@ -269,7 +269,7 @@ def _normalize_exit_type(default_dir: str) -> None:
 def _collect_win_executable() -> str | None:
     """采集调试窗命令行路由用的内置 CFT 路径；拿不到就 None（退 window.open）。
 
-    R-6.83：右窗要标准浏览器外观（地址栏/标签栏），只能靠命令行 `--new-window`
+    右窗要标准浏览器外观（地址栏/标签栏），只能靠命令行 `--new-window`
     路由，因此建窗时必须带上可执行路径。
     """
     try:
@@ -279,13 +279,13 @@ def _collect_win_executable() -> str | None:
 
 
 def _clear_session_restore(user_data_dir: str) -> None:
-    """启动前清理 Chrome 会话恢复（R-6.48s / R-6.49b）。
+    """启动前清理 Chrome 会话恢复。
 
     上次异常退出（exit_type=Crashed，如 pkill 停实例）时 Chrome 默认恢复上次全部
     tab（可能停在 xiaohongshu.com 登录页/首页）并弹「要恢复页面吗？Chromium未正确
     关闭」横幅 → 用户反馈「启动看到小红书一闪而过」。故启动前一次性清掉会话恢复
     三件套，并把 exit_type 修正为 Normal。不动 Cookies/DB——登录态就存在账号
-    profile 里（Cookie 由浏览器自己写盘），跨重启天然保留，无需外部搬运（R-6.87）。
+    profile 里（Cookie 由浏览器自己写盘），跨重启天然保留，无需外部搬运。
     """
     default_dir = os.path.join(user_data_dir, "Default")
     _purge_sessions_dir(default_dir)
@@ -327,7 +327,7 @@ class AccountEngine:
             return False
 
     def mark_fake_dead(self) -> None:
-        """R-6.53l：CDP 假死标记（保持级，用户拍板分级策略）——只标记不释放。
+        """CDP 假死标记（保持级，用户拍板分级策略）——只标记不释放。
 
         假死（进程存活、协议无响应）可能自愈：立即释放会误杀可恢复实例并引入
         重建成本。保持引用，待下次真实动作（context() 调用）先恢复管理
@@ -335,7 +335,7 @@ class AccountEngine:
         self._fake_dead = True
 
     async def _try_recover_cdp(self) -> bool:
-        """R-6.53l：假死恢复管理——快速探测 CDP 是否恢复（3s 阈值，远小于正常量级）。
+        """假死恢复管理——快速探测 CDP 是否恢复（3s 阈值，远小于正常量级）。
 
         恢复成功（CDP 会话可用）→ 复用当前引擎，避免无谓重建；失败 → 由调用方
         走 _release_locked（优雅 close → 强杀残留）。调用方须已持有 _lock。"""
@@ -360,10 +360,10 @@ class AccountEngine:
     async def force_release(self) -> None:
         """CDP 假死强制释放（对外入口）：无条件关闭当前 context 并置空，下次 context() 重建。
 
-        R-6.53l（用户拍板分级）：假死 → 保持（mark_fake_dead）→ 新动作先恢复管理
+        （用户拍板分级）：假死 → 保持（mark_fake_dead）→ 新动作先恢复管理
         （_try_recover_cdp）→ 无法恢复才释放（本方法）。login_status 超时只标记保持，
         由下次 context() 先尝试恢复，失败才走 _release_locked。
-        R-6.53k：假死时 close() 挂起/失败（CDP 无响应）——5s 超时，失败后强杀残留进程
+        假死时 close() 挂起/失败（CDP 无响应）——5s 超时，失败后强杀残留进程
         （此前 close 异常忽略 → 实例残留，每轮假死积累实例+页面，renderer 膨胀内存消干）。
         """
         async with self._lock:
@@ -371,7 +371,7 @@ class AccountEngine:
             await self._release_locked(reason="假死无法恢复")
 
     async def _release_locked(self, reason: str) -> None:
-        """R-6.53l 拆自 force_release：释放当前 context（调用方须已持有 _lock）。
+        """释放当前 context（调用方须已持有 _lock）。
 
         优雅 close（5s 超时，落盘登录态）→ 失败/超时强杀该 profile 残留进程；
         全程日志 + audit 提示（用户要求「所有这种情况需要给到提示」）。"""
@@ -388,7 +388,7 @@ class AccountEngine:
         xlog.audit(self.account_id, action="engine_force_release", ok=True, detail=reason)
 
     def _kill_stale_processes(self) -> None:
-        """R-6.53k：强杀本账号 profile 的残留 Chromium 进程（close 失败/假死兜底）。
+        """强杀本账号 profile 的残留 Chromium 进程（close 失败/假死兜底）。
 
         按 user_data_dir 精确匹配命令行，不影响其他账号与其他 Chrome。先 TERM 给
         优雅退出窗口（2s，能落盘登录态），残留再 KILL。仅在旧 context 已释放后调用
@@ -418,7 +418,7 @@ class AccountEngine:
                 pass
 
     async def _context_fake_dead_step(self):
-        """R-6.53l 假死保持级处置。
+        """假死保持级处置。
 
         返回 'reuse'（已恢复，可复用当前引擎）/'rebuild'（无法恢复，已强制释放）/
         'skip'（无假死）。保持级语义：只标记不立即释放（可能自愈），下次真实动作
@@ -439,7 +439,7 @@ class AccountEngine:
     async def _context_reuse_if_alive(self) -> bool:
         """当前 context 仍连接可用 → True（直接复用）。
 
-        已断开则释放旧引用（close 失败/超时即强杀残留，防实例堆积，R-6.53k），
+        已断开则释放旧引用（close 失败/超时即强杀残留，防实例堆积，），
         并更新重建时间戳，返回 False 供调用方重新启动。
         """
         if self._context is None:
@@ -462,7 +462,7 @@ class AccountEngine:
 
 
     async def _context_start(self, pw):
-        """启动引擎并审计。失败直接抛 RuntimeError 由上层处置（R-6.22j 无冷却）。"""
+        """启动引擎并审计。失败直接抛 RuntimeError 由上层处置。"""
         try:
             self._context = await self._launch_context(pw)
             xlog.audit(self.account_id, action="engine_start", ok=True,
@@ -489,16 +489,16 @@ class AccountEngine:
     def _launch_kwargs_base(self, headless: bool, eng_port: int) -> dict:
         """构造 launch_persistent_context 基础参数（channel/viewport/args）。
 
-        R-6.27：非无头（壳窗口）时视口必须与窗口几何一致，否则 960 宽窗口显示
+        非无头（壳窗口）时视口必须与窗口几何一致，否则 960 宽窗口显示
         1280 布局、右侧内容被裁；无头引擎固定采集布局。
-        R-6.80：非无头改为「无视口模式」（Playwright 的 no_viewport=True，注意公开
+        非无头改为「无视口模式」（Playwright 的 no_viewport=True，注意公开
         API 是 snake_case 的 no_viewport，不是 driver 层的 noViewport）。固定数值
         viewport 会把页面尺寸锁死，窗口被拖大/缩小后页面不跟随重排——这就是
         「APP 窗口不会自适应页面大小」的直接原因。另注意不能只传 viewport=None：
         Playwright 客户端会把值为 None 的字段当作「未传」丢掉，服务端随即套用默认
         1280x720（实测 innerWidth=1280 而 outerWidth=960），必须显式 no_viewport。
-        R 批 v1.5：引擎带 CDP 端口供 UI 测试 connect_over_cdp 复用同一实例（同一登录态 profile）。
-        R-6.57：端口由调用方传入该账号独占的 debug_port（default=9223，其余 9224 起）。
+        引擎带 CDP 端口供 UI 测试 connect_over_cdp 复用同一实例（同一登录态 profile）。
+        端口由调用方传入该账号独占的 debug_port（default=9223，其余 9224 起）。
         """
         geo = (window_bounds("shell")["width"], window_bounds("shell")["height"])
         base = dict(
@@ -521,7 +521,7 @@ class AccountEngine:
 
 
     def _launch_apply_shell_window(self, launch_kwargs: dict) -> None:
-        """非无头时的窗口几何（R-6.21 双窗口 + R-6.49d 初始窗移出屏幕）。
+        """非无头时的窗口几何。
 
         壳窗口应用模式由 shell_window.ensure_shell 走 --app 路由弹出；此处保留
         --window-size/--window-position 让启动初始普通窗口自生自灭：负坐标消除
@@ -533,7 +533,7 @@ class AccountEngine:
 
 
     def _launch_apply_geolocation(self, launch_kwargs: dict) -> None:
-        """R-6.81：注入固定坐标并授予 geolocation 权限。
+        """注入固定坐标并授予 geolocation 权限。
 
         平台「同城 / 附近」筛选会调用 navigator.geolocation。CFT 无 Google API key，
         真实定位必然失败（官方文档：geolocation features will not work），实测三档：
@@ -551,7 +551,7 @@ class AccountEngine:
 
 
     def _launch_apply_chrome_log(self, launch_kwargs: dict) -> None:
-        """R-6.53：--log-file 让 Chromium base::logging 崩溃前 FATAL 落盘。
+        """--log-file 让 Chromium base::logging 崩溃前 FATAL 落盘。
 
         此前无 stderr 捕获 + --disable-breakpad 关闭 Crashpad → .ips 拿不到 CHECK
         文案（atos 无 dSYM 死路）；每次启动截断文件，崩溃点即崩溃前最后内容。
@@ -567,7 +567,7 @@ class AccountEngine:
 
 
     def _launch_apply_binary(self, launch_kwargs: dict, headless: bool) -> None:
-        """选二进制（R-6.11 内置 CFT 优先）并处理 UA / Playwright 默认参数。
+        """选二进制并处理 UA / Playwright 默认参数。
 
         CFT 独立应用身份（com.google.chrome.for.testing）→ 不再占用用户日常 Chrome
         的 LaunchServices 单实例（根除「APP 开着时日常 Chrome 无法新建窗口」）；
@@ -583,12 +583,12 @@ class AccountEngine:
         launch_kwargs["ignore_default_args"] = ["--no-first-run"]
 
     def _launch_apply_extension(self, launch_kwargs: dict) -> None:
-        """R-6.70：可选自动加载未打包扩展（默认关闭，由 config.extension_enabled 控制）。
+        """可选自动加载未打包扩展（默认关闭，由 config.extension_enabled 控制）。
 
         仅当扩展目录含 manifest.json 时才追加 flag；目录缺失则什么都不做，
         启动行为与开关关闭时完全一致。不引入 daemon/WebSocket，也不改变进程模型。
 
-        R-6.84e：Chromium 137+ 默认启用 `DisableLoadExtensionCommandLineSwitch`
+        Chromium 137+ 默认启用 `DisableLoadExtensionCommandLineSwitch`
         feature，命令行 `--load-extension` 会被静默忽略（表现为 Chrome 里扩展
         条目为 0、service worker 永不出现，而启动参数看起来完全正确）。必须显式
         关掉这个 feature 才能让未打包扩展被加载。
@@ -648,7 +648,7 @@ class AccountEngine:
 
 
     async def _place_account_window(self) -> None:
-        """R-6.57 + R-6.85：有头窗口启动后的初始定位。
+        """+有头窗口启动后的初始定位。
 
         非 default 账号：按序号级联到屏内可见位置（否则永久停在屏幕外，用户看不到）。
         default（壳窗）账号：先挪到屏幕外——壳窗最终由 shell_window 用 `--app` 窗口
@@ -769,7 +769,7 @@ class AccountEngine:
     # ---------------- 页面管理 ----------------
 
     def task_page_snapshot(self):
-        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 采集窗 显隐（R-6.19）。"""
+        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 采集窗 显隐。"""
         tp = self._task_page
         if tp is not None:
             try:
@@ -780,7 +780,7 @@ class AccountEngine:
         return None
 
     async def _reusable_collect_page(self, ctx):
-        """R-6.84b：可复用的采集窗页（同 context、未关闭），否则 None。
+        """可复用的采集窗页（同 context、未关闭），否则 None。
 
         两级判定：先认协调器登记的采集窗引用（keeper 建窗时写入），取不到再按 URL
         在 context 里认领——**不按标题**：两份 title 守护（采集调试窗口 / 账号运营窗口）
@@ -820,7 +820,7 @@ class AccountEngine:
         从机制上消除「反复开关 tab」的观感）；无缓存则**在独立采集窗口**新建，
         失败退化为前台新页。新建后缓存为该账号任务 tab。
 
-        R-6.21 双窗口：任务页（采集执行页）开在**独立 CFT 窗口**（--app 应用模式
+        双窗口：任务页（采集执行页）开在**独立 CFT 窗口**（--app 应用模式
         独立窗口，无地址栏/标签条 + 「采集调试窗口」标题守护；同引擎同 profile ——
         登录态/Cookie 共享、CDP 可控），即「窗口二（采集，由设置开关
         collect_tab_visible 控制开/关）」。窗口一=APP/登录（壳窗口应用模式，
@@ -884,7 +884,7 @@ class AccountEngine:
         return p
 
     def _account_window_label(self) -> str:
-        """账号窗口标题文字：一眼看出这个窗口是哪个号（R-6.69b 用户要求）。
+        """账号窗口标题文字：一眼看出这个窗口是哪个号。
 
         昵称会改也不唯一，所以带上小红书号才能核对「这到底是哪个号」；
         未登录账号没有昵称/号，自动退到内部 id（acc_xxxx 这类唯一符）。
@@ -923,7 +923,7 @@ class AccountEngine:
             log.warning("账号 %s 刷新窗口标题失败: %s", self.account_id, te)
 
     async def _debug_window_blocked(self, ctx) -> bool:
-        """R-6.36e 拆自 new_page()：未登录/风控需验证时不开独立采集窗（判定失败保守阻塞）。"""
+        """未登录/风控需验证时不开独立采集窗（判定失败保守阻塞）。"""
         try:
             cs = await self.read_cookies()
             has_ws = any(c.get("name") == "web_session" for c in cs)
@@ -936,7 +936,7 @@ class AccountEngine:
             return True
 
     async def _open_task_page_window(self, ctx):
-        """R-6.36e 拆自 new_page()：登录有效时开独立采集调试窗；失败返回 None（退化由调用方处理）。"""
+        """登录有效时开独立采集调试窗；失败返回 None（退化由调用方处理）。"""
         try:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
@@ -963,7 +963,7 @@ class AccountEngine:
         引擎窗口本身常驻：不在任务级反复开-关 Chrome 进程（现象 1 机制核心）。
         真正清理无关 tab 走 cleanup_tabs()（如 APP 启动清理）。
 
-        R-6.84d：**壳窗页永不关闭**。用户口径是「APP 页面永远不会消失」；这里用与
+        **壳窗页永不关闭**。用户口径是「APP 页面永远不会消失」；这里用与
         cleanup_tabs 同一套壳窗引用判定，任何路径误传壳窗页都跳过（引用不可用时按 URL 兜底）。
         """
         if page is self._resolve_shell_protected_page():
@@ -986,7 +986,7 @@ class AccountEngine:
         """清理无关标签页：APP 前端页与 about:blank 保留，其余关闭。
 
         keep_url 缺省用 config.front_port() 拼 127.0.0.1:<port>（不再硬编码 8791）。
-        R-6.22j：壳窗（shell_ref 引用）**无条件保护**——壳窗可能正被守卫导航到
+        壳窗（shell_ref 引用）**无条件保护**——壳窗可能正被守卫导航到
         登录页/搜索页（URL 不含 keep_url），URL 匹配会误关壳窗（用户实测「点采集后
         被引入空白页」根因）。以引用判活优先，URL 匹配仅作补充。
         """
@@ -1009,7 +1009,7 @@ class AccountEngine:
             return 0
 
     def _resolve_shell_protected_page(self):
-        """R-6.36e 拆自 cleanup_tabs()：壳窗保护引用（引用不可用返回 None，退回 URL 匹配）。"""
+        """壳窗保护引用（引用不可用返回 None，退回 URL 匹配）。"""
         try:
             from src import shell_window  # noqa: PLC0415
 
@@ -1021,7 +1021,7 @@ class AccountEngine:
             return None
 
     async def _close_if_unrelated(self, p, shell_pg, keep_url) -> int:
-        """R-6.37i 拆自 _close_unrelated_pages：单页无关则关闭，返回是否关闭（0/1）。"""
+        """单页无关则关闭，返回是否关闭（0/1）。"""
         u = p.url or ""
         if p is shell_pg or keep_url in u or u == "about:blank" or "xiaohongshu.com" in u:
             return 0
@@ -1034,14 +1034,14 @@ class AccountEngine:
             return 0
 
     async def _close_unrelated_pages(self, ctx, shell_pg, keep_url) -> int:
-        """R-6.36e 拆自 cleanup_tabs()：遍历关闭无关 tab（壳窗/APP 页/空白/小红书 tab 保留）。"""
+        """遍历关闭无关 tab（壳窗/APP 页/空白/小红书 tab 保留）。"""
         closed = 0
         for p in ctx.pages:
             closed += await self._close_if_unrelated(p, shell_pg, keep_url)
         return closed
 
     async def collapse_debug_windows(self) -> int:
-        """R-6.22g：登录引导时收起采集调试窗——关闭非壳窗口页面，壳窗（APP/登录页）保留。
+        """登录引导时收起采集调试窗——关闭非壳窗口页面，壳窗（APP/登录页）保留。
 
         触发时机：ForceLogin 弹出（前端调用）/ 点「去登录」（login_begin 后端调用）。
         登录完成后用户再次点采集，new_page 按登录态恢复调试窗（登录有效恢复右半屏）。
@@ -1053,7 +1053,7 @@ class AccountEngine:
     async def read_cookies(self, timeout: float = 10.0) -> list[dict]:
         """通过 CDP 读该账号引擎当前全部小红书 Cookie（只读，不关闭页面）。
 
-        R-6.53i：CDP 假死防御——引擎进程存活但 DevTools 协议无响应时，
+        CDP 假死防御——引擎进程存活但 DevTools 协议无响应时，
         Playwright 内部 timeout 依赖 CDP 响应不触发，任务会无限挂起；
         外层 wait_for 超时保证调用链不被卡死（超时抛 asyncio.TimeoutError，由上层处置）。
         """

@@ -19,7 +19,7 @@ describe('isLoginAbnormal', () => {
     for (const msg of no) expect(isLoginAbnormal(msg)).toBe(false)
   })
 
-  it('「需人工扫码/验证后重试」属扫码验证请求 → 触发（R-6.21f 实测口径）', () => {
+  it('「需人工扫码/验证后重试」属扫码验证请求 → 触发', () => {
     expect(isLoginAbnormal('登录后查看（Cookie 有效但被风控，需人工扫码/验证后重试）')).toBe(true)
   })
 

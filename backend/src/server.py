@@ -78,7 +78,7 @@ def _mark_collect_done(account_id: str = "default") -> None:
 
 
 def _reset_collection_data() -> int:
-    """R-6.25：清空采集存储数据（笔记 + 客户 + 采集下载的本地图片）。
+    """清空采集存储数据（笔记 + 客户 + 采集下载的本地图片）。
 
     语义（z8p 调整）：应用重启时清空一次；前端点「开始采集」前调 /api/collect_clear 清一次。
     本函数只被这两处显式调用，不再由 collect_start 隐式触发。
@@ -146,7 +146,7 @@ VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 def _img_name(feed_id: str, suffix: str = "cover") -> str:
     """本地图片文件名：feed_id 含 #（XHS 原特征），# 在 URL 里是 fragment 会被截断 → 替换为 _。
 
-    R-6.53x：feed_id 空值兜底——入库层已过滤无 feed_id 行，此处再防御防接口 500
+    feed_id 空值兜底——入库层已过滤无 feed_id 行，此处再防御防接口 500
     （feed_id None → AttributeError → apiNotes 500 → 前端误判任务结束复位按钮）。
     """
     return f"{(feed_id or '').replace('#', '_')}_{suffix}.jpg"
@@ -160,7 +160,7 @@ def _db() -> sqlite3.Connection:
 
 
 def _add_column_if_missing(con, table: str, col: str, coltype: str) -> None:
-    """R-6.37g 拆自 _init_tables：幂等补列（列已存在静默）。"""
+    """幂等补列（列已存在静默）。"""
     try:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
     except sqlite3.OperationalError:
@@ -252,12 +252,12 @@ _LOGIN_INVALID = False
 
 
 def _is_login_redirect_url(u: str) -> bool:
-    """R-6.37i 拆自 _scan_one_xhs_page：URL 是否登录重定向页。"""
+    """URL 是否登录重定向页。"""
     return "/login" in u or u.rstrip("/").endswith(".xiaohongshu.com/login")
 
 
 async def _scan_one_xhs_page(p, page):
-    """R-6.37g 拆自 _scan_xhs_pages_for_signals：单页处理（首匹配页+正文+登录重定向）。"""
+    """单页处理（首匹配页+正文+登录重定向）。"""
     if p.is_closed() or "xiaohongshu" not in (p.url or ""):
         return page, None, False
     if page is None:
@@ -271,9 +271,9 @@ async def _scan_one_xhs_page(p, page):
 
 
 async def _scan_xhs_pages_for_signals(ctx):
-    """R-6.36e 拆自 _engine_login_state：扫描小红书页（body + 首个匹配页 + 登录重定向信号）。
+    """扫描小红书页（body + 首个匹配页 + 登录重定向信号）。
 
-    R-6.53j：**只扫第一个小红书页**，不再遍历全部——被踢/风控信号为平台**全局渲染**
+    **只扫第一个小红书页**，不再遍历全部——被踢/风控信号为平台**全局渲染**
     （任一打开的小红书画页都会出现对应弹窗/登录墙），单页足够；keeper 每 30s 轮询的
     CDP 压力从「N 页 body」降至「1 页 body」（引擎通常仅 1 个 xhs 页时行为不变）。
     """
@@ -294,30 +294,30 @@ async def _scan_xhs_pages_for_signals(ctx):
 
 
 async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, bool, bool]:
-    """引擎真实登录态（R 批 v1.5；R-6.6 判定升级；R-6.8 被踢检测统一；
-    R-6.22e 风控需人工验证信号；R-6.53i CDP 假死超时防御）：返回
+    """引擎真实登录态（；判定升级；被踢检测统一；
+    风控需人工验证信号；CDP 假死超时防御）：返回
     (web_session 存在?, 页面登录判定?, 被踢信号?, 风控需人工验证?)。
 
     只读、不清 cookie、不新建浏览器实例（复用引擎现有小红书页，无则开 explore）：
     ① CDP 读引擎内存 cookie → web_session / id_token 是否存在；
     ② 页面注入 extract.js → xhsIsLoggedIn()（仅作辅助判定）；
     ③ **被踢信号检测**：平台判定「设备登录超限/请重新登录」时会在页面渲染登录弹窗，
-       即使 id_token/web_session 残留也视为登录态失效（R-6.8：修复「cookie 残留假阳性」）。
+       即使 id_token/web_session 残留也视为登录态失效。
     ④ **风控需人工验证检测**：平台风控拦截（「登录后查看（Cookie 有效但被小红书风控拦截，
        需人工扫码/验证后重试）」等）时 cookie 与页面登录标记都在但会话被拦——区别于
-       真实有效登录态，前端登录引导须保持打开引导用户扫码（R-6.22e：修复「登录引导
+       真实有效登录态，前端登录引导须保持打开引导用户扫码（修复「登录引导
        打开即被假阳性自动关闭」）。
 
     背景：
     - web_session 存在 ≠ 会话有效（小红书未登录也会种占位 web_session，页面仍弹登录框，
-      实测见 R-6，故 R-6.5 引入页面 xhsIsLoggedIn 双判定消除假阳性）。
+      实测见，故引入页面 xhsIsLoggedIn 双判定消除假阳性）。
     - **id_token 是登录成功专属令牌**（未登录会话不种，实测打包态引擎注入后 cookie 含
       id_token len=136 + unread），而引擎页面渲染可能滞后/失败（headless 偶发空白，
-      实测注入后 reload 页面空白 → xhsIsLoggedIn 恒 false 造成假阴性，见 R-6.6）。
+      实测注入后 reload 页面空白 → xhsIsLoggedIn 恒 false 造成假阴性，见）。
       因此：id_token 存在 → 直接判已登录（页面判定不阻塞）；否则回退 web_session + 页面判定。
-    - **R-6.8 被踢覆盖**：被踢信号只认「登录超限 / 请重新登录」这类明确登录 UI 文本，
+    - **被踢覆盖**：被踢信号只认「登录超限 / 请重新登录」这类明确登录 UI 文本，
       不依赖 xhsIsLoggedIn（空白页无这些文本 → 不误判），任一分支出现该信号 → 判失效。
-    - **R-6.53i 假死防御**：CDP 假死（进程存活、WS 未断、协议无响应）时 Playwright 内部
+    - **假死防御**：CDP 假死（进程存活、WS 未断、协议无响应）时 Playwright 内部
       timeout 依赖 CDP 响应不触发、任务无限挂起（keeper 轮询链被卡死）；外层 wait_for
       超时兜底，超时抛 asyncio.TimeoutError 由调用方处置（login_status → mark_fake_dead
       保持，下次动作 context() 先恢复管理，无法恢复才 force_release 重建）。
@@ -345,7 +345,7 @@ async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, b
 
 
 def _detect_risk_verify(body: str) -> bool:
-    """R-6.37a 拆自 _engine_login_state：R-6.22e 风控需人工验证信号（与 risk_manual 审计文案同源）。"""
+    """风控需人工验证信号（与 risk_manual 审计文案同源）。"""
     return (
         ("登录后查看" in body) or ("风控拦截" in body) or ("需人工扫码" in body)
         or ("人工验证" in body) or ("验证后重试" in body)
@@ -355,9 +355,9 @@ def _detect_risk_verify(body: str) -> bool:
 async def _page_is_guest_render(page) -> bool:
     """页面是否**明确**处于游客渲染态（手机号框 / 「登录探索更多内容」）。
 
-    R-6.53z8b：与 browser_client 同一判据（NEEDS_LOGIN_JS，唯一事实源），
+    与 browser_client 同一判据（NEEDS_LOGIN_JS，唯一事实源），
     消除「后端说已登录、采集侧说游客态」的口径分裂。读不到页面 → 返回 False
-    （不作否决，保留 id_token 兜底语义，避免空白页假阴性，R-6.6）。
+    （不作否决，保留 id_token 兜底语义，避免空白页假阴性，）。
     """
     try:
         from src.browser_client import NEEDS_LOGIN_JS  # noqa: PLC0415
@@ -368,11 +368,11 @@ async def _page_is_guest_render(page) -> bool:
 
 
 async def _decide_page_logged_in(page, has_id_token: bool, has_ws: bool, kicked: bool) -> bool:
-    """R-6.37a 拆自 _engine_login_state：页面登录判定（id_token 权威 / ws+页面注入 回退）。
+    """页面登录判定（id_token 权威 / ws+页面注入 回退）。
 
-    R-6.53z8b：**页面明确游客态优先否决**——实测 web_session/id_token 残留而页面整页
+    **页面明确游客态优先否决**——实测 web_session/id_token 残留而页面整页
     游客渲染（点搜索框只弹登录浮层），此时任何 cookie 结论都是假阳性。页面不可读时
-    才退回 id_token 兜底（R-6.6 空白页假阴性防线）。
+    才退回 id_token 兜底。
     """
     if kicked:
         return False
@@ -387,7 +387,7 @@ async def _decide_page_logged_in(page, has_id_token: bool, has_ws: bool, kicked:
 
 
 async def _decide_by_tokens(page, has_id_token: bool, has_ws: bool) -> bool:
-    """R-6.53z8b 拆自 _decide_page_logged_in：按令牌/页面注入判定（游客态与被踢已在外层处理）。"""
+    """按令牌/页面注入判定（游客态与被踢已在外层处理）。"""
     if has_id_token:
         # id_token = 登录成功专属令牌：默认判定通过（页面渲染滞后/空白不阻塞，避免假阴性）
         return True
@@ -402,7 +402,7 @@ async def _decide_by_tokens(page, has_id_token: bool, has_ws: bool) -> bool:
 
 
 def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final_logged_in) -> dict:
-    """R-6.36g 拆自 _build_login_status_result：组装结果 dict（状态机+raw 诊断文案）。"""
+    """组装结果 dict（状态机+raw 诊断文案）。"""
     return {
         "status": "kicked" if kicked else ("logged_in" if final_logged_in else "not_logged_in"),
         "logged_in": final_logged_in,
@@ -414,7 +414,7 @@ def _login_status_result_dict(has_ws, page_logged_in, kicked, risk_verify, final
 
 
 def _resolve_risk_if_valid(final_logged_in: bool, kicked: bool) -> None:
-    """R-6.37i 拆自 _build_login_status_result：登录有效时解除风控（失败静默）。"""
+    """登录有效时解除风控（失败静默）。"""
     if final_logged_in and not kicked:
         try:
             risk.resolve("default", reason="登录态有效（login_status 引擎 CDP+页面）")
@@ -423,7 +423,7 @@ def _resolve_risk_if_valid(final_logged_in: bool, kicked: bool) -> None:
 
 
 def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> dict:
-    """R-6.36e 拆自 login_status：判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
+    """判定登录态/失效记忆置位/风控解除，组装结果 dict。"""
     global _LOGIN_INVALID
     logged_in = has_ws and page_logged_in and not kicked
     if kicked or risk_verify:
@@ -440,7 +440,7 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
 
 
 def _login_status_from_cache(now):
-    """命中 15s 缓存则返回结果，否则 None。R-6.26 失效记忆覆盖缓存假阳性。"""
+    """命中 15s 缓存则返回结果，否则 None。失效记忆覆盖缓存假阳性。"""
     if _LOGIN_CACHE["data"] is None or now - _LOGIN_CACHE["t"] >= _LOGIN_CACHE_TTL:
         return None
     d = _LOGIN_CACHE["data"]
@@ -459,7 +459,7 @@ def _login_status_unknown(raw):
 def _login_status_store_cache(now, result, kicked, risk_verify):
     """正常态写 15s 缓存。
 
-    R-6.87：不再把引擎内存 Cookie 落回 cookies.json——profile 本身就是权威源，
+    不再把引擎内存 Cookie 落回 cookies.json——profile 本身就是权威源，
     浏览器会把 Cookie 写在账号目录里；落盘只是一份会过期的旧快照。
     """
     if kicked or risk_verify:
@@ -532,7 +532,7 @@ async def login_begin(req: LoginBeginReq | None = None):
     即使已登录也置 pending；守卫导航登录页后隐藏关闭按钮（不可关闭，登录成功才回）。
     force=False（默认）：主动重登（设置页「重新登录」）——与当前登录态无关，
     总是打开可关闭登录页（可关闭回 APP，登录态不变）。
-    R-6.13：移除原「已登录短路」（已登录返回 already_logged_in=True）——用户约定
+    移除原「已登录短路」（已登录返回 already_logged_in=True）——用户约定
     设置页「重新登录」应总能触发（换账号/刷新会话），不得被当前登录态拦截。
     """
     cache = _LOGIN_CACHE["data"]
@@ -548,7 +548,7 @@ async def login_begin(req: LoginBeginReq | None = None):
 
 @app.post("/api/auth/collapse_debug_windows")
 async def collapse_debug_windows():
-    """R-6.22g：ForceLogin 弹出时前端调用——立即收起采集调试窗（关闭右窗），壳窗保留。"""
+    """ForceLogin 弹出时前端调用——立即收起采集调试窗（关闭右窗），壳窗保留。"""
     try:
         from src import engine_pool  # noqa: PLC0415
 
@@ -577,9 +577,9 @@ async def login_cancel():
 
 
 def _mark_login_ok() -> None:
-    """登录成功后的统一收尾：解失效记忆、清登录门、推事件（R-6.87 不再搬运 Cookie）。
+    """登录成功后的统一收尾：解失效记忆、清登录门、推事件。
 
-    R-6.72：**不唤醒、不续采**——采集早已改成「撞墙即收尾」，没有挂起等待的任务
+    **不唤醒、不续采**——采集早已改成「撞墙即收尾」，没有挂起等待的任务
     可唤醒；这里只是把登录门复位并通知前端登录态已恢复。
     """
     global _LOGIN_INVALID
@@ -596,7 +596,7 @@ def _mark_login_ok() -> None:
 async def login_ok():
     """登录成功通知（壳窗/采集窗页面离开 /login 后由守卫调用）。
 
-    R-6.87：这里不再搬运 Cookie。壳窗、采集窗、引擎是**同一个 CFT 实例、同一个
+    这里不再搬运 Cookie。壳窗、采集窗、引擎是**同一个 CFT 实例、同一个
     profile**，「守卫从壳窗读 cookie → POST → 后端 add_cookies 回同一个 context」
     是旧架构（引擎曾是独立 Playwright context）遗留的自导自演，还会在注入后导航
     页面刷新登录态、把正在采集的搜索页踢回首页。现在 Cookie 全交给浏览器写进
@@ -622,7 +622,7 @@ class MirrorWindowReq(BaseModel):
 
 @app.post("/api/mirror/window")
 async def mirror_window(req: MirrorWindowReq):
-    """调试实时窗口开关（R-6.15）：有头小窗 ↔ 无头（引擎重启生效，登录态保留）。
+    """调试实时窗口开关：有头小窗 ↔ 无头（引擎重启生效，登录态保留）。
 
     用户需求：调试视图不再是「截图映射」，而是引擎独立小窗实时可见采集操作过程。
     """
@@ -632,7 +632,7 @@ async def mirror_window(req: MirrorWindowReq):
 
 @app.post("/api/mirror/close")
 async def mirror_close(account_id: str = "default"):
-    """关闭账号引擎（R-6.60）：第三类账号开出来必须能收回去。
+    """关闭账号引擎：第三类账号开出来必须能收回去。
 
     default 拒绝（承载 APP 壳窗与采集窗）；有采集任务在跑先拒绝。
     """
@@ -642,14 +642,14 @@ async def mirror_close(account_id: str = "default"):
 
 @app.post("/api/mirror/minimize")
 async def mirror_minimize(account_id: str = "default"):
-    """最小化收起账号窗口（R-6.62）：瞬时、不重启、不打断任务、page 不失效。"""
+    """最小化收起账号窗口：瞬时、不重启、不打断任务、page 不失效。"""
     from src import engine_window
     return await engine_window.minimize_account(account_id)
 
 
 @app.post("/api/mirror/restore")
 async def mirror_restore(account_id: str = "default"):
-    """恢复最小化的账号窗口到级联位置（R-6.62）。"""
+    """恢复最小化的账号窗口到级联位置。"""
     from src import engine_window
     return await engine_window.restore_account(account_id)
 
@@ -663,7 +663,7 @@ async def mirror_minimize_all():
 
 @app.post("/api/mirror/auto_headless")
 async def mirror_auto_headless(account_id: str = "default", on: bool = True):
-    """开启/取消「登录完成自动切无头」守护（R-6.64）。
+    """开启/取消「登录完成自动切无头」守护。
 
     on=true：开窗扫码时挂上，检测到 id_token 登录成功后自动切无头；
     on=false：取消守护。
@@ -694,7 +694,7 @@ _REAL_LOGIN_TIMEOUT_S = 3.0
 
 
 async def _engine_on_login_page(eng) -> bool:
-    """R-6.72：引擎现成的小红书页是否停在登录页（只读 URL，不读 body，极轻）。
+    """引擎现成的小红书页是否停在登录页（只读 URL，不读 body，极轻）。
 
     唯一用途是**区分文案语义**：页面停在 /login 是「还没登录（等扫码）」，
     不是「被平台踢出」。两者在 `_engine_login_state` 里都表现为 kicked（
@@ -721,7 +721,7 @@ async def _real_login_probe() -> dict:
     导致采集打开页面停在登录界面、一条都采不到。
 
     R 批 v1.4：登录态 100% 只依赖引擎独立 profile，不读系统 Chrome
-    （方案 A/B「读系统/目标 Chrome Cookie 库自动续命」旧链路已随 R-6.34 收敛删除）。
+    （方案 A/B「读系统/目标 Chrome Cookie 库自动续命」旧链路已随收敛删除）。
     """
     from src import engine_pool
 
@@ -754,7 +754,7 @@ async def _real_login_probe() -> dict:
 async def _require_real_login() -> dict:
     """真实登录校验（采集/搜索前置）：**一问一答 + 硬超时**，绝不把用户拖进「等待」。
 
-    R-6.72（用户拍板：守护会造成不可控局面，完全抛弃）：
+    （用户拍板：守护会造成不可控局面，完全抛弃）：
     超时就超时，给提示让用户重试；不做后台等待、不自动续采、不自动拉回。
     引擎页面卡死（CDP 无响应）时旧实现会让「点开始采集」卡在这里几十秒——
     正是用户看到的「左边一直在等待」。现在整体 3s 上限，超时按未登录返回。
@@ -1002,8 +1002,7 @@ async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "defa
     5 分钟 → 2 分钟；fast=False 拟人串行（默认，安全优先，保持真人浏览节奏）。
     account_id：使用哪个账号引擎补全详情（默认 default）。
     on_progress(n)：每条补全完成后回调（n=已完成条数），供任务进度/状态条实时反馈
-    （R-6.15：补全阶段不再「进度卡死」——搜索采满后 collected 持续更新）。
-    should_stop()：R-6.15 补全阶段停止钩子——用户点「停止」时补全循环也立即收尾，
+    should_stop()：补全阶段停止钩子——用户点「停止」时补全循环也立即收尾，
     不再把已搜到的笔记全部补完才停（原实现只停搜索阶段，补全阶段点停止无效）。
     """
     cache: dict = {}
@@ -1054,7 +1053,7 @@ async def _fill_fans(n: dict, uid: str, cache: dict, account_id: str = "default"
 
 
 async def _recover_collect_window(account_id: str) -> None:
-    """R-6.53v 停止后恢复采集窗口：清理残留小红书采集页（搜索/笔记/探索页）。
+    """停止后恢复采集窗口：清理残留小红书采集页（搜索/笔记/探索页）。
 
     复用 browser_client 清理逻辑（登录墙页保留）——确保停止后引擎不再有
     采集页在导航/滚动，CDP 行为完全停止；主应用窗口（8791）语义保持不变。
@@ -1069,7 +1068,7 @@ async def _recover_collect_window(account_id: str) -> None:
 def _finalize_aborted(state: dict, emit: bool = False) -> bool:
     """关窗中断收尾：有 abort_note 就落状态并返回 True，调用方据此提前 return。
 
-    R-6.76：关掉采集窗会让读页、导航、搜索结果全部退化成「失败」或「空」，
+    关掉采集窗会让读页、导航、搜索结果全部退化成「失败」或「空」，
     底层据此给出的「需要登录 / 未采到数据 / 浏览器异常」都只是表象。用户口径是
     「关了就中断、要采就重来」，所以每一个收尾分支都必须先让位给 abort_note，
     否则用户会被误导去重新扫码，或者看到「未获取到笔记」这种错误归因。
@@ -1088,7 +1087,7 @@ def _finalize_aborted(state: dict, emit: bool = False) -> bool:
 def _finalize_stopped(state: dict, req, account_id: str) -> None:
     """框架级取消（用户点停止）收尾：已处理入库的条数即最终结果。
 
-    R-6.53z：流式流水线下数据逐条「补全→评分→入库」（state['saved'] 权威计数），
+    流式流水线下数据逐条「补全→评分→入库」（state['saved'] 权威计数），
     取消时无需再批量抢救——「采集多少、处理多少、进入列表多少」恒等（所见即所得）；
     未处理的候选（含 search 已提取但未评分入库的）按用户口径不进入结果。
     """
@@ -1132,7 +1131,7 @@ def _abort_one_task(st: dict, now: float) -> bool:
 
 
 def abort_collect_on_window_close() -> int:
-    """R-6.72：采集窗口被用户关闭 → 中止进行中的任务，并明确告知需重新采集。
+    """采集窗口被用户关闭 → 中止进行中的任务，并明确告知需重新采集。
 
     用户拍板口径：关掉的窗**不再自动重建**（自动重开窗口本身就是「守护」行为，
     与「完全抛弃守护、一问一答」冲突）。关窗即等于本次采集中断；要接着采就重新
@@ -1178,10 +1177,10 @@ async def _reset_collect_windows(accounts: set) -> None:
 
 
 async def _stop_running_collect_tasks() -> None:
-    """R-6.37g 拆自 collect_start：新任务启动时优雅停止所有运行中的旧任务（非启动限制）。
+    """新任务启动时优雅停止所有运行中的旧任务（非启动限制）。
 
-    R-6.53v：task.cancel() 框架级取消（旧任务所有 await 点被中断，立即收尾）。
-    R-6.53z4：与 collect_stop 补齐同一条「停止」语义——旧任务真正结束后逐账号
+    task.cancel() 框架级取消（旧任务所有 await 点被中断，立即收尾）。
+    与 collect_stop 补齐同一条「停止」语义——旧任务真正结束后逐账号
     _recover_collect_window，否则「被新任务顶掉」这条路径会漏掉采集窗复位。先等
     旧任务收尾再复位，避免复位误关掉新任务刚打开的那一页。
     """
@@ -1388,8 +1387,8 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
 async def _collect_worker(state: dict, req, account_id: str) -> None:
     """采集 worker：多轮「搜索 → 逐条补全入库」。
 
-    R-6.53z 流式流水线：采满 limit 自动完成，停止时结果=已入库条数。
-    R-6.72（用户拍板：完全抛弃守护与等待）：撞到登录墙**立即收尾**——已入库部分
+    流式流水线：采满 limit 自动完成，停止时结果=已入库条数。
+    （用户拍板：完全抛弃守护与等待）：撞到登录墙**立即收尾**——已入库部分
     按条数完成、状态 ended_need_login 并提示用户重新登录后重试；不挂起、不等待
     扫码、不自动续采、不自动导航/拉回。用户想继续就再点一次「开始采集」。
     """
@@ -1484,7 +1483,7 @@ async def collect_start(req: SearchReq):
 
 @app.get("/api/events")
 async def events_stream():
-    """R-6.53z8c：SSE 事件流——前端从「定时问」改为「变化被通知」。
+    """SSE 事件流——前端从「定时问」改为「变化被通知」。
 
     只承载状态变化（collect/login/status）；30s 一次注释心跳仅用于保持连接，
     不携带业务状态，因此不构成业务轮询。
@@ -1514,12 +1513,12 @@ async def events_stream():
 
 @app.get("/api/accounts")
 async def accounts_list():
-    """账号列表 + 每账号独占 CDP 端口 + 运行状态（R-6.57 / R-6.60）。
+    """账号列表 + 每账号独占 CDP 端口 + 运行状态。
 
     多账户引擎池的数据源是 accounts.json；本接口把它连同 debug_port 一起暴露，
     供前端账号切换与 UI 自动化脚本「按账号连对应端口」使用（脚本不再硬编码 9223）。
 
-    R-6.60 增补 running / headless：窗口管理必须看得出「这个账号现在开着没有」，
+    增补 running / headless：窗口管理必须看得出「这个账号现在开着没有」，
     否则界面上分不清「账号存在」与「引擎在跑」。
     """
     from src import engine_pool
@@ -1567,7 +1566,7 @@ class AccountRenameReq(BaseModel):
 
 @app.post("/api/accounts")
 async def accounts_add(req: AccountAddReq):
-    """新增账号（R-6.61）：自动分配独占 CDP 端口 + 相对数据目录的 profile。
+    """新增账号：自动分配独占 CDP 端口 + 相对数据目录的 profile。
 
     account_id 留空 = 自动生成 acc_xxxxxx；显式给名要满足 valid_account_id
     （小写字母/数字/下划线/短横线，≤32 字符——这是跨平台目录名约束）。
@@ -1593,7 +1592,7 @@ async def accounts_add(req: AccountAddReq):
 
 @app.patch("/api/accounts/{account_id}")
 async def accounts_rename(account_id: str, req: AccountRenameReq):
-    """改账号业务名（R-6.69）：只改展示名，不搬 profile 目录、不动登录态。
+    """改账号业务名：只改展示名，不搬 profile 目录、不动登录态。
 
     account_id 是目录名，改名要迁移数据；业务名是纯展示字段，随时可改——
     这样用户能把 acc_a 标成「珠宝主号」而不用重新扫码。
@@ -1611,7 +1610,7 @@ async def accounts_rename(account_id: str, req: AccountRenameReq):
 
 @app.post("/api/accounts/{account_id}/identity")
 async def accounts_refresh_identity(account_id: str):
-    """识别账号身份（R-6.69b）：账号在跑时读一次 user/me，缓存昵称+小红书号+uid。
+    """识别账号身份：账号在跑时读一次 user/me，缓存昵称+小红书号+uid。
 
     为什么需要手动入口：这些标识默认由登录事件顺带写入，但在此机制上线**之前**
     就已登录的账号（如 default）没有缓存，列表里认不出是哪个号。
@@ -1649,7 +1648,7 @@ async def accounts_refresh_identity(account_id: str):
 
 @app.post("/api/accounts/{account_id}/scan_login")
 async def accounts_scan_login(account_id: str):
-    """扫码登录入口（R-6.71）：无头账号先切有头，再打开登录页，一次调用完成。
+    """扫码登录入口：无头账号先切有头，再打开登录页，一次调用完成。
 
     供未登录首次扫码、登录态过期重新扫码使用；default 承载壳窗本就有头，
     直接打开登录页。采集任务运行中不打断。
@@ -1661,7 +1660,7 @@ async def accounts_scan_login(account_id: str):
 
 @app.delete("/api/accounts/{account_id}")
 async def accounts_remove(account_id: str):
-    """删除账号（R-6.61）：引擎在跑先关掉；profile 移进回收区，不直接删。
+    """删除账号：引擎在跑先关掉；profile 移进回收区，不直接删。
 
     不直删的理由：profile 里有登录态，误删要重新扫码；回收区可回滚，
     也不会像「只删注册表」那样留下孤儿目录。
@@ -1875,7 +1874,7 @@ def save_text(req: SaveTextReq):
 
 
 def _download_remote_cover(con, zf, fid: str) -> bool:
-    """R-6.37i 拆自 _pack_feed_images：远程 cover_url 补下载入包，成功返回 True。"""
+    """远程 cover_url 补下载入包，成功返回 True。"""
     row = con.execute("SELECT cover_url FROM notes WHERE feed_id = ?", (fid,)).fetchone()
     url = (row["cover_url"] if row else "") or ""
     if not url:
@@ -1897,7 +1896,7 @@ def _download_remote_cover(con, zf, fid: str) -> bool:
 
 
 def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
-    """R-6.37a 拆自 download_images：单篇笔记入包（本地缓存优先，缺失回退远程 cover_url）。"""
+    """单篇笔记入包（本地缓存优先，缺失回退远程 cover_url）。"""
     prefix = fid.replace("#", "_")
     files = sorted(IMAGES_DIR.glob(f"{prefix}_*.jpg")) if IMAGES_DIR.exists() else []
     if files:
@@ -2231,7 +2230,7 @@ async def contact_open(req: ContactOpenReq):
 
 # ================= 客户库聚合（O1-4）：线索/意向分布/属地TOP/近7天/留联系方式 =================
 def _build_week_timeline(day_counts: dict) -> list:
-    """R-6.37a 拆自 clients_agg：近 7 天时间线（含今天往前 7 天，无数据的天补 0）。"""
+    """近 7 天时间线（含今天往前 7 天，无数据的天补 0）。"""
     days = []
     today = datetime.date.today()
     for i in range(6, -1, -1):
@@ -2241,7 +2240,7 @@ def _build_week_timeline(day_counts: dict) -> list:
 
 
 def _tally_row_aux(r, ip_counts, day_counts) -> None:
-    """R-6.37i：单行属地/日累计。"""
+    """单行属地/日累计。"""
     ip = (r["ip_location"] or "").strip()
     if ip:
         ip_counts[ip] = ip_counts.get(ip, 0) + 1
@@ -2251,7 +2250,7 @@ def _tally_row_aux(r, ip_counts, day_counts) -> None:
 
 
 def _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact) -> int:
-    """R-6.37i 拆自 _aggregate_client_rows：单行累计意向/属地/日/联系方式命中。"""
+    """单行累计意向/属地/日/联系方式命中。"""
     it = r["intent"] or "low"
     dist[it] = dist.get(it, 0) + 1
     _tally_row_aux(r, ip_counts, day_counts)
@@ -2261,7 +2260,7 @@ def _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact) -> in
 
 
 def _aggregate_client_rows(rows):
-    """R-6.37g 拆自 clients_agg：逐行聚合意向分布/属地/日计数/联系方式命中。"""
+    """逐行聚合意向分布/属地/日计数/联系方式命中。"""
     from src.intent import is_contact
     dist = {k: 0 for k in ("high", "upper", "middle", "low")}
     ip_counts: dict[str, int] = {}
@@ -2761,7 +2760,7 @@ async def app_config_set(req: AppConfigReq):
 
 
 async def _ensure_collect_skeleton(eng) -> None:
-    """R-6.37a 拆自 _sync_collect_visibility：无任务 tab 时立即创建 采集窗 骨架（共享 COLLECT_WIN_GUARD_LOCK）。"""
+    """无任务 tab 时立即创建 采集窗 骨架（共享 COLLECT_WIN_GUARD_LOCK）。"""
     from src import engine_pool  # noqa: PLC0415
     async with engine_pool.COLLECT_WIN_GUARD_LOCK:
         if eng.task_page_snapshot() is not None:
@@ -2788,7 +2787,7 @@ async def _ensure_collect_skeleton(eng) -> None:
 
 
 async def _close_idle_collect_pages(eng) -> None:
-    """R-6.37a 拆自 _sync_collect_visibility：空闲时收起所有 采集窗 家族页（explore 骨架/残留采集页）。"""
+    """空闲时收起所有 采集窗 家族页（explore 骨架/残留采集页）。"""
     ctx = await eng.context()
     closed = 0
     for p in list(ctx.pages):
@@ -2806,7 +2805,7 @@ async def _close_idle_collect_pages(eng) -> None:
 
 @_log.tagged("win:collect")
 async def _sync_collect_visibility(visible: bool) -> None:
-    """R-6.19 开关即时联动：开→采集窗 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
+    """开关即时联动：开→采集窗 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
     try:
         from src import engine_pool  # noqa: PLC0415
 
@@ -2923,7 +2922,7 @@ _AI_PROMPTS = {
 
 
 def _build_ai_system_prompt() -> str:
-    """R-6.37i 拆自 ai_generate：组装系统提示（基础人设 + 已配置账号人设注入）。"""
+    """组装系统提示（基础人设 + 已配置账号人设注入）。"""
     system_parts = ["你是一个专业的小红书内容创作助手，输出精炼、可直接使用，不要客套。"]
     persona = _load_persona()
     if persona.get("industry") or persona.get("tone") or persona.get("topics"):

@@ -1,11 +1,11 @@
-"""JS 注入集中注册表（R-6.30a）。
+"""JS 注入集中注册表。
 
 背景：历史上注入脚本散落在三处——
 - browser_client.py 模块级 `_EXTRACT_SRC`（extension/lib/extract.js 文本，evaluate 与
   add/remove_init_script 共用）；
 - engine_pool.py 模块级 `_STEALTH_SRC`（内联，context add_init_script）；
 - shell_window.py 模块级 5 个 JS 常量 + login_guard 函数体内局部定义 2 个 JS。
-分散导致「悬空引用」类历史 bug（R-6.10 曾有 _OPEN_LOGIN_PANEL_JS 长期未定义，
+分散导致「悬空引用」类历史 bug（曾有 _OPEN_LOGIN_PANEL_JS 长期未定义，
 NameError 被 try 吞掉静默降级）。本模块统一登记所有注入来源，命名收敛、单一事实源。
 
 注册表（name → 元数据）：
@@ -276,7 +276,7 @@ _LOGIN_CLOSE_QUERY = ",".join(LOGIN_CLOSE_SELECTORS)
 def decide_block(hits_panel: bool, hits_mask: bool, login_ui_active: bool = True) -> bool:
     """拦截判定纯函数。
 
-    登录界面不在场（浏览页/搜索页）→ 一律放行（R-6.78：此前缺失此判据，
+    登录界面不在场（浏览页/搜索页）→ 一律放行（此前缺失此判据，
     ``not hits_panel`` 在浏览页恒真，把整页鼠标点击全拦死）；
     登录界面在场时：命中遮罩（点空白实际命中 .reds-mask）或不在登录组件内 → 拦截，
     组件内 → 放行。
@@ -304,10 +304,10 @@ _FORCE_LOGIN_JS = (
     "}"
     "ensureStyle();lockBtns();"
     "new MutationObserver(function(){ensureStyle();lockBtns();}).observe(document,{childList:true,subtree:true});"
-    "/* R-6.48l：锁遮罩点击与 ESC——点登录组件外空白实际命中遮罩 .reds-mask，页面在其上绑关闭逻辑；" 
+    "/*锁遮罩点击与 ESC——点登录组件外空白实际命中遮罩 .reds-mask，页面在其上绑关闭逻辑；" 
     "window+document 双捕获四事件（pointerdown/mousedown/mouseup/click）拦截，init script 保证最先注册，"
     "target 不在登录组件内一律阻止（用户实机 bug：点空白登录组件消失并切到活动页）。"
-    "选择器由 LOGIN_PANEL_SELECTORS/LOGIN_MASK_SELECTOR 常量生成（R-6.48m）。 */"
+    "选择器由 LOGIN_PANEL_SELECTORS/LOGIN_MASK_SELECTOR 常量生成。 */"
     "function loginUiActive(){"
     "try{"
     "if(/\\/(login|website-login)(\\/|$)/.test(location.pathname))return true;"
@@ -338,7 +338,7 @@ _register(
     _FORCE_LOGIN_JS,
     kind="evaluate",
     note="强制登录页关闭锁：隐藏关闭按钮＋锁遮罩点击/ESC。add_init_script 注入，"
-         "document 锚点 MutationObserver 事件驱动，无轮询补注（R-6.48k）。",
+         "document 锚点 MutationObserver 事件驱动，无轮询补注。",
 )
 
 # 守卫循环补注。.container 恒居中独立执行（此前排在 .reds-modal/.login-container
@@ -354,10 +354,10 @@ _LOGIN_FIT_JS = (
     "}}"
     "function fit(){"
     "ensureStyle();"
-    "/* R-6.48j：弹窗恒居中——小红书 JS 按宽屏基准 transform:translateX(440px) 居中"
+    "/*弹窗恒居中——小红书 JS 按宽屏基准 transform:translateX(440px) 居中"
     "弹窗，960 视口下整体平移出屏（实测 .container x=960 视口外=全白，即用户"
     "所见「登录组件消失」的自动化复现）。覆盖为基于自身尺寸的视口居中。"
-    "R-6.48n：querySelector 选择器并入 LOGIN_PANEL_SELECTORS 常量（防漂移）。 */"
+    "querySelector 选择器并入 LOGIN_PANEL_SELECTORS 常量（防漂移）。 */"
     "var cc=document.querySelector('" + LOGIN_PANEL_SELECTORS[0] + "');"
     "if(cc){"
     "cc.style.transform='none';"
@@ -380,7 +380,7 @@ _register(
     _LOGIN_FIT_JS,
     kind="evaluate",
     note="登录页弹窗恒居中+滚动条适配。add_init_script 注入，document 锚点 "
-         "MutationObserver 事件驱动，无 setInterval、无守卫轮询补注（R-6.48k）。",
+         "MutationObserver 事件驱动，无 setInterval、无守卫轮询补注。",
 )
 
 # 小红书登录页整页模式下，登录面板之外存在 .container.out.right 等推广/活动杂项，
@@ -416,7 +416,7 @@ _register(
     _LOGIN_CLEAN_JS,
     kind="evaluate",
     note="登录页净化：全屏白底遮罩+登录面板置顶+隐藏杂项。add_init_script 注入，"
-         "document 锚点 MutationObserver 事件驱动（R-6.48k 同款）。",
+         "document 锚点 MutationObserver 事件驱动。",
 )
 
 # ---------------------------------------------------------------------------

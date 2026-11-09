@@ -1,4 +1,4 @@
-"""外部 URL 构造与参数检查（R-6.53z6）。
+"""外部 URL 构造与参数检查。
 
 背景：此前登录页 URL 是硬编码常量，且拼上了实测无作用的 `redirectPath`
 （`https://www.xiaohongshu.com/login?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2F`）；

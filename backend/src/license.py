@@ -79,7 +79,7 @@ def _check_paid(feature: str, detail: dict) -> tuple[bool, str, dict]:
 
 
 def _verify_rsa_signature(blob_b64: str, sig: bytes) -> bool:
-    """R-6.37g 拆自 _verify_activation_code：RSA-SHA256 PKCS1v15 验签。"""
+    """RSA-SHA256 PKCS1v15 验签。"""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
     from cryptography.hazmat.primitives.serialization import load_pem_public_key
@@ -93,7 +93,7 @@ def _verify_rsa_signature(blob_b64: str, sig: bytes) -> bool:
 
 
 def _parse_activation_code(code: str):
-    """R-6.37i：解析 blob.sig 激活码；格式错误返回 None。"""
+    """解析 blob.sig 激活码；格式错误返回 None。"""
     import base64
 
     try:
@@ -130,7 +130,7 @@ def _verify_activation_code(code: str) -> tuple[bool, str]:
 
 
 def _darwin_platform_uuid() -> str | None:
-    """R-6.37g 拆自 machine_code：macOS IOPlatformUUID 提取。"""
+    """macOS IOPlatformUUID 提取。"""
     out = subprocess.check_output(
         ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
         text=True, stderr=subprocess.DEVNULL, timeout=10,
@@ -144,7 +144,7 @@ def _darwin_platform_uuid() -> str | None:
 
 
 def _windows_machine_guid() -> str | None:
-    """R-6.37g 拆自 machine_code：Windows MachineGuid 提取。"""
+    """Windows MachineGuid 提取。"""
     import winreg  # noqa: PLC0415（仅 Windows 导入）
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
         guid, _ = winreg.QueryValueEx(key, "MachineGuid")

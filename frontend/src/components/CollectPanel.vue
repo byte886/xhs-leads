@@ -27,7 +27,7 @@ const distanceOptions = ['不限', '同城', '附近']
 /** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
 const showFilters = ref(false)
 
-/** R-6.81：筛选没生效时的用户提示。位置距离组（同城/附近）依赖浏览器定位，
+/**筛选没生效时的用户提示。位置距离组（同城/附近）依赖浏览器定位，
  *  失败必须让人看得见——否则结果不对却毫无反馈，比报错更难排查。 */
 const filterWarning = ref('')
 
@@ -101,7 +101,7 @@ function buildTaskLabel(): string {
 let collectTaskId = ''
 let offCollect: (() => void) | null = null
 
-/** R-6.53z5：进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
+/**进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
 /** 采集收尾（done / stopped / error 三态共用）：按钮复位 + 拉最终列表。 */
 async function finalizeCollect(pr: any) {
   if (timer) { clearInterval(timer); timer = null }
@@ -363,7 +363,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- R-6.81：筛选未生效提示（位置距离组依赖浏览器定位，失败不能静默） -->
+      <!--筛选未生效提示（位置距离组依赖浏览器定位，失败不能静默） -->
       <div v-if="filterWarning" class="filter-warn" role="alert">
         <span class="fw-icon">!</span>
         <span class="fw-text">{{ filterWarning }}</span>
@@ -528,7 +528,7 @@ onMounted(async () => {
 .chip-clear:hover { color: #c2410c; }
 
 /* 开始采集：独立整行 */
-/* R-6.81 筛选未生效提示：琥珀底（区别于错误红与常规金），不抢主按钮 */
+/*筛选未生效提示：琥珀底（区别于错误红与常规金），不抢主按钮 */
 .filter-warn {
   display: flex; align-items: flex-start; gap: 8px;
   padding: 9px 10px; border: 1px solid #F0C27B; border-radius: 8px;
@@ -587,7 +587,7 @@ onMounted(async () => {
   opacity: 0.7;
   cursor: default;
 }
-/* R-6.53z8c：等待登录不是「不可用」，是「等用户扫码」——保持可见度，别看着像坏了 */
+/*等待登录不是「不可用」，是「等用户扫码」——保持可见度，别看着像坏了 */
 .btn-spinner {
   display: inline-block;
   width: 12px;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { nextTick } from 'vue'
 import { appState, DEFAULT_PARAMS } from './store'
 
-describe('采集条件 localStorage 持久化（R-6.44c）', () => {
+describe('采集条件 localStorage 持久化', () => {
   beforeEach(() => localStorage.clear())
   it('出厂默认条件 = 用户约定（keyword 空 / limit 20 / 图文 / 综合）', () => {
     expect(DEFAULT_PARAMS.keyword).toBe('')

@@ -1,9 +1,9 @@
-"""引擎窗口控制（原名 mirror.py，R-6.53z8q 按职责改名）。
+"""引擎窗口控制（原名 mirror.py，按职责改名）。
 
 历史与现状：
 - R 批 v1.4 的设计是「截图流 + 事件转发」模拟远程桌面（左窗内嵌引擎截图、鼠标事件回传）。
-- R-6.15 用户改口径为「**实时引擎窗口**」——引擎开成有头小窗，人直接看真窗口操作。
-  旧的截图映射与事件转发随之失去意义，已于 R-6.53z8p 删除，避免留孤儿代码。
+-用户改口径为「**实时引擎窗口**」——引擎开成有头小窗，人直接看真窗口操作。
+  旧的截图映射与事件转发随之失去意义，已于删除，避免留孤儿代码。
 
 现有能力：
 - open_login(account)：确保引擎里有一个小红书页（无则开 explore，未登录自动弹登录 modal）；供起引擎的脚本调用
@@ -54,7 +54,7 @@ async def open_login(account: str = "default") -> dict:
 
 
 async def scan_login(account: str) -> dict:
-    """扫码登录统一入口（R-6.71）：先确保有头、再打开登录页，一次调用完成。
+    """扫码登录统一入口：先确保有头、再打开登录页，一次调用完成。
 
     无头账号直接 open_login 没有可见窗口、无法扫码，故先 set_window(on=True)
     切回有头（重启引擎、回注 cookie）；本就有头则跳过切换。覆盖两类场景：
@@ -78,7 +78,7 @@ async def scan_login(account: str) -> dict:
 
 
 async def set_window(account: str = "default", on: bool = True) -> dict:
-    """调试实时窗口开关（R-6.15）：有头小窗 ↔ 无头，引擎重启生效。
+    """调试实时窗口开关：有头小窗 ↔ 无头，引擎重启生效。
 
     on=True：headless=False，引擎独立小窗（960x720）实时可见采集/登录操作过程
     （替代原「截图映射」调试视图——用户明确不要截图轮询）。
@@ -116,13 +116,13 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
 
 
 async def close_account(account: str = "default") -> dict:
-    """关闭账号引擎，释放 Chromium 进程与独占 CDP 端口（R-6.60）。
+    """关闭账号引擎，释放 Chromium 进程与独占 CDP 端口。
 
     第三类运营账号窗按账号数开出来，就必须能按账号收回去——之前只有
     `POST /api/mirror/open`，关窗只能去命令行杀进程，等于没有窗口管理。
 
     default 拒绝关闭：它承载 APP 壳窗口与采集窗，关掉 = launcher 判定用户
-    退出应用（与 set_window 的 R-6.58 同一个根因）。
+    退出应用（与 set_window 的同一个根因）。
     """
     from src import config
     from src.server import _COLLECT_TASKS

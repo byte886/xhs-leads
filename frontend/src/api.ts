@@ -177,7 +177,7 @@ export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean;
   return j(await fetch(`${BASE}/api/mirror/open?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
 }
 
-/** 调试实时窗口开关（R-6.15）：on=引擎独立小窗实时可见操作；off=回无头（引擎重启生效） */
+/** 调试实时窗口开关：on=引擎独立小窗实时可见操作；off=回无头（引擎重启生效） */
 export async function apiMirrorWindow(on: boolean, account = 'default'): Promise<{ ok: boolean; window?: boolean; note?: string; error?: string }> {
   return j(await fetch(`${BASE}/api/mirror/window`, {
     method: 'POST',
@@ -186,7 +186,7 @@ export async function apiMirrorWindow(on: boolean, account = 'default'): Promise
   }))
 }
 
-/** 收起账号引擎（R-6.60）：关闭引擎、释放 CDP 端口；default 不可收 */
+/** 收起账号引擎：关闭引擎、释放 CDP 端口；default 不可收 */
 export async function apiMirrorClose(account: string): Promise<{ ok: boolean; note?: string; error?: string }> {
   return j(await fetch(`${BASE}/api/mirror/close?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
 }
@@ -206,7 +206,7 @@ export async function apiAddAccount(accountId = '', role = 'mixed', name = ''): 
   }))
 }
 
-/** 改业务名（R-6.69）：只改展示名，不搬 profile 目录、不动登录态 */
+/** 改业务名：只改展示名，不搬 profile 目录、不动登录态 */
 export async function apiRenameAccount(accountId: string, name: string): Promise<{
   ok: boolean; account_id?: string; name?: string; error?: string
 }> {
@@ -223,7 +223,7 @@ export async function apiDeleteAccount(accountId: string): Promise<{
   return j(await fetch(`${BASE}/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' }))
 }
 
-/** 识别账号身份（R-6.69b）：账号在跑时读一次 user/me，缓存昵称+小红书号 */
+/** 识别账号身份：账号在跑时读一次 user/me，缓存昵称+小红书号 */
 export async function apiRefreshIdentity(accountId: string): Promise<{
   ok: boolean; account_id?: string; nickname?: string; red_id?: string
   display_name?: string; error?: string
@@ -233,7 +233,7 @@ export async function apiRefreshIdentity(accountId: string): Promise<{
   }))
 }
 
-/** 扫码登录（R-6.71）：无头账号先切有头、再打开登录页，一次调用完成 */
+/** 扫码登录：无头账号先切有头、再打开登录页，一次调用完成 */
 export async function apiScanLogin(accountId: string): Promise<{
   ok: boolean; account?: string; note?: string; error?: string
 }> {
@@ -242,7 +242,7 @@ export async function apiScanLogin(accountId: string): Promise<{
   }))
 }
 
-/** R-6.18 双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
+/**双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
 export async function apiGetAppConfig(): Promise<{ ok: boolean; collect_tab_visible?: boolean; error?: string }> {
   try {
     return await j(await fetch(`${BASE}/api/app_config`))
@@ -262,7 +262,7 @@ export async function apiSetAppConfig(patch: { collect_tab_visible: boolean }): 
 export async function apiStatusNow(): Promise<{
   action: string; detail: string; collecting: boolean
   collected?: number; limit?: number; keyword?: string
-  /** R-6.53z5：进行中任务 id —— 页面重载后据此接回轮询，按钮恢复「停止」 */
+  /**进行中任务 id —— 页面重载后据此接回轮询，按钮恢复「停止」 */
   task_id?: string
 }> {
   return j(await fetch(`${BASE}/api/status_now`))

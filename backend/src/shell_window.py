@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """路线 A 壳窗口：CFT（Chrome for Testing）承载 APP 前端 —— CDP 可控的可见 APP 窗口。
 
-背景（R-6.16 用户拍板 A 路径）：
+背景：
 - 旧壳 = pywebview（WKWebView，macOS cocoa 后端），**不支持 CDP**——UI 自动化
   （CDP 9223）只能驱动引擎里打开的同一套前端，用户可见的 APP 窗口无自动化发生。
 - 新壳 = 引擎 CFT 窗口承载前端：打开 APP = 打开一个 Chrome for Testing 窗口，
@@ -12,8 +12,8 @@
 - ensure_shell(base_url)：强制引擎有头启动 + 打开前端 tab（bring_to_front），
   返回 ShellWindow（page 封装，登录守卫的载体）。
 - login_guard(win, base_url, stop)：从旧 launcher 整体迁移的登录守卫
-  （R-6.5→R-6.10 语义不变），API 载体从 pywebview window 换成 ShellWindow(page)。
-- 修复历史潜伏 bug：_OPEN_LOGIN_PANEL_JS 长期悬空引用（R-6.10 起从未定义，
+  ，API 载体从 pywebview window 换成 ShellWindow(page)。
+- 修复历史潜伏 bug：_OPEN_LOGIN_PANEL_JS 长期悬空引用（起从未定义，
   NameError 被 try 吞掉、静默降级整页登录）——本次重建定义（尽力注入，失败仍
   走整页登录页，不新增风险）。
 """
@@ -56,16 +56,16 @@ async def open_collect_window(
     user_data_dir: str | None = None,
     executable: str | None = None,
 ):
-    """R-6.83 采集独立窗口：**标准浏览器窗口**（保留地址栏/标签栏）+ 调试窗口标题。
+    """采集独立窗口：**标准浏览器窗口**（保留地址栏/标签栏）+ 调试窗口标题。
 
-    R-6.83 用户拍板：右窗不再封装成 APP 形态，要留出地址栏等浏览器特征
-    （与 R-6.49c 当时「要 app 形态、不要地址栏」相反，以最新要求为准）；
+    用户拍板：右窗不再封装成 APP 形态，要留出地址栏等浏览器特征
+    （与当时「要 app 形态、不要地址栏」相反，以最新要求为准）；
     `--app` 应用模式从此只留给壳窗口（APP 主体）。
 
     双窗口形态：窗口一=APP/登录（壳窗口应用模式，keep_shell_tab 监护固定不可关）；
     窗口二=采集（标准 CFT 窗口，同引擎同 profile —— 登录态/Cookie 完全共享、
     CDP 可控），由设置开关 collect_tab_visible 控制开/关。
-    R-6.73 用户拍板（方案 A）：窗口二被手动关闭后**不自动重建**，且关窗即中断本次
+    用户拍板（方案 A）：窗口二被手动关闭后**不自动重建**，且关窗即中断本次
     采集；要接着采就重新点「开始采集」——collect_start 走 engine.new_page() 天然
     会新建一页。
 
@@ -127,7 +127,7 @@ _EXT_CREATE_JS = """
 
 
 async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
-    """让内置扩展一次调用链完成「建窗 → 摆位 → 建组命名 → 导航」（R-6.86）。
+    """让内置扩展一次调用链完成「建窗 → 摆位 → 建组命名 → 导航」。
 
     为什么不再用 `--new-window`：那个参数由已运行的 Chrome 实例执行，实例只取走 URL，
     丢掉 `--window-position/--window-size`，窗口先落在左上角，Python 侧只能事后用 CDP
@@ -181,12 +181,12 @@ async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
 async def _create_collect_page(
     ctx, shell, url: str, *, user_data_dir, executable, bounds: dict,
 ):
-    """建采集调试窗的页（三条路径选一，R-6.83）：
+    """建采集调试窗的页（三条路径选一，）：
     ① 命令行 `--new-window` 标准窗口（带地址栏/标签栏）；
     ② window.open 同 context 新窗口（Chrome 多不给地址栏）；
     ③ 引擎内新页（拿不到独立窗口时的能力兜底）。
 
-    R-6.85：① 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
+    ① 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
     避免 `--new-window` 沿用它记住的旧位置、先把窗口叠在壳窗上。
     """
     from src import engine_pool  # noqa: PLC0415
@@ -229,7 +229,7 @@ async def _create_collect_page(
 
 async def _ensure_shell_title(page) -> None:
     """壳窗口（主窗口）标题守护：无论 APP 页还是守卫导航的小红书登录页，
-    Chrome 窗口标题恒定「XHS Leads · 小红书获客助手」（用户 R-6.48h 拍板：
+    Chrome 窗口标题恒定「XHS Leads · 小红书获客助手」（用户拍板：
     主窗口标题统一一致，不随页面状态变化）。与 _ensure_debug_title 同法：
     page 级 add_init_script（对后续导航自动生效）+ 当前文档立即生效；
     Python 侧 _shell_title_installed 标志防重，幂等可反复调用。
@@ -273,7 +273,7 @@ class ShellWindow:
         self.base_url = base_url.rstrip("/")
 
     def rebind(self, page) -> None:
-        """R-6.19：keeper 重建壳 tab 后重绑定 page（登录守卫继续使用新 tab）。"""
+        """keeper 重建壳 tab 后重绑定 page（登录守卫继续使用新 tab）。"""
         self.page = page
 
     async def evaluate_js(self, js: str) -> str:
@@ -295,7 +295,7 @@ class ShellWindow:
     async def clear_domain_cookies(self, domain_frag: str) -> int:
         """删除壳窗口（登录页所在窗口）指定域 Cookie，返回删除条数。
 
-        R-6.22g：风控/已登录场景导航登录页前，登录页会因 Cookie 仍有效**自动跳过
+        风控/已登录场景导航登录页前，登录页会因 Cookie 仍有效**自动跳过
         登录界面**（用户无法扫码验证解除风控）。先清除 web_session 使登录页呈现
         扫码界面，完成主动重新登录/验证。
         """
@@ -348,7 +348,7 @@ class WindowCoordinator:
             self._loop = None
 
     def attach_engine(self, engine) -> None:
-        """R-6.53c：绑定账号引擎实例，供壳窗 close 事件校验引擎连接状态。"""
+        """绑定账号引擎实例，供壳窗 close 事件校验引擎连接状态。"""
         self._engine = engine
 
     def shell_close_age(self) -> float:
@@ -362,7 +362,7 @@ class WindowCoordinator:
         """壳窗 close 后判定「引擎是否仍健康」：重建期/断连/校验异常一律 False。
 
         False 的语义是**跳过退出**（崩溃恢复交给 keeper 重建），只在引擎确认
-        存活时返回 True。R-6.53c / R-6.53h 的判定集中在此，便于单测覆盖。
+        存活时返回 True。/的判定集中在此，便于单测覆盖。
         """
         eng = self._engine
         if eng is None:
@@ -388,7 +388,7 @@ class WindowCoordinator:
         return True
 
     async def _shell_closed_verify(self) -> None:
-        """R-6.53c：壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
+        """壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
         进程死亡的副作用（非用户行为），跳过退出交给 keeper 重建；引擎存活且
         非重建期才是用户真关主窗，维持「关主窗=退出应用」语义。"""
         if self._stop is not None and self._stop.is_set():
@@ -466,7 +466,7 @@ class WindowCoordinator:
 
 
     def _abort_collect_on_win_close(self) -> None:
-        """R-6.72：右窗被关闭 → 中止本次采集，且绝不自动重建。
+        """右窗被关闭 → 中止本次采集，且绝不自动重建。
 
         用户拍板（方案 A）：关掉的窗不再偷偷重开——自动重建属于「守护」行为，
         与「完全抛弃守护、一问一答」冲突。关窗即本次采集中断；要接着采重新点
@@ -481,7 +481,7 @@ class WindowCoordinator:
         except Exception as e:  # noqa: BLE001
             log.warning(f"关窗中止采集失败（不影响应用运行）: {e!r}")
     def _handle_crash(self, page, is_shell: bool) -> None:
-        """R-6.48o：壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
+        """壳窗口渲染器崩溃（Chrome 弹崩溃对话框→会话恢复，
         App 不退出）→ 延迟恢复清理：关闭其余窗口，崩溃页留给 Chrome 恢复。"""
         if not is_shell:
             return
@@ -547,14 +547,14 @@ def get_coordinator() -> WindowCoordinator:
 
 
 def current_shell_page():
-    """engine_pool.cleanup_tabs 读壳窗引用的模块入口（R-6.30c 修复：历史
+    """engine_pool.cleanup_tabs 读壳窗引用的模块入口（修复：历史
     shell_window.shell_ref 为 keeper 局部变量、模块属性不存在 → AttributeError 被
     吞掉，壳窗保护从未生效）。协调器未就绪（keeper 未启动）返回 None。"""
     return _COORD.shell() if _COORD is not None else None
 
 
 def current_collect_page():
-    """engine_pool.new_page 优先复用的采集窗页（R-6.84b）。
+    """engine_pool.new_page 优先复用的采集窗页。
 
     复用而不是另开 tab：采集窗里只留一个标签，窗口标题恒为「XHS Leads · 采集调试窗口」，
     内置扩展才能稳定把它收进「采集窗口」组；否则同一窗口里会多出一个组外标签。
@@ -572,7 +572,7 @@ async def _launch_window(
 
     - app_mode=True：`--app=<url>` 应用模式（无菜单栏/标签栏/地址栏），壳窗专用；
     - app_mode=False：`--new-window <url>` 标准窗口（带地址栏/标签栏/前进后退），
-      R-6.83 用户拍板采集调试窗走这条（实测 innerHeight 比 app 窗少 87px =
+      用户拍板采集调试窗走这条（实测 innerHeight 比 app 窗少 87px =
       标题栏+标签栏+地址栏）。
 
     Chrome 无「为既有 target 创建 app 窗口」API；向已运行实例（同
@@ -623,17 +623,17 @@ async def _launch_app_window(ctx, url: str, **kw):
 
 
 async def _launch_plain_window(ctx, url: str, **kw):
-    """`--new-window` 标准窗口（带地址栏/标签栏/前进后退）：采集调试窗专用（R-6.83）。"""
+    """`--new-window` 标准窗口（带地址栏/标签栏/前进后退）：采集调试窗专用。"""
     return await _launch_window(ctx, url, app_mode=False, **kw)
 
 
 async def _calibrate_window(page, left: int, top: int, width: int, height: int) -> None:
-    """R-6.22 双窗口左右分屏：CDP Browser.setWindowBounds 精确摆位/定尺寸。
+    """双窗口左右分屏：CDP Browser.setWindowBounds 精确摆位/定尺寸。
 
     launch_persistent_context 的 viewport 会覆盖 --window-size（实测窗口仍 1280
     宽），但 --window-position 生效；故用 CDP 后置校准窗口 bounds：壳窗口放
     主屏左半 (0,0)、采集调试窗口放右半 (win_left,0)，等宽并排互不重叠。
-    R-6.27：page 刚创建时 CDP session 偶发 guid 失效（TargetClosedError），
+    page 刚创建时 CDP session 偶发 guid 失效（TargetClosedError），
     失败静默重试 3 次（间隔 1s）再放弃。
     """
     last_err = None
@@ -683,7 +683,7 @@ async def _read_window_bounds(page) -> dict | None:
 
 
 async def watch_window_layout(stop, coord, interval: float = 3.0) -> None:
-    """记录两窗的「最后位置」（R-6.85）：低频回读，只在变化时写盘。
+    """记录两窗的「最后位置」：低频回读，只在变化时写盘。
 
     纯读取：不重建、不导航、不关闭窗口，也不改坐标——用户拖动后窗口保持原样，
     只是把结果记住，供下次启动沿用。
@@ -703,7 +703,7 @@ async def watch_window_layout(stop, coord, interval: float = 3.0) -> None:
 
 
 async def _goto_base_with_retry(page, base) -> None:
-    """壳 tab 导航前端（uvicorn 刚起时静态路由未就绪 → 重试 ≤20s）。R-6.36e 拆自 ensure_shell。"""
+    """壳 tab 导航前端（uvicorn 刚起时静态路由未就绪 → 重试 ≤20s）。拆自 ensure_shell。"""
     last_err = None
     for _ in range(40):
         try:
@@ -717,7 +717,7 @@ async def _goto_base_with_retry(page, base) -> None:
 
 
 async def _close_matching_tabs(ctx, keep, predicate) -> None:
-    """关闭 ctx 中满足 predicate 的非 keep tab（空白残留/重复壳 tab 清理通用助手）。R-6.36e 拆自 ensure_shell。"""
+    """关闭 ctx 中满足 predicate 的非 keep tab（空白残留/重复壳 tab 清理通用助手）。拆自 ensure_shell。"""
     for p in list(ctx.pages):
         if p is keep or p.is_closed():
             continue
@@ -731,7 +731,7 @@ async def _close_matching_tabs(ctx, keep, predicate) -> None:
 async def _promote_shell_to_app_window(ctx, eng, base, bounds):
     """应用模式提升壳窗（--app 路由）：成功返回 app_page；不可用返回 None。
 
-    R-6.85：新窗离屏创建 → 立即摆到记录位置 → 才置前，避免与初始普通窗口在左半屏
+    新窗离屏创建 → 立即摆到记录位置 → 才置前，避免与初始普通窗口在左半屏
     重叠闪现（实测冷启动两窗同时在 left=0 停留约 0.26s）。
     """
     from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
@@ -763,7 +763,7 @@ async def _promote_shell_to_app_window(ctx, eng, base, bounds):
 
 
 def _find_blank_default_tab(ctx):
-    """R-6.37i 拆自 _pick_initial_shell_page：复用 about:blank/空默认 tab。"""
+    """复用 about:blank/空默认 tab。"""
     return next(
         (p for p in ctx.pages if not p.is_closed() and (p.url or "").strip() in ("", "about:blank")),
         None,
@@ -782,7 +782,7 @@ async def _pick_initial_shell_page(ctx, base):
 
 
 async def ensure_shell(base_url: str):
-    """强制引擎有头启动，打开前端 tab 并置前（壳窗口 = CFT 引擎窗口）。R-6.36e：逻辑块拆至上方三个助手。"""
+    """强制引擎有头启动，打开前端 tab 并置前（壳窗口 = CFT 引擎窗口）。逻辑块拆至上方三个助手。"""
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）
 
     if config.account_headless("default"):
@@ -816,7 +816,6 @@ async def _ensure_login_injects(win: "ShellWindow") -> None:
     """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配 + login_clean 净化）：
     page 级 add_init_script——浏览器在每个新 document（整页导航/SPA 重建）创建
     瞬间自动执行，JS 内部 MutationObserver 事件驱动；无守卫轮询补注
-    （R-6.48k，用户拍板：循环守护不可取，直接注入行为）。
     幂等：已注册的仅对当前文档 evaluate 立即生效；防重标记避免重复 add 累积。
     evaluate 失败（页面导航中/未就绪）不重试轮询——下一事件点（导航登录页/
     重绑定/拉回）自然补注，且新 document 由 init script 自动生效。
@@ -886,7 +885,7 @@ async def _guard_navigate_to_login(win: "ShellWindow", base: str, cur_force: boo
 
 
 def has_id_token(cookies) -> bool:
-    """登录态判定纯函数：cookies 中是否存在小红书 id_token（R-6.48n 统一 3 处内联）。"""
+    """登录态判定纯函数：cookies 中是否存在小红书 id_token。"""
     try:
         return bool(cookies and any(c.get("name") == "id_token" for c in cookies))
     except TypeError:
@@ -897,7 +896,7 @@ _LOGIN_COOKIE_NAMES = ("id_token", "web_session")
 
 
 def has_login_cookie(cookies) -> bool:
-    """登录态判定（R-6.53z7）：id_token 或 web_session 任一存在即算已登录。
+    """登录态判定：id_token 或 web_session 任一存在即算已登录。
 
     只认 id_token 时，登录后只有 web_session 的会话会被判「未登录」，守卫随即把
     已跳到 explore 的页面拉回登录页（用户实测：登录成功又被弹回登录页）。
@@ -911,7 +910,7 @@ def has_login_cookie(cookies) -> bool:
 async def _guard_try_notify_login(win: "ShellWindow", base: str, cs, state) -> bool:
     """出现登录 Cookie 且满 0.5s → 通知后端「登录成功」；成功返回 True。
 
-    R-6.87：不再把 Cookie POST 给后端搬运。壳窗/采集窗/引擎是同一个 CFT 实例、
+    不再把 Cookie POST 给后端搬运。壳窗/采集窗/引擎是同一个 CFT 实例、
     同一个 profile，Cookie 由浏览器自己写盘；这里只做一个**不带 Cookie** 的通知，
     让后端解除失效记忆、推事件给前端。state 持 _t_last_import 做节流。
     """
@@ -946,7 +945,7 @@ async def _guard_monitor_voluntary(win: "ShellWindow", base: str, cs, state) -> 
 
 
 async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
-    """R-6.36g 拆自 _guard_monitor_forced：捕获到 id_token 分支（等待遮罩→导入验证→成功/回退）。"""
+    """捕获到 id_token 分支（等待遮罩→导入验证→成功/回退）。"""
     try:
         await injections.inject_once(win.page, "waiting_overlay")
     except Exception:  # noqa: BLE001
@@ -974,7 +973,7 @@ async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
 async def _guard_monitor_forced(win: "ShellWindow", base: str, cs, state) -> bool | None:
     """强制登录单步：True=登录成功 / False=已离开登录页（判定未登录，结束监视）/ None=继续。
 
-    R-6.72（用户拍板：守护会造成不可控局面，完全抛弃）：登录页**不做任何自动
+    （用户拍板：守护会造成不可控局面，完全抛弃）：登录页**不做任何自动
     拉回或自动导航**。离开登录页即视为未登录、立即结束本次监视交回上层，由用户
     自己再点「去登录」。旧逻辑「一离开 /login 就拉回」会在页面加载失败变成
     chrome-error://chromewebdata/ 时自激——拉回产生导航事件→再判离开→再拉回，
@@ -1040,7 +1039,7 @@ async def _guard_verify_burst(win, base: str, cur_force: bool, state: dict) -> b
 async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Event", cur_force: bool) -> bool:
     """小红书页内监视：由页面导航/关闭事件驱动，只在可能变化时读 Cookie。
 
-    R-6.53z8c：取消「每 1 秒读一次 Cookie」的轮询（用户拍板：轮询一律去掉）。
+    取消「每 1 秒读一次 Cookie」的轮询（用户拍板：轮询一律去掉）。
     现在只在 page 触发 framenavigated/close 时唤醒并做一次短验证；无事件期间
     不产生任何平台访问，从根本上减少登录页期间的自动化痕迹。
     """
@@ -1082,7 +1081,7 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
 
 
 async def _guard_startup_status(base: str) -> None:
-    """启动时按 login_status 判定三态。R-6.48p（用户最新拍板，覆盖 R-6.48i）：
+    """启动时按 login_status 判定三态。（用户最新拍板，覆盖）：
     启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面，前端
     ForceLogin 登录提示框自动弹出（App.vue onMounted 检测），用户点「去登录」
     才经 login_begin(pending)→守卫导航小红书登录页。已登录启动不受影响
@@ -1102,8 +1101,8 @@ async def _guard_startup_status(base: str) -> None:
 async def _guard_next_force(gate, win, base, stop) -> bool | None:
     """等下一次「去登录」触发——只有事件源，没有轮询退化路径。
 
-    R-6.48q：pending 事件驱动，login_begin 置位 evt 才醒来。
-    R-6.53z8h：删掉 gate 缺失时的 1.5s 轮询 + HTTP 查询兜底。生产调用点
+    pending 事件驱动，login_begin 置位 evt 才醒来。
+    删掉 gate 缺失时的 1.5s 轮询 + HTTP 查询兜底。生产调用点
     （launcher）100% 注入 gate；没有事件源就没有登录信号，此时阻塞到 stop
     为止即可，不允许再用周期查询顶着。
     """
@@ -1120,7 +1119,7 @@ async def _guard_next_force(gate, win, base, stop) -> bool | None:
 async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
     """登录落点：右侧调试窗（采集窗）。左窗只显示 APP，全程不参与登录。
 
-    R-6.53z8d：这是双窗口职责分离的入口——登录页只出现在右窗，壳窗永不被导航。
+    这是双窗口职责分离的入口——登录页只出现在右窗，壳窗永不被导航。
     右窗缺失时现场开一个（登录必须有头有窗，headless 会被平台风控拦死）。
     """
     coord = get_coordinator()
@@ -1142,7 +1141,7 @@ async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
 
 
 async def _guard_announce_and_navigate(win, base, force) -> None:
-    """R-6.37i 拆自 login_guard：打印切换日志并导航到登录页（R-6.21e 只响应 pending）。"""
+    """打印切换日志并导航到登录页。"""
     log.info(
         "切换到小红书登录页"
         f"（{'强制登录·不可关闭' if force else '主动重登·可关闭'}）",
@@ -1152,19 +1151,19 @@ async def _guard_announce_and_navigate(win, base, force) -> None:
 
 @xlog.tagged("win:collect:login")
 async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", gate: dict | None = None) -> None:
-    """登录守卫（R-6.5 真实登录页方案；R-6.6 强制登录；R-6.9 主动重登；R-6.10 首页模式）。
+    """登录守卫。
 
     语义（用户拍板）：
-    - 启动未登录/被踢：R-6.48p 起壳窗保持 APP 界面，前端 ForceLogin 提示框弹出，
+    - 启动未登录/被踢：起壳窗保持 APP 界面，前端 ForceLogin 提示框弹出，
       用户点「去登录」才导航登录页（不再自动导航）；已登录启动守卫待命。
     - 运行时被踢不直接导航（前端弹强制登录框，用户点击触发）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
     - 登录成功：id_token → 等待遮罩 → 通知后端 login_ok（不搬 Cookie）→ 回 APP。
-    - R-6.48q：pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
+    -pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
       （含 asyncio.Event），用户点「去登录」→ login_begin 置位 evt → 守卫 `await
       evt.wait()` 醒来导航，主循环零轮询。gate 为 None（测试/无壳直跑）退化为
       1.5s 低频轮询，语义等价。
-    CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化路径）。R-6.36e：循环块拆至上方助手，语义逐字保留。
+    CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化路径）。循环块拆至上方助手，语义逐字保留。
     """
     if os.environ.get("CZ_SKIP_LOGIN_GUARD"):
         return
@@ -1193,7 +1192,7 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
             log.info("登录完成——左窗保持 APP，右窗由平台自行跳转浏览页")
 
 async def _coord_or_scan_shell_page(base: str):
-    """R-6.37i 拆自 _rebind_if_closed：协调器壳引用；未就绪则回退 URL 扫描。"""
+    """协调器壳引用；未就绪则回退 URL 扫描。"""
     from src import engine_pool  # noqa: PLC0415
 
     coord = get_coordinator()
@@ -1210,9 +1209,9 @@ async def _coord_or_scan_shell_page(base: str):
 
 @xlog.tagged("win:collect:login")
 async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
-    """R-6.19：壳 tab 被 keeper 重建后，旧 page 已关闭——登录守卫重绑定新壳 page。
+    """壳 tab 被 keeper 重建后，旧 page 已关闭——登录守卫重绑定新壳 page。
 
-    R-6.30c：优先取协调器判活引用（keeper 登记的重建壳窗）；协调器未就绪
+    优先取协调器判活引用（keeper 登记的重建壳窗）；协调器未就绪
     （keeper 尚未启动的极早期）才回退 URL 扫描 ctx.pages。
     """
     try:
@@ -1239,7 +1238,7 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
 
 
 def _keeper_shell_effective(coord, ctx):
-    """壳窗引用判活（R-6.48o）：is_closed() 在引擎崩溃/CDP 断连时不可靠
+    """壳窗引用判活：is_closed() 在引擎崩溃/CDP 断连时不可靠
     （page 对象不标记 closed），必须同时校验引用仍属于当前页面集——
     不在 ctx.pages = 会话已重建（崩溃恢复），返回 None。"""
     s = coord.shell()
@@ -1251,7 +1250,7 @@ def _keeper_shell_effective(coord, ctx):
 async def _keeper_find_shell(ctx, base, coord):
     """协调器引用判活优先——壳窗可能正被守卫导航到登录页（URL 不含 base），URL 匹配会误判「壳窗被关」。
 
-    R-6.48h：URL 扫描必须排除 login-hint（同为 8791 前端子路由，startswith(base)
+    URL 扫描必须排除 login-hint（同为 8791 前端子路由，startswith(base)
     会命中）——否则调试窗口会被误登记为壳窗，**关闭调试窗口触发「壳窗被关闭→
     应用退出」**（用户实测：关调试窗口整个应用退出，日志实锤
     '壳窗 close 事件（url=.../login-hint）→ 触发应用退出'）。
@@ -1269,7 +1268,7 @@ async def _keeper_find_shell(ctx, base, coord):
 
 @xlog.tagged("win:collect:find")
 def _match_collect_page(p, shell, coord):
-    """R-6.37g 拆自 _keeper_find_collect_win：单页是否 采集窗（explore 或 login-hint）。"""
+    """单页是否 采集窗（explore 或 login-hint）。"""
     if p is shell or p.is_closed():
         return None
     u = p.url or ""
@@ -1325,7 +1324,7 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
     await _ensure_shell_title(page)
     coord.register_shell(page)
     coord.watch(page, is_shell=True)
-    log.info("壳窗口初始创建完成（R-6.22p 关主窗=退出应用）")
+    log.info("壳窗口初始创建完成")
 
 
 _LOGIN_PAGE_URL = "https://www.xiaohongshu.com/login"
@@ -1334,7 +1333,7 @@ _LOGIN_PAGE_URL = "https://www.xiaohongshu.com/login"
 async def _keeper_collect_target_url(config, engine_pool):
     """右窗目标 URL：一律小红书登录页。
 
-    R-6.53z8k 用户判据：能走 URL 的小红书页只有 login 这一个；登录成功后 login 页
+    用户判据：能走 URL 的小红书页只有 login 这一个；登录成功后 login 页
     自己会跳 explore，我方不做跳转。故右窗恒进 login——未登录时它就是扫码入口，
     已登录由平台自跳，无需中间页。
 
@@ -1347,11 +1346,11 @@ async def _keeper_collect_target_url(config, engine_pool):
 async def _keeper_sweep_blank(ctx, shell) -> int:
     """清理空白/残留 tab（壳窗引用跳过）。
 
-    R-6.48o：扩展 chrome://newtab 清理——引擎崩溃后 Chrome 会话恢复会把崩溃前
+    扩展 chrome://newtab 清理——引擎崩溃后 Chrome 会话恢复会把崩溃前
     的标签全部还原，新上下文首个默认页 chrome://newtab 也在此列；此前只清
     ""/about:blank 导致崩溃恢复后残留空标签（用户实测：崩溃重启后多出空白窗口）。
-    R-6.53t：返回关闭数并打日志（用户手动新标签 5s 内被关=「自动化操作」取证）。
-    R-6.53z8j：原先靠 _KEEPER_SWEEP_LAST 把调用降频到 30s，但 5s 轮询删掉后
+    返回关闭数并打日志（用户手动新标签 5s 内被关=「自动化操作」取证）。
+    原先靠 _KEEPER_SWEEP_LAST 把调用降频到 30s，但 5s 轮询删掉后
     本函数只在启动时调一次，节流变量从未被读取（死代码），一并删除。
     """
     closed = 0
@@ -1381,7 +1380,7 @@ async def _close_if_blank(p, u: str) -> bool:
 async def _keeper_recovery_cleanup(ctx, shell) -> int:
     """崩溃恢复清理：壳窗在监护期间失效后重新找到 → 关闭所有非主窗口残留。
 
-    R-6.48o：引擎崩溃 → Chrome 会话恢复还原全部标签（调试窗 采集窗、残留页）。
+    引擎崩溃 → Chrome 会话恢复还原全部标签（调试窗 采集窗、残留页）。
     用户拍板「崩溃后要关闭所有相关窗口，重启时关闭之前未关闭的窗口」——
     恢复后只保留主窗口（登录壳），其余全部关闭。返回关闭数。
     """
@@ -1495,7 +1494,7 @@ async def _xhs_cookies(page) -> list:
 async def _post_login_ok(fresh_scan: bool = False) -> None:
     """POST /api/auth/login_ok（登录成功通知：解除失效记忆/唤醒续采/推事件）。
 
-    R-6.87：不再上传 Cookie——Cookie 由浏览器写在各账号 profile 里，后端不需要
+    不再上传 Cookie——Cookie 由浏览器写在各账号 profile 里，后端不需要
     也不应该再搬运一份。fresh_scan=True 表示这次是真的从登录页扫码跳过来的。
     """
     from src import config  # noqa: PLC0415
@@ -1522,9 +1521,9 @@ async def _post_login_ok(fresh_scan: bool = False) -> None:
 
 @xlog.tagged("win:collect:calibrate")
 async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None:
-    """R-6.37i 拆自 _keeper_setup_collect_win：复用残留 采集窗 时校准窗口并注册监听。
+    """复用残留 采集窗 时校准窗口并注册监听。
 
-    R-6.49：采集页（xiaohongshu.com）保持不动（合法采集目标，禁止启动路径导航走）；
+    采集页（xiaohongshu.com）保持不动（合法采集目标，禁止启动路径导航走）；
     其余页按目标（未登录 login-hint / 已登录 APP 首页）校准。"""
     try:
         if _t2_url and "xiaohongshu.com" not in (t2.url or ""):
@@ -1578,7 +1577,7 @@ async def _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config):
 async def _keeper_dedupe_xhs_pages(ctx, coord) -> None:
     """启动期去重：强杀后 Chrome 会话恢复 + 应用窗口新建 会各留一个采集页。
 
-    R-6.53z8k+：右窗改恒开登录页后，重启实测右窗出现两个 explore 标签（用户红线
+    +：右窗改恒开登录页后，重启实测右窗出现两个 explore 标签（用户红线
     「禁止多窗口残留」）。只关 URL 完全相同、且不是 coord 已注册那页的多余副本。
     """
     keep = getattr(coord.collect_win(), "page", coord.collect_win())
@@ -1640,9 +1639,9 @@ async def _keeper_init_pass(base, coord, config, engine_pool, last):
 
 @xlog.tagged("win:shell")
 async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed: "Callable[[], None] | None" = None) -> None:
-    """R-6.22p 窗口监护：关主窗=关闭应用（on_shell_closed 退出）；关采集窗=仅关采集窗不复活。
+    """窗口监护：关主窗=关闭应用（on_shell_closed 退出）；关采集窗=仅关采集窗不复活。
 
-    初始块确保 Tab1/采集窗 创建一次；兜底轮询 5s 检测壳窗缺失。R-6.36e：
+    初始块确保 Tab1/采集窗 创建一次；兜底轮询 5s 检测壳窗缺失。
     嵌套闭包提升为上方 _keeper_* 模块级助手，控制流与语义逐字保留。
     """
     from src import config, engine_pool  # noqa: PLC0415（launcher 注入环境后导入）

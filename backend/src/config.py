@@ -227,7 +227,7 @@ def front_port() -> int:
     """前端服务端口：XHS_FRONT_PORT > XHS_SHELL_URL（实际监听，launcher 设定）
     > config.front_port（auto 时探测空闲）。
 
-    R-6.22j 修复：原来每次调用 find_free_port(preferred) 重新探测「空闲端口」——
+    修复：原来每次调用 find_free_port(preferred) 重新探测「空闲端口」——
     启动时 8791 空闲则返回 8791（uvicorn 监听 8791）；之后再次调用时 8791 已被
     占用，探测跳过它返回 8800 → 与真实监听端口错位 → cleanup_tabs 的 keep_url
     不匹配壳窗实际 URL → 登录引导时误关壳窗（用户实测「点采集后被引入空白页」）。
@@ -518,7 +518,7 @@ def set_account_platform_uid(account_id: str, uid: str) -> bool:
 
 
 def account_display_name(account_id: str) -> str:
-    """界面主名称 —— 全部自动派生，不需要人工起名（用户 R-6.69b 拍板）。
+    """界面主名称 —— 全部自动派生，不需要人工起名（用户拍板）。
 
     优先级：**平台昵称 → 小红书号 → 内部 id**。昵称是平台给的（会变），
     red_id 稳定唯一（用户能核对），account_id 是自动生成的唯一符（如 acc_3f2a91），
@@ -535,7 +535,7 @@ def account_display_name(account_id: str) -> str:
 
 
 def account_headless(account_id: str = "default") -> bool:
-    """该账号是否以无头启动（R-6.58）。
+    """该账号是否以无头启动。
 
     优先读账号自己的 headless 字段；从未设置过才回退全局 config.headless。
     为什么不用全局：切某个账号的无头会顺手把全局改成 true，default 下次重启就
@@ -570,7 +570,7 @@ def set_account_auto_headless(account_id: str, on: bool) -> bool:
 
 
 def collect_group_enabled() -> bool:
-    """采集窗标签分组开关（R-6.84）：全局、默认开。
+    """采集窗标签分组开关：全局、默认开。
 
     只影响「加载内置扩展」这一步；扩展目录不存在时 engine_pool 会静默跳过，
     因此老配置、未打包环境下的行为与关闭时一致，无需迁移字段。
@@ -579,7 +579,7 @@ def collect_group_enabled() -> bool:
 
 
 def extension_enabled(account_id: str) -> bool:
-    """该账号启动时是否自动加载未打包扩展（R-6.70）。默认 False——开关不打开，
+    """该账号启动时是否自动加载未打包扩展。默认 False——开关不打开，
     现有账号、窗口与测试行为零变化。老账号缺该字段时按 False 处理，无需迁移。"""
     return bool((get_account(account_id) or {}).get("extension_enabled"))
 
