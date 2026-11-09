@@ -118,8 +118,26 @@ def test_collect_win_close_aborts_collect(monkeypatch):
     calls = []
     monkeypatch.setattr(server, "abort_collect_on_window_close",
                         lambda: calls.append(1))
-    sw.WindowCoordinator()._handle_close(_Pg(), is_shell=False)
+    coord = sw.WindowCoordinator()
+    pg = _Pg()
+    coord.register_collect_win(pg)  # R-6.78b：要先登记，才算「当前采集窗」
+    coord._handle_close(pg, is_shell=False)
     assert calls == [1]
+
+
+def test_dedupe_close_of_old_page_does_not_abort(monkeypatch):
+    """R-6.78b 回归：启动期去重关掉残留采集页，不能中断正在跑的采集。
+
+    实测事故：任务刚 start，去重把同 URL 的旧采集页关掉，那次 close 被当成
+    「用户关窗」，任务立刻变成「采集窗口已关闭，本次采集中断」。
+    """
+    calls = []
+    monkeypatch.setattr(server, "abort_collect_on_window_close",
+                        lambda: calls.append(1))
+    coord = sw.WindowCoordinator()
+    coord.register_collect_win(_Pg())
+    coord._handle_close(_Pg(), is_shell=False)  # 关的是另一个页
+    assert calls == []
 
 
 def test_collect_win_close_swallows_server_error(monkeypatch):
@@ -129,7 +147,10 @@ def test_collect_win_close_swallows_server_error(monkeypatch):
         raise RuntimeError("server 未就绪")
 
     monkeypatch.setattr(server, "abort_collect_on_window_close", boom)
-    sw.WindowCoordinator()._handle_close(_Pg(), is_shell=False)
+    coord = sw.WindowCoordinator()
+    pg = _Pg()
+    coord.register_collect_win(pg)
+    coord._handle_close(pg, is_shell=False)
 
 
 def test_close_ignored_when_stopping():

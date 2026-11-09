@@ -361,6 +361,13 @@ class WindowCoordinator:
         if self._stop is not None and self._stop.is_set():
             return
         if not is_shell:
+            # R-6.78b：只有关掉「当前采集窗」才算用户关窗。启动期去重
+            # （_keeper_dedupe_xhs_pages）会关同 URL 的残留采集页，那次 close
+            # 也会走到这里——不区分的话采集刚开跑就被自己打断（实测任务
+            # 启动即报「采集窗口已关闭，本次采集中断」）。
+            if page is not self._collect_win:
+                log.info("关闭的是非当前采集页（重复/残留页），不中断本次采集")
+                return
             # R-6.72 用户拍板（方案 A）：关窗不自动重建，且关窗即中断本次采集。
             # 自动把窗口开回来本身属于「守护」行为，与「完全抛弃守护、一问一答」冲突。
             log.info("右侧调试窗被关闭（不自动重建；关窗即中断本次采集，需重新点「开始采集」）")
