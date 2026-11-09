@@ -65,9 +65,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
   flex: 0 0 272px; width: 272px; min-width: 0; background: var(--panel); border-right: 1px solid var(--line);
   padding: 16px 14px; display: flex; flex-direction: column; gap: 16px; overflow: auto; height: 100%;
 }
-.sec-title { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
-.sec-title .tag { font-size: 10px; background: var(--red); color: #fff; border-radius: 4px; padding: 1px 5px; font-weight: 500; }
-.param-grid { display: flex; flex-direction: column; gap: 10px; }
 .param label { font-size: 12px; color: var(--ink-2); display: block; margin-bottom: 4px; }
 .param-row { display: flex; gap: 8px; }
 .param-row > * { flex: 1; min-width: 0; }
@@ -104,7 +101,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .status-pill { font-size: 11px; padding: 3px 9px; border-radius: 99px; background: #F0F0F0; color: var(--ink-2); font-weight: 600; }
 .status-pill.running { background: #FFE9EC; color: var(--red); }
 .status-pill.done { background: #E6F8EF; color: var(--green); }
-.filter-title { flex: 1; min-width: 160px; max-width: 240px; }
 .batch { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .b-btn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 .b-btn:hover { border-color: var(--ink); }
@@ -152,18 +148,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .rank-item .info .d { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
 .rank-item .actions { display: flex; gap: 6px; flex: none; }
 
-/* 悬浮按钮组 */
-.float-bar { position: fixed; right: 28px; bottom: 28px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; z-index: 50; }
-.f-btn {
-  display: flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 99px;
-  font-size: 15px; font-weight: 700; box-shadow: 0 8px 24px rgba(0,0,0,.22); color: #fff;
-}
-.f-btn.clone { background: var(--red); }
-.f-btn.clone:hover { background: #E51F3A; }
-.f-btn.client { background: var(--amber); }
-.f-btn.client:hover { background: #E08305; }
-.f-btn .n { background: rgba(255,255,255,.3); border-radius: 99px; padding: 1px 8px; font-size: 12px; }
-.float-bar .hint { font-size: 11px; color: var(--ink-2); background: #fff; padding: 4px 10px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
 
 /* 卡片菜单 */
 .menu {
@@ -222,12 +206,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .ai-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ai-btn.ghost { color: var(--ink-2); }
 .ai-btn.primary { background: var(--red); color: #fff; border-color: var(--red); }
-.ai-settings { background: #fafafa; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
-.ai-settings label { font-size: 12px; color: var(--ink-2); display: block; margin: 6px 0 4px; }
-.ai-settings .limit { float: right; font-size: 11px; color: #B8B8B8; }
-.ai-settings input { border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 13px; box-sizing: border-box; }
-.ai-settings-actions { display: flex; gap: 8px; margin-top: 10px; }
-.ai-hint { font-size: 11px; color: var(--ink-2); margin-top: 8px; }
 
 /* 弹层 */
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 80; display: flex; align-items: center; justify-content: center; }
@@ -267,7 +245,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
     height: auto; min-height: 132px; max-height: 42vh; flex: none;
   }
   .publish { padding: 16px; }
-  .float-bar { bottom: 14px; right: 14px; }
 }
 
 /* Compact（<600）：窗口被拖到最小尺寸时的最后一道兜底。

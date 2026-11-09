@@ -35,8 +35,6 @@ DATA_DIR = pathlib.Path(_APP_DATA).expanduser() if _APP_DATA else ROOT / "data"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 CONFIG_FILE = DATA_DIR / "config.json"
 
-# 默认账号目录（R 批 v1.4：归一为数据目录内 profile；历史 ~/.xhs-leads-profile 保留兼容）
-DEFAULT_ACCOUNT_DIR_NAME = "profile"
 # 多账户统一根目录（R-6.59）：<数据目录>/accounts，注册表存相对路径。
 # 跨平台由 DATA_DIR 决定（macOS 打包态在 Application Support，Windows 打包态在 %APPDATA%），
 # 搬数据目录或换平台都不用改注册表。
@@ -579,9 +577,6 @@ def set_account_headless(account_id: str, headless: bool) -> bool:
     return True
 
 
-def account_auto_headless(account_id: str) -> bool:
-    """该账号是否「登录完成后自动切无头」（R-6.64）。默认 false。"""
-    return bool((get_account(account_id) or {}).get("auto_headless"))
 
 
 def set_account_auto_headless(account_id: str, on: bool) -> bool:

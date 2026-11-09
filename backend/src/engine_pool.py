@@ -68,10 +68,6 @@ MIN_WIN_H = 480
 # 出现几百毫秒，被用户看成「左边窗口又打开了小红书 / 两个 APP 窗叠在一起」。
 OFFSCREEN_LEFT = -4000
 
-# 采集调试窗的恒定标题（与 injections._COLLECT_DEBUG_TITLE_JS 的 T 一致）。
-# 只作视觉标识，不再参与采集窗页认领与分组判定（标题守护会与账号标题互覆盖）。
-COLLECT_DEBUG_TITLE = "XHS Leads · 采集调试窗口"
-
 # 采集窗页的 URL 认领依据（R-6.84e）：本实例里落在该域的页就是采集窗页；
 # 内置扩展也按同一判据归组。URL 由导航决定、title 守护改不了，比标题可靠。
 XHS_HOST = "xiaohongshu.com"

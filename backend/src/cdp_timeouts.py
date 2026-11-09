@@ -26,7 +26,6 @@ CDP_EVAL = 6.0     # 页面内容轮询 evaluate（wait_cards / login_wall）
 CDP_NAV = 15.0     # goto 导航（Playwright 内部 12s + 外层 15s）
 CDP_DRAIN = 8.0    # 详情抽取 / 滚动加载整段
 CDP_PREP = 25.0    # 采集页准备整段（含重试）
-CDP_TASK = 120.0   # 采集任务总时长
 
 
 class CdpTimeoutError(TimeoutError):

@@ -261,7 +261,6 @@ async def _ensure_shell_title(page) -> None:
 XHS_LOGIN_URL = "https://www.xiaohongshu.com/login"
 
 # 注：以下 JS 已全部上提至 injections 注册表（R-6.30a），按名取用：
-#   collect_debug_title（采集调试窗口标题守护，page init script）
 #   waiting_overlay / remove_waiting_overlay（登录成功过渡遮罩/移除）
 #   active_close（主动重登「✕」，__BASE__ 占位符调用方替换）
 #   open_login_panel（首页「登录」面板点击，原 R-6.10 悬空引用隐患已随注册表消除）

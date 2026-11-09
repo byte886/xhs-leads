@@ -104,16 +104,6 @@ def redact(text: str) -> str:
     return _KEY_RE.sub(lambda m: m.group(0).split("=")[0].split(":")[0] + "=***", text)
 
 
-def redact_cookies(cookies: list[dict]) -> list[dict]:
-    """Cookie 列表 → 脱敏展示（只留 name/domain，值全部遮蔽）。"""
-    out = []
-    for c in cookies or []:
-        d = {"name": c.get("name", ""), "domain": c.get("domain", "")}
-        if c.get("value"):
-            d["value"] = "***"
-        out.append(d)
-    return out
-
 
 # ---------------------------------------------------------------------------
 # logging 初始化（幂等）
@@ -123,6 +113,7 @@ _INITIALIZED = False
 
 
 def _setup() -> None:
+
     global _INITIALIZED
     if _INITIALIZED:
         return

@@ -2446,7 +2446,6 @@ async def draft_delete(req: DraftDeleteReq):
 PUBLISH_COOLDOWN_MIN = 180          # 两次发布最小间隔（3h，redbook 下限）
 PUBLISH_COOLDOWN_JITTER = 15        # 间隔随机抖动 ±15min，打散固定节奏
 PUBLISH_DAILY_MAX = 2               # 每日成功发布上限（真人日更 1-3 条的保守侧）
-PUBLISH_DAILY_MAX_STR = "2"         # 提示文案用
 WEEKLY_MAX_DAYS = 6                 # 每周最多 6 个发布日（模拟真人每周有休息日）
 ACTIVE_HOUR_START = 10              # 仅 10:00-21:30 真人活跃时段可发布
 ACTIVE_HOUR_END = 21.5

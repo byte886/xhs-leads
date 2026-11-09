@@ -15,7 +15,7 @@ NameError 被 try 吞掉静默降级）。本模块统一登记所有注入来�
 - note: 使用说明（为何走/不走 inject_once）
 
 幂等注入助手 inject_once(page, name)：evaluate 类注入注入前查 window.__xhs_injected
-集合防重复；add_init_script 类（stealth / collect_debug_title）因注入机制为
+集合防重复；add_init_script 类（stealth）因注入机制为
 「每次新文档自动执行」，不走页面标记助手，但其 JS 来源同样在本注册表登记。
 """
 import asyncio
@@ -115,48 +115,14 @@ _register(
          "非页面级，不走 inject_once；无 remove 对应（随 context 生命周期）。",
 )
 
-# ---- 3. 采集调试窗口标题守护（page 级 init script + 当前文档补注） ----
-# R-6.48h：改为自执行 IIFE——add_init_script 对字符串按源码 eval（`() => {...}`
-# 只定义不调用，跨文档导航后守护失效，主窗口登录页 title 裸奔即此根因）。
-_COLLECT_DEBUG_TITLE_JS = """(() => {
-    const T = 'XHS Leads · 采集调试窗口';
-    const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.72（用户拍板「守护整套不要」）：旧做法 observe(document,
-    // {childList,characterData,subtree}) 观察**整棵文档树**——小红书瀑布流每秒上百次
-    // DOM 变动（卡片加载/动画/计数刷新），每次变动都挤一次回调进渲染主线程，实测把
-    // 主线程打到 100%+，CDP evaluate 排队超时（inject.run/inject.mark 3s 超时）→
-    // 注入失败 → 采集 0 条，并最终拖垮浏览器。
-    // 改为拦截 document.title 赋值：零 DOM 观察、零轮询，页面一写标题就被换成 T。
-    try {
-        const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
-        if (d && d.get && d.set && d.configurable) {
-            Object.defineProperty(Document.prototype, 'title', {
-                configurable: true, enumerable: d.enumerable,
-                get() { return d.get.call(this); },
-                set() { d.set.call(this, T); },
-            });
-        }
-    } catch (e) {}
-    setT();
-    document.addEventListener('DOMContentLoaded', setT);
-})()"""
-_register(
-    "collect_debug_title",
-    _COLLECT_DEBUG_TITLE_JS,
-    kind="page_init",
-    note="事件级守护（MutationObserver，R-6.48i 替代 setInterval 轮询）。page.add_init_script"
-         " + 当前文档立即 evaluate；Python 侧 _debug_title_installed 标志防重——"
-         "不走 inject_once 的 window 标记。",
-)
-
 # ---- 3a2. 账号窗口标题守护（R-6.69b）：文案含账号身份，由调用方拼好传入 ----
-# 与 collect_debug_title 完全同一套守护机制（事件级 MutationObserver、锚点必须是
-# document）。差别只在 T 是占位符——第三类账号每个窗口要显示“这是哪个号”，
-# 昵称/小红书号是运行时才知道的，无法在源码里写死。
+# 事件级守护：拦截 document.title 赋值，零 DOM 观察、零轮询。T 是占位符——
+# 第三类账号每个窗口要显示“这是哪个号”，昵称/小红书号是运行时才知道的，
+# 无法在源码里写死。
 _ACCOUNT_TITLE_JS = """(() => {
     const T = '__LABEL__';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.72：与 collect_debug_title 同一改法——观察整棵 document 在上述瀑布流页面上
+    // R-6.72：旧做法观察整棵 document 在瀑布流页面上
     // 是主线程 CPU 杀手（每个 DOM 微变一次回调）。改为拦截 title 赋值，零观察。
     try {
         const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
@@ -186,7 +152,7 @@ _register(
 _SHELL_TITLE_JS = """(() => {
     const T = 'XHS Leads · 小红书获客助手';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.72：同 collect_debug_title——整棵 document 的 MutationObserver 是主线程 CPU
+    // R-6.72：整棵 document 的 MutationObserver 是主线程 CPU
     // 杀手，壳窗虽轻也统一改成零观察的 title 赋值拦截。
     try {
         const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
@@ -205,7 +171,7 @@ _register(
     "shell_title",
     _SHELL_TITLE_JS,
     kind="page_init",
-    note="与 collect_debug_title 同法：page.add_init_script + 当前文档立即 evaluate，"
+    note="page.add_init_script + 当前文档立即 evaluate，"
          "Python 侧 page._shell_title_installed 标志防重。init script 对后续导航"
          "（含守卫导航到小红书登录页）自动生效。",
 )
