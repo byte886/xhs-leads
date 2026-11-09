@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "XHS Leads 采集窗口",
+  "version": "0.1.0",
+  "description": "把采集调试窗的标签页收进名为「采集窗口」的原生标签组。只操作标签与标签组，不读取任何页面内容。",
+  "permissions": ["tabs", "tabGroups"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

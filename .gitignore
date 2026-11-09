@@ -32,9 +32,10 @@ dist/
 docs/prototype/_shots/
 *.tsbuildinfo
 target/
-extension/background.js
+# R-6.84：内置扩展的壳（manifest/background）随仓分发——采集窗标签分组靠它，
+# 否则 builtin_extension_dir() 永远返回 None、分组静默失效。
+# content.js 不入库（页面级内容脚本，历史预留位，当前无实现）。
 extension/content.js
-extension/manifest.json
 
 # --- 登录态敏感：cookie 落盘文件绝不入库 ---
 data/cookies*.json

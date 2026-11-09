@@ -585,7 +585,9 @@ class AccountEngine:
         self._launch_apply_chrome_log(launch_kwargs)
         self._launch_apply_binary(launch_kwargs, headless)
         self._launch_apply_geolocation(launch_kwargs)
-        if config.extension_enabled(self.account_id):
+        # R-6.84：采集窗标签分组（内置扩展，默认开）与 R-6.70 的按账号桥接开关并集。
+        # 两者都只是追加 --load-extension；扩展目录缺失时 _launch_apply_extension 跳过。
+        if config.extension_enabled(self.account_id) or config.collect_group_enabled():
             self._launch_apply_extension(launch_kwargs)
         self._context = await pw.chromium.launch_persistent_context(
             self.user_data_dir, **launch_kwargs

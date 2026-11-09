@@ -106,6 +106,9 @@ _DEFAULTS = {
                                   #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
     "collect_min_interval": 90.0, # 废弃（R-6.15 移除任务间节流；保留字段兼容旧配置）
     "request_interval": [1.0, 1.8],  # 拟人节奏随机区间
+    "collect_group_enabled": True,  # R-6.84 采集窗标签分组：把采集调试窗的标签页
+                                    #   收进原生标签组「采集窗口」（名字+颜色由内置扩展设）。
+                                    #   扩展目录缺失时自动跳过，行为与关闭一致。
 }
 
 
@@ -589,6 +592,15 @@ def set_account_auto_headless(account_id: str, on: bool) -> bool:
         return False
     update_account(account_id, auto_headless=bool(on))
     return True
+
+
+def collect_group_enabled() -> bool:
+    """采集窗标签分组开关（R-6.84）：全局、默认开。
+
+    只影响「加载内置扩展」这一步；扩展目录不存在时 engine_pool 会静默跳过，
+    因此老配置、未打包环境下的行为与关闭时一致，无需迁移字段。
+    """
+    return bool(get_config().get("collect_group_enabled", True))
 
 
 def extension_enabled(account_id: str) -> bool:
