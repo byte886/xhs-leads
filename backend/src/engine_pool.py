@@ -753,18 +753,26 @@ class AccountEngine:
         跨导航不变，是本进程里最稳的「这就是采集窗」信号。
         跨账号（context 不同）一律不复用，避免 A 账号的采集跑进 B 账号窗口。
         """
+        page = await self._registered_collect_page(ctx)
+        return page if page is not None else await self._page_by_title(ctx)
+
+    async def _registered_collect_page(self, ctx):
+        """协调器登记的那一页——同 context 且未关闭才算数。"""
         try:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
             page = shell_window.current_collect_page()
         except Exception:  # noqa: BLE001（协调器未就绪：退到标题认领）
-            page = None
-        if page is not None:
-            try:
-                if not page.is_closed() and getattr(page, "context", None) == ctx:
-                    return page
-            except Exception:  # noqa: BLE001
-                pass
+            return None
+        try:
+            if not page.is_closed() and getattr(page, "context", None) == ctx:
+                return page
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    async def _page_by_title(self, ctx):
+        """在 context 内按恒定标题认领采集窗页（标题跨导航不变）。"""
         for pg in ctx.pages:
             try:
                 if (await pg.title()).startswith(COLLECT_DEBUG_TITLE):

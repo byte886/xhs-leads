@@ -1674,9 +1674,23 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
                 "请重新采集一批笔记后再点「采集客户」。")
     await asyncio.sleep(4)
     try:
+        _ensure_detail_page(page)
         return await _drain_comments(page)
     finally:
         await _back_to_list(page)
+
+
+def _ensure_detail_page(page) -> None:
+    """R-6.84c：点开卡片后必须真的进了详情页，否则前置失败要摆在明面上。
+
+    2026-11-09 真机复现：在重开的搜索列表上点了卡片，详情层没出现，旧实现继续在
+    列表页上跑 _drain_comments，返回 {"total":0,"users":[]} —— 界面显示「这条没人
+    评论」，把前置条件失败伪装成业务结果。用户看到的就是「采集客户没反应」。
+    """
+    if _page_position(page) != "detail":
+        raise ClientCollectError(
+            "没能打开这条笔记的详情页（卡片点击落空，页面仍停在列表）。"
+            "本次未采到评论用户——请重试，或重新采集一批笔记后再点「采集客户」。")
 
 
 async def _drain_comments(page) -> dict:

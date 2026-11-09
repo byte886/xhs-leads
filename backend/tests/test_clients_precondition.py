@@ -43,6 +43,8 @@ def test_keyword_reopens_search_then_collects(monkeypatch):
 
     async def fake_open(page, note_id):
         calls.append(("open", note_id))
+        # 点开卡片成功＝页面进详情；R-6.84c 起 clients 会校验这一跳（见文件末尾用例）
+        page.url = f"https://www.xiaohongshu.com/explore/{note_id}"
         return True
 
     async def fake_drain(page):
@@ -81,3 +83,31 @@ def test_card_missing_raises(monkeypatch):
         assert "搜索结果" in str(e)
     else:  # pragma: no cover
         raise AssertionError("卡片没命中时应报错而非返回空")
+
+
+def test_card_clicked_but_not_in_detail_raises(monkeypatch):
+    """R-6.84c：卡片点开却没进详情页时，必须报错而不是返回 0 人。
+
+    2026-11-09 真机复现：页已重开的搜索列表上点了卡片，详情层没出现，
+    旧实现照样在列表页上跑 _drain_comments，返回 {"total":0,"users":[]}，
+    界面显示"这条没人评论"，把前置条件失败伪装成业务结果。
+    """
+    async def fake_open(page, note_id):
+        return True                      # 点击"成功"，但 URL 仍在列表
+
+    async def fake_drain(page):          # pragma: no cover - 不应被调用
+        raise AssertionError("没进详情页时不得提取评论")
+
+    async def _no_sleep(*_):
+        return None
+
+    bc._ACTIVE_PAGES["default"] = _FakePage()
+    monkeypatch.setattr(bc, "_open_note_card", fake_open)
+    monkeypatch.setattr(bc, "_drain_comments", fake_drain)
+    monkeypatch.setattr(bc.asyncio, "sleep", _no_sleep)
+    try:
+        asyncio.run(bc.clients("nid"))
+    except bc.ClientCollectError as e:
+        assert "详情页" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("没进详情页时应报错")
