@@ -647,9 +647,25 @@ def _filter_xhs_cookies(raw) -> list:
     return pw
 
 
+def _collect_running() -> bool:
+    """是否有采集任务正在跑。
+
+    R-6.86z：采集期间容不得任何页面被刷新/导航——采集就发生在那个任务页里。
+    """
+    return any(st.get("status") == "running" for st in _COLLECT_TASKS.values())
+
+
 async def _refresh_engine_after_inject(eng) -> None:
     """R-6.37a 拆自 import_cookies：注入后刷新引擎小红书页使登录态生效（无则开 explore）。"""
     from src import engine_pool  # noqa: PLC0415
+    # R-6.86z（Nov 9 实测）：采集进行中一律不动页面。cookie 是 context 级，采集页的
+    # 后续请求自然带上；这里若去开 /login，会把正在搜索的任务页导航走——实测「搜索
+    # 回车刚落进 search_result，1 秒后被踢回 explore，于是把首页推荐流当关键词结果
+    # 采集入库」，用户侧看到的就是「采回来的跟关键词无关」。同时也能避免采集期间
+    # 多开一个小红书窗口。
+    if _collect_running():
+        log.info("采集进行中，跳过注入后的页面刷新（Cookie 已在 context 级生效）")
+        return
     ctx = await eng.context()
     # R-6.53z8：注入 cookie 后需要新文档才生效，但禁止 reload / URL 直进。
     # 关键：**不能关闭任何既有页面**——壳窗本身可能正被登录守卫导航到 /login，

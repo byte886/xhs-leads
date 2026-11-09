@@ -843,12 +843,30 @@ async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
     await cdp_call(page.keyboard.type(keyword, delay=90), timeout=CDP_EVAL, label="search.type")
     await asyncio.sleep(0.5)
     await cdp_call(page.keyboard.press("Enter"), timeout=CDP_QUICK, label="search.enter")
+    arrived = await _wait_search_result_url(page)
+    if not arrived:
+        log.warning("搜索未进入结果页（停在 %s），判定失败、不采集", _page_url_now(page))
+        return False
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
     log.info("搜索回车后 url=%s cards_ok=%s wall=%s", _page_url_now(page), appeared, wall or "-")
     _check_login_wall(account_id, wall)
-    if not appeared:
-        return False
-    return await _is_on_search_result(page)
+    return appeared
+
+
+async def _wait_search_result_url(page, timeout_s: float = 10) -> bool:
+    """等 URL 真的进到 search_result 再判定，别回车后一锤子查。
+
+    R-6.86z（Nov 9 实测）：回车后小红书 SPA 路由要 0.3~1s 才换 URL，而
+    `_wait_note_cards` 在 explore 首页立刻就能数到推荐卡片（首页本来就有）、于是
+    立即返回，紧接着查 URL 时仍是 explore → 把已经搜成功的这一轮判成失败。用户侧
+    看到的就是「右窗明明已经进了搜索结果页，左窗却说未采集到数据」。故这里轮询 URL。
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if await _is_on_search_result(page):
+            return True
+        await asyncio.sleep(0.25)
+    return False
 
 
 async def _is_on_search_result(page) -> bool:

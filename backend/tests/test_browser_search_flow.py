@@ -393,3 +393,39 @@ class TestFilterWarn:
         w = bc._filter_warn("笔记类型", "图文")
         assert "定位" not in w["hint"]
         assert "笔记类型" in w["hint"] and "图文" in w["hint"]
+
+
+def test_wait_search_result_url_polls_until_route_changes():
+    """回车后 SPA 路由要几百毫秒才换 URL——轮询等它，别一锤子判失败。
+
+    实测（Nov 9）：explore 首页本来就有 30 张推荐卡，`_wait_note_cards` 立刻返回，
+    紧接着查 URL 时还是 explore，于是把已经搜成功的一轮判成失败，用户侧看到
+    「右窗已进搜索结果页、左窗却说未采集到数据」。
+    """
+
+    class _P:
+        def __init__(self):
+            self.url = "https://www.xiaohongshu.com/explore"
+
+    page = _P()
+
+    async def _flip():
+        await asyncio.sleep(0.3)
+        page.url = "https://www.xiaohongshu.com/search_result?keyword=咖啡"
+
+    async def _main():
+        task = asyncio.create_task(_flip())
+        ok = await bc._wait_search_result_url(page, timeout_s=2.0)
+        await task
+        return ok
+
+    assert asyncio.run(_main()) is True
+
+
+def test_wait_search_result_url_returns_false_when_stuck_on_explore():
+    """真的停在 explore 时要判失败，不能干等后当成功。"""
+
+    class _P:
+        url = "https://www.xiaohongshu.com/explore"
+
+    assert asyncio.run(bc._wait_search_result_url(_P(), timeout_s=0.4)) is False
