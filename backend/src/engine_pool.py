@@ -472,6 +472,24 @@ class AccountEngine:
         launch_kwargs["args"].append("--window-position=-4000,0")
 
 
+    def _launch_apply_geolocation(self, launch_kwargs: dict) -> None:
+        """R-6.81：注入固定坐标并授予 geolocation 权限。
+
+        平台「同城 / 附近」筛选会调用 navigator.geolocation。CFT 无 Google API key，
+        真实定位必然失败（官方文档：geolocation features will not work），实测三档：
+        denied → 立即 code:1（标签不生效）；granted 无坐标 → 6 秒后 code:3 超时后
+        静默退回「不限」；granted + 注入 → 点「同城」进 active 态且结果切到本地内容。
+        坐标按账号解析（config.account_geolocation），无头/有头同样注入。
+        """
+        geo_cfg = config.account_geolocation(self.account_id)
+        launch_kwargs["geolocation"] = geo_cfg
+        launch_kwargs["permissions"] = ["geolocation"]
+        log.info(
+            "账号 %s 注入定位 %.3f,%.3f（同城/附近筛选依赖）",
+            self.account_id, geo_cfg["latitude"], geo_cfg["longitude"],
+        )
+
+
     def _launch_apply_chrome_log(self, launch_kwargs: dict) -> None:
         """R-6.53：--log-file 让 Chromium base::logging 崩溃前 FATAL 落盘。
 
@@ -554,6 +572,7 @@ class AccountEngine:
             self._launch_apply_shell_window(launch_kwargs)
         self._launch_apply_chrome_log(launch_kwargs)
         self._launch_apply_binary(launch_kwargs, headless)
+        self._launch_apply_geolocation(launch_kwargs)
         if config.extension_enabled(self.account_id):
             self._launch_apply_extension(launch_kwargs)
         self._context = await pw.chromium.launch_persistent_context(

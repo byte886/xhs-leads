@@ -553,10 +553,16 @@ async def _apply_filters(page, filters: dict):
         pt = await _pick_filter_point(page, val)
         if pt:
             await page.mouse.click(pt["x"], pt["y"])
-            # 点完读一次面板选中态：既证明这次点击真落到了选项上，
-            # 也让实机验收时日志里能看见「图文」进了 active 列表。
+            # R-6.81：点完必须等一下再读选中态。「同城 / 附近」点击后平台会异步取一次
+            # navigator.geolocation，定位返回前面板仍显示旧值；零延迟读会把「实际已生效」
+            # 误判成「仍是 不限」（真机踩过：卡片已换成本地内容，日志却报未选中）。
+            # 等待后再读不到，才说明是真的没生效。
+            await asyncio.sleep(1.2)
             active = await page.evaluate(_ACTIVE_TAGS_JS)
-            log.info("筛选已选 %s=%s 面板选中态=%s", label, val, active)
+            if any(val in str(a) for a in (active or [])):
+                log.info("筛选已选 %s=%s 面板选中态=%s", label, val, active)
+            else:
+                log.warning("筛选未生效 %s=%s 面板选中态=%s", label, val, active)
         else:
             log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
         await asyncio.sleep(2.5)

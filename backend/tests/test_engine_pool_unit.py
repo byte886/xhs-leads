@@ -3,7 +3,7 @@ import asyncio
 import json
 
 from src import server  # noqa: F401（先导入 server 打破循环）
-from src import engine_pool, injections
+from src import engine_pool, config, injections
 
 
 class TestProbeScreenSize:
@@ -224,3 +224,71 @@ class TestRefreshWindowTitle:
 
         monkeypatch.setattr(eng, "context", _boom)
         asyncio.run(eng.refresh_window_title())  # 不抛
+
+
+class TestAccountGeolocation:
+    """R-6.81：同城/附近依赖的固定坐标解析（账号配置 > 环境变量 > 默认运营地）。"""
+
+    def _use_accounts(self, monkeypatch, tmp_path, accounts):
+        path = tmp_path / "accounts.json"
+        path.write_text(json.dumps({"accounts": accounts, "active": "default"}), encoding="utf-8")
+        monkeypatch.setattr(config, "ACCOUNTS_FILE", path)
+        monkeypatch.delenv("XHS_GEO_LAT", raising=False)
+        monkeypatch.delenv("XHS_GEO_LNG", raising=False)
+        return path
+
+    def test_default_is_operating_city(self, monkeypatch, tmp_path):
+        self._use_accounts(monkeypatch, tmp_path, {})
+        assert config.account_geolocation("default") == config.DEFAULT_GEOLOCATION
+
+    def test_account_override_wins(self, monkeypatch, tmp_path):
+        self._use_accounts(monkeypatch, tmp_path, {
+            "shenzhen": {"user_data_dir": "accounts/shenzhen",
+                         "geolocation": {"latitude": 22.543, "longitude": 114.058}},
+        })
+        geo = config.account_geolocation("shenzhen")
+        assert geo["latitude"] == 22.543 and geo["longitude"] == 114.058
+        assert geo["accuracy"] == config.DEFAULT_GEOLOCATION["accuracy"]
+
+    def test_env_used_when_account_has_none(self, monkeypatch, tmp_path):
+        self._use_accounts(monkeypatch, tmp_path, {})
+        monkeypatch.setenv("XHS_GEO_LAT", "30.0")
+        monkeypatch.setenv("XHS_GEO_LNG", "120.0")
+        geo = config.account_geolocation("default")
+        assert geo["latitude"] == 30.0 and geo["longitude"] == 120.0
+
+    def test_invalid_account_geo_falls_back(self, monkeypatch, tmp_path):
+        self._use_accounts(monkeypatch, tmp_path, {
+            "bad": {"user_data_dir": "accounts/bad",
+                    "geolocation": {"latitude": "oops", "longitude": 112.1}},
+        })
+        assert config.account_geolocation("bad") == config.DEFAULT_GEOLOCATION
+
+
+class TestLaunchApplyGeolocation:
+    """启动参数注入：geolocation + permissions 必须落到 launch kwargs 上。"""
+
+    def _engine(self):
+        eng = engine_pool.AccountEngine.__new__(engine_pool.AccountEngine)
+        eng.account_id = "default"
+        return eng
+
+    def test_inject_kwargs(self, monkeypatch):
+        eng = self._engine()
+        monkeypatch.setattr(config, "account_geolocation",
+                            lambda _a="default": {"latitude": 32.0, "longitude": 112.0, "accuracy": 50.0})
+        kwargs = {}
+        eng._launch_apply_geolocation(kwargs)
+        assert kwargs["geolocation"] == {"latitude": 32.0, "longitude": 112.0, "accuracy": 50.0}
+        assert kwargs["permissions"] == ["geolocation"]
+
+    def test_headless_and_headed_both_get_it(self, monkeypatch):
+        """定位与视口模式无关：无头、有头都必须带 geolocation。"""
+        monkeypatch.setattr(engine_pool, "shell_window_geometry", lambda: (960, 1140, 0, 960))
+        monkeypatch.setattr(config, "account_geolocation",
+                            lambda _a="default": dict(config.DEFAULT_GEOLOCATION))
+        for headless in (True, False):
+            kwargs = self._engine()._launch_kwargs_base(headless, 9223)
+            self._engine()._launch_apply_geolocation(kwargs)
+            assert "geolocation" in kwargs
+            assert kwargs["permissions"] == ["geolocation"]

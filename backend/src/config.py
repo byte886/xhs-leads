@@ -348,6 +348,53 @@ def get_account(account_id: str) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# 采集定位（同城 / 附近筛选）
+# ---------------------------------------------------------------------------
+# R-6.81（真机实测）：平台「同城 / 附近」筛选依赖 navigator.geolocation；CFT 是无
+# Google API key 的构建，官方文档写明 geolocation features 不会工作 —— 即使权限
+# 全开也只会等到 code:3（Timeout expired），平台随即静默退回「不限」。所以不能
+# 指望系统定位，必须在启动时注入固定坐标（Playwright geolocation + permissions）。
+# 坐标默认取运营地（襄阳樊城）；账号可用 accounts.json 的 geolocation 字段覆盖，
+# 也可用 XHS_GEO_LAT / XHS_GEO_LNG 环境变量临时指定。
+DEFAULT_GEOLOCATION = {"latitude": 32.042, "longitude": 112.144, "accuracy": 50.0}
+
+
+def _geo_from(raw: dict) -> dict | None:
+    """把 {latitude, longitude, accuracy?} 规范成 Playwright Geolocation。
+
+    缺经纬度、非数字、或超出合法范围时返回 None（由调用方回退下一来源）。
+    """
+    try:
+        lat = float(raw.get("latitude"))
+        lng = float(raw.get("longitude"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return None
+    try:
+        acc = float(raw.get("accuracy") or DEFAULT_GEOLOCATION["accuracy"])
+    except (TypeError, ValueError):
+        acc = DEFAULT_GEOLOCATION["accuracy"]
+    return {"latitude": lat, "longitude": lng, "accuracy": acc}
+
+
+def account_geolocation(account_id: str = "default") -> dict:
+    """该账号的定位坐标：accounts.json 的 geolocation > 环境变量 > 默认运营地。"""
+    acc = get_account(account_id) or {}
+    configured = acc.get("geolocation")
+    if isinstance(configured, dict):
+        parsed = _geo_from(configured)
+        if parsed:
+            return parsed
+    env = {"latitude": os.environ.get("XHS_GEO_LAT"), "longitude": os.environ.get("XHS_GEO_LNG")}
+    if env["latitude"] and env["longitude"]:
+        parsed = _geo_from(env)
+        if parsed:
+            return parsed
+    return dict(DEFAULT_GEOLOCATION)
+
+
 # 账号 id 同时是目录名，必须跨平台安全：小写字母/数字/下划线/短横线，不以符号开头，≤32 字符。
 # 排除中文（路径编码）、空格、点、盘符与路径分隔符（Windows 非法字符）。
 _ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
