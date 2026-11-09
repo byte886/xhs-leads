@@ -97,13 +97,10 @@ _DEFAULTS = {
     "engine_port": 9223,          # 引擎调试端口（XHS_PROFILE_PORT 可覆盖）
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
-    "browser_mode": "engine",     # engine=独立引擎（B 方案）/ daily=连日常 Chrome（调试遗留）
     "headless": False,            # R-6.16 路线 A：壳=CFT 引擎窗口（CDP 可控），常态有头；engine_window 可显式切
     "collect_tab_visible": False, # R-6.18 壳窗口双 Tab：采集过程是否在壳窗口 采集窗 显示。
                                   #   True=采集 tab 前置可见（调试/演示）；False=采集后台完成、
                                   #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
-    "collect_min_interval": 90.0, # 废弃（R-6.15 移除任务间节流；保留字段兼容旧配置）
-    "request_interval": [1.0, 1.8],  # 拟人节奏随机区间
     "collect_group_enabled": True,  # R-6.84 采集窗标签分组：把采集调试窗的标签页
                                     #   收进原生标签组「采集窗口」（名字+颜色由内置扩展设）。
                                     #   扩展目录缺失时自动跳过，行为与关闭一致。

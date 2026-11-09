@@ -58,15 +58,6 @@ export const appState = reactive({
   elapsed: 0,
   // 勾选
   selected: {} as Record<string, boolean>,
-  // 发布页
-  publishOpen: false,
-  clonePayload: null as null | {
-    feed_id: string
-    title: string
-    desc: string
-    images: string[]
-    originUrl: string
-  },
   // 登录（R-6.8 增加 kicked：平台已踢/登录超限 → 登录态失效）
   login: { logged_in: false, nickname: '', kicked: false },
   // 登录态刷新信号（登录成功后 +1，采集面板据此重新拉登录状态）

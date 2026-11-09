@@ -5,7 +5,7 @@ ADR《授权机制选型与薄层设计》定死的 4 件事：
 1. 接口形状：`check_license(feature) -> (ok, reason, detail)`，所有业务入口统一过它；free 恒放行；
 2. feature 清单：collect / clone / publish / llm（前后端共用同一份）；
 3. 机器码算法：跨平台稳定硬件指纹（发布后换算法 = 已发激活码全废，故必须先定）；
-4. License 文件 schema：版本化（schema_version=1），预留 RSA signature 字段（server 模式填充）。
+4. License 文件 schema：预留 RSA signature 字段（server 模式填充）。
 
 档位切换只改本文件内部实现，其余业务代码零改动。
 """
@@ -27,7 +27,6 @@ LICENSE_MODE = os.environ.get("XHS_LICENSE_MODE", "free")
 # 前后端共用的功能清单（免费试用/付费档位以后映射到同一清单）
 FEATURES = ("collect", "clone", "publish", "llm")
 
-_SCHEMA_VERSION = 1
 _LICENSE_FILE = config.DATA_DIR / "license.json"
 
 # 内置 RSA 公钥（activation 档位验签用；私钥在卖家端 data/license_private.pem，绝不入库）
@@ -203,22 +202,19 @@ def _digest(value: str) -> str:
 
 
 def load_license_file() -> dict:
-    """读 data/license.json；schema_version=1，预留 signature 字段（server 模式填充）。
+    """读 data/license.json；预留 signature 字段（server 模式填充）。
 
     文件不存在或损坏时返回默认结构（不抛异常——free 模式根本不需要它）。
     """
     defaults = {
-        "schema_version": _SCHEMA_VERSION,
         "mode": LICENSE_MODE,
         "machine_code": machine_code(),
         "features": list(FEATURES),
         "signature": None,        # 预留：server 模式 RSA 签名
-        "activated_at": None,     # 预留：activation 模式激活时间
     }
     try:
         if _LICENSE_FILE.exists():
             data = json.loads(_LICENSE_FILE.read_text(encoding="utf-8"))
-            data.setdefault("schema_version", _SCHEMA_VERSION)
             data.setdefault("signature", None)
             data.setdefault("features", list(FEATURES))
             return data
@@ -241,10 +237,8 @@ def activate(code: str) -> tuple[bool, str]:
         _LICENSE_FILE.write_text(
             json.dumps(
                 {
-                    "schema_version": _SCHEMA_VERSION,
                     "mode": "activation",
                     "activation_code": code,
-                    "activated_at": int(time.time()),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -261,10 +255,7 @@ def license_status() -> dict:
     lic = load_license_file()
     return {
         "mode": LICENSE_MODE,
-        "schema_version": lic.get("schema_version", _SCHEMA_VERSION),
         "features": lic.get("features", list(FEATURES)),
         "machine_fingerprint": lic.get("machine_code") or machine_code(),  # 已是 SHA-256 摘要，可安全展示
-        "has_signature": bool(lic.get("signature")),
         "has_activation": bool(lic.get("activation_code")),  # activation 模式是否已激活
-        "activated_at": lic.get("activated_at"),
     }

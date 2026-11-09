@@ -467,7 +467,7 @@ class TestClone:
         monkeypatch.setattr(server, "_download_images", lambda fid, imgs: ["/app/images/a1_p0.jpg"])
         r = client.post("/api/clone", json={"feed_id": "a1"})
         j = r.json()
-        assert j["detail_ok"] is True and j["images_local"] == ["/app/images/a1_p0.jpg"]
+        assert j["images_local"] == ["/app/images/a1_p0.jpg"]
 
     def test_clone_fallback_cover(self, client, monkeypatch, tmp_path):
         _seed_notes(tmp_path)
@@ -479,7 +479,7 @@ class TestClone:
         monkeypatch.setattr(server, "_download_images", lambda fid, imgs: [])
         r = client.post("/api/clone", json={"feed_id": "a1"})
         j = r.json()
-        assert j["detail_ok"] is False  # 无详情图片，detail_ok=False
+        assert j["images_local"] == []  # 无详情图片时仍返回克隆体，图片列表为空
 
     def test_clone_video_downloads(self, client, monkeypatch, tmp_path):
         """视频笔记克隆：下载原视频到本地（读操作），返回 video_file；上传通道 P 级待办。"""
@@ -802,34 +802,4 @@ class TestFetchedAtSwap:
                                 "翡翠", datetime.datetime.now().isoformat(timespec="seconds"))
         row = con.execute("SELECT origin FROM notes WHERE feed_id='f9'").fetchone()
         assert row["origin"] == origin  # 原作品链接随入库持久化
-        con.close()
-
-    def test_repair_swap_fixes_legacy_rows(self, tmp_path):
-        con = self._db(tmp_path)
-        now = datetime.datetime.now().isoformat(timespec="seconds")
-        # 模拟历史错位：JSON 进 fetched_at、时间进 score_info
-        con.execute(
-            "INSERT INTO notes (feed_id, fetched_at, score_info) VALUES (?,?,?)",
-            ("f2", json.dumps({"score": 50.0}), now),
-        )
-        con.commit()
-        server._repair_fetched_at_swap(con)
-        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f2'").fetchone()
-        assert row["fetched_at"] == now
-        assert json.loads(row["score_info"]) == {"score": 50.0}
-        con.close()
-
-    def test_repair_swap_idempotent(self, tmp_path):
-        con = self._db(tmp_path)
-        now = datetime.datetime.now().isoformat(timespec="seconds")
-        con.execute(
-            "INSERT INTO notes (feed_id, fetched_at, score_info) VALUES (?,?,?)",
-            ("f3", json.dumps({"score": 40.0}), now),
-        )
-        con.commit()
-        server._repair_fetched_at_swap(con)
-        server._repair_fetched_at_swap(con)  # 再跑一次不误伤
-        row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f3'").fetchone()
-        assert row["fetched_at"] == now
-        assert json.loads(row["score_info"]) == {"score": 40.0}
         con.close()

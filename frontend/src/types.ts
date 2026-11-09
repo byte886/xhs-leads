@@ -72,7 +72,6 @@ export interface Author {
   fans_count: number
   note_count: number
   hot_count: number
-  low_count: number
   avg_score: number
   max_score: number
   total_liked: number
@@ -109,7 +108,6 @@ export interface ClonePayload {
   title: string
   desc: string
   images: string[]
-  detail_ok: boolean
   /** 本地图片（/app/images/...），优先于外链 images */
   images_local?: string[]
   /** 视频克隆：原视频本地路径（/videos/...），空=图文笔记 */
@@ -134,12 +132,9 @@ export interface LogItem {
 
 export interface LicenseStatus {
   mode: 'free' | 'activation' | 'server'
-  schema_version: number
   features: string[]
   machine_fingerprint: string
-  has_signature: boolean
   has_activation: boolean
-  activated_at: string | null
 }
 
 /** 账号注册表项（GET /api/accounts 的每一项） */

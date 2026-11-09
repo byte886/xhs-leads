@@ -39,16 +39,15 @@ def test_get_config_defaults_only(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "none.json")
     cfg = config.get_config()
     assert cfg["engine_port"] == 9223 and cfg["front_port"] == 8791
-    assert cfg["browser_mode"] == "engine"
 
 
 def test_set_config_roundtrip(tmp_path, monkeypatch):
     f = tmp_path / "c.json"
     monkeypatch.setattr(config, "CONFIG_FILE", f)
-    cfg = config.set_config("request_interval", [3.0, 5.0])
-    assert cfg["request_interval"] == [3.0, 5.0]
+    cfg = config.set_config("front_port", 9001)
+    assert cfg["front_port"] == 9001
     # 持久化：重新读回
-    assert config.get_config()["request_interval"] == [3.0, 5.0]
+    assert config.get_config()["front_port"] == 9001
 
 
 # ---------------------------------------------------------------- port policy

@@ -238,23 +238,7 @@ def _init_tables(con):
             pass  # 列已存在
     # 原作品链接（打开原作品跳转）：ALTER 补到末尾，保证新老库列序一致（INSERT 用全列 VALUES）
     _add_column_if_missing(con, "notes", "origin", "TEXT")
-    _repair_fetched_at_swap(con)  # 历史错位数据迁移（幂等）
     con.commit()
-
-
-def _repair_fetched_at_swap(con) -> None:
-    """纠正历史 bug：fetched_at/score_info 两列写反。幂等——纠正后不再命中条件。
-
-    判定错位：fetched_at 以 '{' 开头（实为评分 JSON）且 score_info 不是 JSON（实为时间）。
-    """
-    rows = con.execute("SELECT feed_id, fetched_at, score_info FROM notes").fetchall()
-    for r in rows:
-        fa, si = r["fetched_at"], r["score_info"]
-        if fa and str(fa).strip().startswith("{") and not str(si).strip().startswith("{"):
-            con.execute(
-                "UPDATE notes SET fetched_at=?, score_info=? WHERE feed_id=?",
-                (si, fa, r["feed_id"]),
-            )
 
 
 # ================= 登录 =================
@@ -1862,8 +1846,7 @@ def authors():
     """从当前采集集按作者聚合：低粉爆款数越多、均分越高 → 越值得模仿。
 
     authors 列表字段：user_id / nickname / avatar / fans_count / note_count /
-    hot_count（低粉爆款🔥篇数）/ low_count（低粉及低粉爆款篇数）/ avg_score /
-    max_score / total_liked / last_publish。
+    hot_count（低粉爆款🔥篇数）/ avg_score / max_score / total_liked / last_publish。
     """
     con = _db()
     rows = con.execute(
@@ -1875,7 +1858,6 @@ def authors():
           MAX(n.fans_count) AS fans_count,
           COUNT(*) AS note_count,
           COALESCE(SUM(CASE WHEN n.tag = '低粉爆款🔥' THEN 1 ELSE 0 END), 0) AS hot_count,
-          COALESCE(SUM(CASE WHEN n.tag LIKE '低粉%' THEN 1 ELSE 0 END), 0) AS low_count,
           ROUND(AVG(n.score), 1) AS avg_score,
           MAX(n.score) AS max_score,
           COALESCE(SUM(n.liked_count), 0) AS total_liked,
@@ -2056,11 +2038,9 @@ async def clone(req: CloneReq):
     is_video = (n.get("note_type") or "").lower() == "video"
 
     images = await _collect_images(n, req.feed_id)
-    detail_ok = len(images) > 0
     local_images = _download_images(req.feed_id, images)
 
     n["images_local"] = local_images
-    n["detail_ok"] = detail_ok
 
     # 视频克隆：下载原视频到 data/videos（本地，带 Referer 防 403）
     video_file = ""

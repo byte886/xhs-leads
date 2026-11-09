@@ -144,14 +144,14 @@ def test_login_user_name_prefers_os_getlogin(monkeypatch):
 
 def test_load_missing_file_returns_defaults():
     d = license.load_license_file()
-    assert d["schema_version"] == 1 and d["signature"] is None
+    assert d["signature"] is None
     assert d["features"] == list(license.FEATURES)
 
 
 def test_load_corrupted_file_returns_defaults(tmp_path):
     license._LICENSE_FILE.write_text("{not json", encoding="utf-8")
     d = license.load_license_file()
-    assert d["schema_version"] == 1
+    assert d["features"] == list(license.FEATURES)
 
 
 def test_load_existing_merges_defaults(tmp_path):
@@ -179,6 +179,5 @@ def test_activate_good_code_writes_file(monkeypatch):
 
 def test_license_status_shape():
     s = license.license_status()
-    assert set(s) >= {"mode", "features", "machine_fingerprint",
-                      "has_signature", "has_activation", "activated_at"}
+    assert set(s) >= {"mode", "features", "machine_fingerprint", "has_activation"}
     assert len(s["machine_fingerprint"]) == 32  # sha256 摘要，不明文
