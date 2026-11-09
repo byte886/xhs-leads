@@ -18,7 +18,6 @@ from src import engine_pool, logger as xlog
 log = xlog.get("mirror")
 
 XHS_EXPLORE = "https://www.xiaohongshu.com/explore"
-# 历史上登录小窗只允许 /login（full-page 独立页）；R-6.66 起统一走 explore
 # 浏览页模式——未登录平台自动弹同款 login-modal，背后有浏览页、侧边栏登录按钮
 # 常驻可重新唤起，配合 force_login 遮罩锁避免点空白丢失。常量保留供兼容/回退。
 XHS_LOGIN = "https://www.xiaohongshu.com/login"
@@ -90,7 +89,6 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
     from src import config
     from src.server import _COLLECT_TASKS
 
-    # R-6.58：default 账号的引擎同时承载 APP 壳窗口与采集窗，关掉引擎 = 两个窗口一起消失，
     # launcher 会判定用户关闭了应用并退出整个进程（实测：API 先返回 200，随后应用自己退出，
     # 表现为「点了一下，整个程序没了」）。所以这里必须拒绝，不能静默放行。
     if account == "default" and not on:
@@ -103,7 +101,6 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
         if _st.get("status") == "running" and _st.get("account_id", "default") == account:
             return {"ok": False, "error": "有采集任务进行中，请先停止再切换调试窗口"}
     want_headless = not on
-    # R-6.58：按账号记 headless，不写全局——否则切 A 账号的无头会把 B 账号
     # 下次启动也变成无头（default 因此丢窗口），多账号必须各管各的。
     if config.account_headless(account) == want_headless:
         return {"ok": True, "window": on, "note": "已是目标模式，无需切换"}
@@ -217,7 +214,6 @@ async def minimize_all_accounts() -> dict:
             "note": f"已收起 {len(changed)} 个窗口，default 不受影响"}
 
 
-# ---------------- R-6.67 登录完成自动切无头（纯事件驱动）
 
 async def start_auto_headless(account: str) -> dict:
     """开启「登录后自动切无头」事件监听（开窗扫码时调用）。

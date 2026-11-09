@@ -25,11 +25,9 @@ const menuPos = ref({ x: 0, y: 0 })
 // 登录 UI 改版（用户拍板）：未登录 / 启动被踢 / 采集中被踢与异常 → 统一弹 APP 内部
 // **强制登录对话框**（ForceLogin，不可关闭），点「去登录」才切小红书登录页。
 // 主动重登（设置页「重新登录」）由 SettingsPanel 直接触发（force=false，可关闭）。
-// R-6.21e（用户拍板）：运行时不再定时轮询刷新登录态——只在**交互失败**携带登录失效
 // 信号时弹框（collectClients / CollectPanel / PublishPage 各失败分支统一 isLoginAbnormal）；
 // 启动/刷新时的 checkLogin / ensureLoginChecked 一次性判定保留。
 const forceOpen = ref(false)
-// R-6.53z8c：事件订阅句柄（组件卸载时释放）
 let offEvents: (() => void) | null = null
 
 function checkLogin() {
@@ -84,7 +82,6 @@ async function collectClients(note: Note) {
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
       toast('采集失败：' + msg.slice(0, 120), 'error')
-      // R-6.21e：交互异常驱动登录引导——detail 命中登录失效信号（登录/被踢/验证码）→ 弹强制登录框
       if (isLoginAbnormal(msg)) forceOpen.value = true
       return
     }
@@ -129,8 +126,6 @@ async function ensureLoginChecked() {
 
 // 启动/刷新时自动检测登录态（登录 UI 改版：未登录/被踢 → APP 内部强制登录对话框；
 // 不依赖 launcher 直接导航登录页——launcher 仅负责 pending 后导航登录页）。
-// R-6.21e：仅启动判定，无定时轮询——运行时登录失效由交互失败驱动（见 isLoginAbnormal 各分支）。
-// R-6.26（用户对齐）：恢复**低频**运行时守护——被动失效（cookie 静默过期/被踢/风控拦截
 // 且无交互失败）时，主窗口 APP 必须出现登录提示框，不能只靠调试窗口暴露登录页。
 // 30s 间隔 + 弹框期间跳过：不产生「每几秒弹一次」风暴（ForceLogin 打开时不再查询）。
 onMounted(async () => {
@@ -138,7 +133,6 @@ onMounted(async () => {
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
-  // R-6.53z8c：登录守护改为事件驱动——不再每 60 秒主动查一次（主动查会触发页面扫描，
   // 与用户手动浏览叠加会加重平台风控判定）。只在两种真实信号到达时才响应：
   //   ① collect 事件 need_login（采集撞墙即结束 = 确实需要登录）
   //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）

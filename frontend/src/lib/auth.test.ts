@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isLoginAbnormal } from './auth'
 
-// R-6.36d：登录失效判定（R-6.21f 拍板口径）的行为守护。
 // 只对「平台明示会话失效」信号弹强制登录；风控/发布拦截/裸词一律不触发。
 describe('isLoginAbnormal', () => {
   it('空值不触发', () => {

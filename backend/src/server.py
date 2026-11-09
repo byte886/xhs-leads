@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
 from src import save_dialog as _save_dialog  # 原生「另存为」面板（导出统一走它）
-from src import shell_window as _shell_window  # noqa: E402（R-6.22 窗口校准：模块级导入，避免各函数重复延迟导入）
+from src import shell_window as _shell_window
 
 log = _log.get("server")
 
@@ -63,14 +63,13 @@ from src.collect_pipeline import (  # noqa: E402
     set_rhythm,
 )
 from src import browser_client  # noqa: E402（快速档 _enrich_notes 直连详情/主页）
-from src import injections  # noqa: E402（R-6.30a：注入脚本集中注册表）
+from src import injections
 from src import config, risk  # noqa: E402（架构改造 P1：配置中心 + 每账号风控）
-from src.cdp_timeouts import CDP_QUICK, cdp_call  # noqa: E402（R-6.53s：统一 CDP 超时保护）
+from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src import license as lic  # noqa: E402（授权薄层：free 恒放行，业务入口统一过闸）
 
 app = FastAPI(title="XHS Leads · 小红书获客助手")
 
-# ---- 风控状态记录（R-6.53z3：前置频率闸已随死代码清理移除，只剩结束时间记录）----
 
 
 def _mark_collect_done(account_id: str = "default") -> None:
@@ -117,7 +116,6 @@ async def _startup_cleanup():
     except Exception:  # noqa: BLE001
         pass
     try:
-        # R-6.25：启动即清空采集存储（重启后库里只有本次运行数据）
         _reset_collection_data()
     except Exception:  # noqa: BLE001
         pass
@@ -246,8 +244,7 @@ def _init_tables(con):
 # 前端轮询 login_status 若每次都连 Chrome → 每几秒弹一次窗（用户痛点「关了又开」）。
 # 因此缓存检测结果 TTL=30s，轮询打缓存，不反复连 Chrome。
 _LOGIN_CACHE = {"t": 0.0, "data": None}
-_LOGIN_CACHE_TTL = 15.0  # R-6.21d：30s→15s，被踢/失效感知延迟减半（CDP inner_text 开销可控）
-# R-6.26 登录失效记忆：登录失效（被踢/风控拦截/页面被平台重定向登录页）是**权威事实**。
+_LOGIN_CACHE_TTL = 15.0
 # 即使随后采集调试窗被收起、页面信号消失（id_token 残留 → 判定假阳性 logged_in），
 # 也必须**持续判失效**直到用户真正重新登录成功（login_ok 通知 + 引擎实况复核）才解除——
 # 否则 ForceLogin 文案会误显示「当前已登录」、登录引导无法形成重新登录闭环。
@@ -292,7 +289,7 @@ async def _scan_xhs_pages_for_signals(ctx):
         if body_txt is not None:
             bodies.append(body_txt)
             login_redirect = login_redirect or is_login
-        break  # R-6.53j：单页足够（全局信号），不再遍历全部页面
+        break
     return page, "\n".join(bodies), login_redirect
 
 
@@ -333,8 +330,6 @@ async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, b
         has_id_token = any(c.get("name") == "id_token" for c in mem)
         page_logged_in = False
         kicked = False
-        # R-6.8 被踢信号检测（尽力而为）：仅复用**现成**小红书页读取 inner_text；
-        # 无页面/读取失败/空白 → 不误判（id_token 权威分支不因页面问题被降级，R-6.6 精神）。
         ctx = None
         try:
             ctx = await eng.context()
@@ -398,10 +393,7 @@ async def _decide_by_tokens(page, has_id_token: bool, has_ws: bool) -> bool:
         return True
     if not (has_ws and page is not None):
         return False
-    # R-6.28：不再 new_page 开 explore 判定页——采集窗 为本地提示页（login-hint）时
     # 每次 login_status 轮询都会新开小红书窗口（用户实测「不必要的窗口闪现/堆叠」）。
-    # 无现成小红书页时直接按未登录处理（id_token 权威：登录成功必种 id_token，R-6.6）；
-    # 有现成页仍注入判定，被踢/风控信号照常读取（R-6.8/R-6.22e 不降级）。
     try:
         await page.evaluate(injections.get("extract"))
         return bool(await page.evaluate("() => !!xhsIsLoggedIn()"))
@@ -437,7 +429,6 @@ def _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify) -> d
     if kicked or risk_verify:
         _LOGIN_INVALID = True
     elif logged_in:
-        # R-6.72（用户口径：未登录就直说，不要等来等去）：实测已登录 → **立即**解除
         # 失效记忆。旧实现只在注入链路成功时复位，于是「用户已在引擎窗口
         # 扫码成功、引擎 Cookie 与页面都有效」仍被判未登录，只能重启 app 才恢复——
         # 表现为「扫了码左边还在等、点开始采集一直被拦」。
@@ -503,7 +494,6 @@ async def login_status():
                 "引擎 CDP 假死，已保持待恢复；下次操作将尝试恢复，无法恢复则强制重建"
             )
         result = _build_login_status_result(has_ws, page_logged_in, kicked, risk_verify)
-        # R-6.72（用户口径「没登录就直接返回未登录」）：页面停在登录页 = 尚未登录、
         # 等用户扫码，不是被平台踢出。对外状态统一成 not_logged_in，避免前端把
         # 「还没扫码」显示成「账号被踢」，让用户误以为号废了。
         if kicked and not risk_verify and await _engine_on_login_page(eng):
@@ -515,21 +505,16 @@ async def login_status():
         return _login_status_unknown(f"引擎判定失败: {str(e)[:80]}")
 
 
-# ============ 采集调试窗登录提示页（R-6.28 / R-6.50）============
 # 未登录时 采集窗（采集/调试窗口）不再显示小红书登录墙，改为本提示页：
 # 与 ForceLogin 弹框同一视觉语言（品牌红 #ff2442、Phosphor sign-in 图标、
-# 圆角 16、卡片式、禁 emoji）。R-6.50：支持已登录态——已登录显示「已登录·开始采集」，
 # 点按钮直接进入采集页 explore；未登录保持「去登录」引导。登录成功后右窗由 keeper
 # 保持 explore/login-hint（不再导航 APP 首页，避免登录后右窗出现 APP 主界面回归）。
 
 
 
-# ================= 真实登录页方案（R-6.5）=================
 # 用户拍板：登录交互改为「壳窗口内打开真实小红书登录页」（原生扫码/手机号+获取验证码），
-# 登录会话闭环（R-6.87 起不再搬运 Cookie）：Cookie 由浏览器写在各账号 profile 里，
 # 壳窗/采集窗/引擎共用同一个 CFT 实例与 profile，登录态天然共享。
 # 链路：前端引导弹窗「前往登录」→ login_begin 置 pending → launcher 守卫导航登录页
-#       （R-6.48q：evt=asyncio.Event 事件驱动唤醒，主循环零轮询）→ 守卫轮询
 #       get_cookies 出现 web_session → POST login_ok（仅通知）→ 真实判定登录态 → 回 APP 前端。
 # evt 由 launcher 启动守卫前注入（同进程同 loop）；无壳/测试直跑 evt=None，守卫退化低频轮询。
 _LOGIN_GATE: dict = {"pending": False, "force": False, "evt": None}
@@ -554,12 +539,10 @@ async def login_begin(req: LoginBeginReq | None = None):
     force = bool(req and req.force)
     _LOGIN_GATE["pending"] = True
     _LOGIN_GATE["force"] = force
-    evt = _LOGIN_GATE.get("evt")  # R-6.48q：事件驱动唤醒守卫（同进程同 loop，零轮询）
+    evt = _LOGIN_GATE.get("evt")
     if evt is not None:
         evt.set()
-    # R-6.53z8d：登录落点改为右侧调试窗——这里**不再收起**它。
     # 右窗现在兼任登录页容器，收起它等于把登录入口关掉；守卫导航前会按需新开。
-    # 旧语义（R-6.22g「触发登录即收起右窗、登录页放壳窗」）已整体退役。
     return {"ok": True, "already_logged_in": False, "force": force}
 
 
@@ -587,7 +570,7 @@ async def login_cancel():
     """取消待处理登录请求（主动重登用户点「✕」回 APP 时由守卫调用；强制登录无取消路径）。"""
     _LOGIN_GATE["pending"] = False
     _LOGIN_GATE["force"] = False
-    evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
+    evt = _LOGIN_GATE.get("evt")
     if evt is not None:
         evt.clear()
     return {"ok": True}
@@ -604,7 +587,7 @@ def _mark_login_ok() -> None:
     _LOGIN_INVALID = False
     _LOGIN_GATE["pending"] = False
     _LOGIN_GATE["force"] = False
-    evt = _LOGIN_GATE.get("evt")  # R-6.48q：清除待处理事件（守卫已 clear 消费，双保险）
+    evt = _LOGIN_GATE.get("evt")
     if evt is not None:
         evt.clear()
 
@@ -702,7 +685,6 @@ class SearchReq(BaseModel):
     distance: str = ""
     # 快速档：同页连续导航补全（去拟人等待），默认关（拟人串行，安全优先）
     fast: bool = False
-    # R-6.47 全局请求间隔（ms）：真实生效于采集补全节奏（set_rhythm）。
     # 安全范围 1000–10000：下限 1s 尊重「勿再调快」拍板，上限 10s 防呆；默认 1000=(1.0,1.8) 与历史一致。
     interval: int = Field(1000, ge=1000, le=10000)
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
@@ -745,17 +727,14 @@ async def _real_login_probe() -> dict:
 
     eng = await engine_pool.pool.get("default")
     mem = await eng.read_cookies()
-    # R-6.7 口径对齐：id_token 为真实登录权威标志（与 login_status 的
     # _engine_login_state 同判定），存在即放行——不依赖页面渲染（headless
     # 偶发空白 → xhsIsLoggedIn 假阴性坑，登录态明明有效却被拦）。
     if any(c.get("name") == "id_token" for c in mem):
-        # R-6.72：这里禁止读页面正文。_engine_login_state 会扫 inner_text("body")，
         # explore 瀑布流页上万节点，一次 >3s——把「点开始采集」本身变成新的墙
         # （实测 collect_start 直接返回「登录校验超时」）。id_token 是登录权威标志，
         # 只再读一个最轻的 URL 信号就够；真被踢/风控由采集撞墙兜底
         # （BrowserLoginRequiredError → 前端提示重新登录）。
         if await _engine_on_login_page(eng):
-            # R-6.72：页面停在登录页 = 尚未登录（等用户扫码），不是被平台踢出。
             # 仍然拦住采集（页面在登录页确实采不到），但文案必须如实。
             return {
                 "ok": False, "code": "not_logged_in",
@@ -763,7 +742,6 @@ async def _real_login_probe() -> dict:
             }
         return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（id_token）"}
     if any(c.get("name") == "web_session" for c in mem):
-        # R-6.87：不再把 Cookie 搬去无头浏览器/临时 context 校验（同 context 自导自演）。
         # 有 web_session 且页面不在登录页即视为会话可用；真失效由采集撞墙兜底。
         if not await _engine_on_login_page(eng):
             return {"ok": True, "code": "ok", "note": "引擎独立 profile 真实登录有效（web_session）"}
@@ -882,7 +860,6 @@ import uuid
 _COLLECT_TASKS: dict = {}
 
 
-# R-6.53z8c：全局事件总线——所有状态变化「边沿触发」推给前端，取代轮询。
 # 只表达变化，不做周期采样；SSE 的 30s ping 属传输层保活，不承载业务状态。
 _EVENT_SUBS: list = []
 _EVENT_QUEUE_MAX = 200
@@ -900,7 +877,6 @@ def _state_snapshot(state: dict) -> dict:
         "keyword": state.get("keyword", ""),
         "note": state.get("note", ""),
         "need_login": state.get("status") == "ended_need_login",
-        # R-6.81：未生效的筛选项（含「位置距离」组），前端渲染提示条
         "filter_warnings": state.get("filter_warnings", []),
     }
 
@@ -921,7 +897,6 @@ def emit_collect(state: dict) -> None:
 
 def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default") -> bool:
     """单条笔记评分 + 落库（带账号维度）。返回是否成功。"""
-    # R-6.53x：提取不完整/抢救中断的行无 feed_id 一律不入库——脏行会导致
     # apiNotes 图片名生成 500，前端收尾拉列表失败误判任务结束复位按钮
     # （「没点停止按钮却变开始采集，调试窗口还在采集」的状态错位）。
     if not n.get("feed_id"):
@@ -1119,7 +1094,6 @@ def _finalize_stopped(state: dict, req, account_id: str) -> None:
     """
     abort_note = state.get("abort_note")
     if abort_note:
-        # R-6.72：用户关掉采集窗这类「外部原因中断」有自己的文案，不能被覆盖成
         # 「已停止：采集到 N 条」——否则用户会以为自己点了停止。
         _finalize_aborted(state)
         return
@@ -1226,7 +1200,6 @@ def _collect_finalize_empty(state: dict, res: dict) -> None:
         state["status"] = "stopped"
         state["note"] = "已停止（未采到结果）"
     else:
-        # R-6.53u：0 条=功能未完成（用户口径）。明确提示失败而非模糊的「平台仅加载 0 条」
         # ——连续搜索限流/搜索页空壳时出现，用户据此稍后重试。
         state["status"] = "done"
         state["note"] = "未采集到数据（小红书限流或页面未加载出内容），请稍后重试"
@@ -1254,13 +1227,11 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
         state["status"] = "done"
         state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
     else:
-        # 候选非空但全部被 _rank_and_insert 拒绝（无 feed_id 的脏行，R-6.53x 起不入库）
         state["status"] = "done"
         state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
     state["phase"] = "done"
 
 
-# R-6.53z8p（用户口径）：撞到登录墙即结束本次采集，不再挂起等登录、不再续采。
 # 「需要登录」与「采满」一样是终止条件；要接着采就重新发起一次采集。
 
 
@@ -1289,7 +1260,6 @@ def _finalize_need_login(state: dict, account_id: str, err: Exception) -> None:
     """
     abort_note = state.get("abort_note")
     if abort_note:
-        # R-6.76：用户关掉采集窗后，读页/导航必然抛「Target closed」，底层会把它
         # 当成登录墙报上来。用户口径是「关了就中断、要采就重来」，提示必须是
         # 「窗口已关闭」——不能被「需要登录」覆盖，否则会误导用户去重新扫码。
         _finalize_aborted(state, emit=True)
@@ -1341,7 +1311,6 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
     try:
         res = await search_via_browser(
             req.keyword, req.limit,
-            # R-6.53v：回调携带 items 引用——任务级取消时已采数据从此处抢救
             on_progress=_on_collect_progress(state),
             should_stop=lambda: state["stop_event"],
             filters={
@@ -1351,7 +1320,6 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
             account_id=account_id,
             keep_page=True,
         )
-        # R-6.81：没生效的筛选（「位置距离」组依赖浏览器定位）要带到进度快照里，
         # 前端据此在 APP 窗口提示用户，而不是静默出一份没过滤的结果。
         if res.get("filter_warnings"):
             state["filter_warnings"] = res["filter_warnings"]
@@ -1362,7 +1330,6 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
         await _collect_enrich_candidates(state, ctx, candidates)
         return res
     finally:
-        # R-6.56：采评论已改为凭入库 token 独立新开详情页，不再复用这里的搜索页，
         # 采集一结束就释放，避免引擎常驻孤儿页。
         await browser_client.release_search_page(account_id)
 
@@ -1403,7 +1370,6 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
             item = await get_feed_detail(item, ctx["account_id"])
             item = await get_user_profile(item, ctx["cache"], ctx["account_id"])
     except BrowserLoginRequiredError:
-        # R-6.53z8c：登录墙必须冒泡——吞掉会让后续条目用残缺粗数据入库，
         # 用户看到「采到了但内容不全」，比直接暂停更糟。
         raise
     except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
@@ -1429,7 +1395,7 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
     """
     con = None
     try:
-        set_rhythm(req.interval)  # R-6.47：请求间隔真实生效（会话级节奏，默认 1000ms=1–1.8s）
+        set_rhythm(req.interval)
         con = _db()  # collect_start 已 _reset_collection_data 清空旧批次，此处只追加
         ctx = {
             "req": req, "account_id": account_id, "con": con, "cache": {},
@@ -1442,7 +1408,6 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
         state["phase"] = "save"
         _collect_finalize(state, req, res)
     except asyncio.CancelledError:
-        # R-6.53v 框架级停止：collect_stop → task.cancel() 中断所有进行中 await（含 CDP 调用）
         _finalize_stopped(state, req, account_id)
         raise
     except Exception as e:  # noqa: BLE001 任务不因单点异常悬挂在 running
@@ -1453,7 +1418,7 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
     finally:
         if con is not None:
             con.close()  # _db() 每次新建连接，结束即释放
-        state["ended_ts"] = time.time()  # R-6.76b：供关窗回调认领「刚被关窗带崩」的任务
+        state["ended_ts"] = time.time()
         _mark_collect_done(account_id)  # 结束即记录，供节流闸使用
         emit_collect(state)  # 收尾一次推送：done/stopped/error 统一从事件到前端
 
@@ -1479,9 +1444,7 @@ async def collect_start(req: SearchReq):
     account_id = (req.account_id or "default").strip() or "default"
     _check_license_or_raise("collect")  # 授权薄层：collect 功能闸门（free 恒放行）
     await _require_login(account_id)
-    # R-6.25（z8p 调整）：清库已拆成独立的 /api/collect_clear，由前端在开始前显式调用。
     # collect_start 自身不再清空——避免脚本或其他入口调它时被动删数据。
-    # R-6.22h 用户拍板「不要限制用户」：移除同关键词 60s 防重启动限制（原 dedup 在 R-6.15
     # 被保留为「业务去重」，用户实操反馈同关键词刚结束立即重启被 409 拦截仍属限制）。
     # 同词/换词均允许立即重启；dedup_key 仅留作任务审计展示。
     await _stop_running_collect_tasks()
@@ -1729,7 +1692,6 @@ async def status_now():
     running = [(tid, st) for tid, st in _COLLECT_TASKS.items() if st.get("status") == "running"]
     if running:
         tid, st = running[0]
-        # R-6.53z 流式流水线：采集=逐条提取+补全+评分+入库（phase=search/enrich 均在采集中），
         # 动作统一「正在采集」，进度由 note（已采集 N 条）实时播报。
         action = "正在采集"
         return {
@@ -1738,7 +1700,6 @@ async def status_now():
             "collected": st.get("collected", 0),
             "limit": st.get("limit", 0),
             "keyword": st.get("keyword", ""),
-            # R-6.53z5：把 task_id 交给前端——页面重载（登录往返回 APP）后前端据此
             # 接回正在跑的轮询，按钮恢复「停止」，不再出现「后端在采、按钮却说开始采集」
             "task_id": tid,
             "collecting": True,
@@ -1751,7 +1712,6 @@ def collect_progress(task_id: str = ""):
     st = _COLLECT_TASKS.get(task_id)
     if not st:
         return {"ok": False, "note": "任务不存在或已过期"}
-    # R-6.53z8q：与事件流共用同一份快照——手工拼字段会漏 need_login，
     # SSE 断线重连后补拉进度就识别不出「需要登录」。
     snap = _state_snapshot(st)
     snap.update({"ok": True, "account_id": st.get("account_id", "default")})
@@ -1771,7 +1731,6 @@ async def collect_stop(req: CollectStopReq):
     st["stop_event"] = True  # 轮询防线（search/_enrich 既有检查点兜底，双保险）
     task = st.get("task")
     if task and not task.done():
-        # R-6.53v 框架级停止：取消整个采集任务——中断所有进行中 await
         # （CDP 导航/提取/滚动/补全等），worker 捕获 CancelledError 收尾已采数据。
         # 相比逐点插 should_stop 检查（旧式散点补丁），任务级取消一处生效、无遗漏窗口。
         task.cancel()
@@ -2770,12 +2729,10 @@ def clear_llm_config():
     return llm_service.clear_config()
 
 
-# ====== R-6.18 壳窗口双 Tab：设置项读写（白名单，仅前端设置项） ======
 _APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 采集窗 显示
 
 
 class AppConfigReq(BaseModel):
-    # R-6.41g：extra='forbid'——未知键在校验层直接 422（pydantic v2 默认静默丢弃）。
     # app_config_set 内 unknown 白名单分支为防御纵深，extra=forbid 后一般不可达，保留不删。
     model_config = ConfigDict(extra="forbid")
 
@@ -2818,9 +2775,7 @@ async def _ensure_collect_skeleton(eng) -> None:
             )
             from src import shell_window  # noqa: PLC0415
 
-            # R-6.84e：不再挂「采集调试窗口」标题守护（与账号运营窗口守护互相覆盖，
             # 标题会变成「账号名 · 运营窗口」）；采集窗标识改由标签组名与 URL 承担。
-            # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
             _cb = engine_pool.window_bounds("collect")
             await shell_window._calibrate_window(
                 page, _cb["left"], _cb["top"], _cb["width"], _cb["height"],

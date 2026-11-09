@@ -29,7 +29,6 @@ from src.urls import build_url  # noqa: E402
 REQUEST_INTERVAL = (1.0, 1.8)  # 真人浏览节奏：请求间随机 1-1.8s（用户拍板合理像人档，勿再调快）
 SESSION_MAX_NOTES = 20        # 单次采集会话最多 20 条（真人一次浏览的量级，勿一次拉太多）
 
-# R-6.47 请求间隔启用：会话级节奏由 server 按「全局请求间隔」设置，默认与 REQUEST_INTERVAL 一致
 _RHYTHM = REQUEST_INTERVAL
 
 
@@ -141,7 +140,7 @@ async def _run_browser(cmd: str, arg: str, tag: str, arg2: str = "", account_id:
             return (await browser_client.user(arg, account_id=account_id)) or None
         return None
     except browser_client.BrowserLoginRequiredError:
-        raise  # R-6.53z8q：登录墙必须上抛，否则被吞成「详情补全失败」，空跑完还报成功
+        raise
     except Exception:  # noqa: BLE001
         return None
 

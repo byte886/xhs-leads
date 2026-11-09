@@ -10,7 +10,6 @@ const st = ref<{ action: string; detail: string; collecting: boolean; phase: str
 // 前端点了「开始采集」、但后端还没推第一条进度（要等抓完第一页卡片，十几秒）时，
 // 状态条先按本地状态显示「正在启动」——否则这十几秒一直挂着「空闲」，像没点上。
 const booting = computed(() => appState.collecting && !st.value.collecting)
-// R-6.53z8c：状态条改为事件驱动——后端在状态变化时推一次，不再每 2 秒查询。
 function apply(d: Record<string, any>) {
   const busy = d.status === 'running' || d.status === 'resuming'
   st.value = busy

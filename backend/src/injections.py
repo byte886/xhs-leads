@@ -115,14 +115,12 @@ _register(
          "非页面级，不走 inject_once；无 remove 对应（随 context 生命周期）。",
 )
 
-# ---- 3a2. 账号窗口标题守护（R-6.69b）：文案含账号身份，由调用方拼好传入 ----
 # 事件级守护：拦截 document.title 赋值，零 DOM 观察、零轮询。T 是占位符——
 # 第三类账号每个窗口要显示“这是哪个号”，昵称/小红书号是运行时才知道的，
 # 无法在源码里写死。
 _ACCOUNT_TITLE_JS = """(() => {
     const T = '__LABEL__';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.72：旧做法观察整棵 document 在瀑布流页面上
     // 是主线程 CPU 杀手（每个 DOM 微变一次回调）。改为拦截 title 赋值，零观察。
     try {
         const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
@@ -147,12 +145,10 @@ _register(
 )
 
 # ---- 3b. 壳窗口标题守护（page 级 init script）：主窗口无论 APP 页还是小红书登录页，
-# 窗口标题恒定品牌名（用户 R-6.48h 拍板：主窗口标题统一一致，不随页面状态变化）。
 # 自执行 IIFE（原因同上：add_init_script 对字符串按源码 eval）。----
 _SHELL_TITLE_JS = """(() => {
     const T = 'XHS Leads · 小红书获客助手';
     const setT = () => { if (document.title !== T) document.title = T; };
-    // R-6.72：整棵 document 的 MutationObserver 是主线程 CPU
     // 杀手，壳窗虽轻也统一改成零观察的 title 赋值拦截。
     try {
         const d = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
@@ -238,7 +234,6 @@ _register(
          "JS 内部 window.__xhs_leads_active_close 防重。替换串含动态 base，不走 inject_once。",
 )
 
-# ---- 7. 首页模式：点开右上角「登录」面板（R-6.10） ----
 _OPEN_LOGIN_PANEL_JS = (
     "(function(){"
     "var btns=[].slice.call(document.querySelectorAll('a,div,span,button'));"
@@ -254,22 +249,16 @@ _register(
          "不走 inject_once（动作语义非幂等装饰）。",
 )
 
-# ---- 8. 强制登录锁（原 login_guard 局部 force_login_js，R-6.6→R-6.10） ----
-# R-6.48k：改 add_init_script 注入（document 创建即执行）＋ document 锚点
 # MutationObserver 事件驱动；remove 守卫每 10s 轮询补注（用户拍板：循环不可取）。
 # observe 锚点必须 document：add_init_script 极早期 document.body/head 为 null，
-# observe(null) 抛 TypeError 中断 IIFE（R-6.48i 标题同款坑）。
-# R-6.48m：登录页结构选择器集中管理——小红书改类名/结构只改这里，JS 生成自动插值
 # 防漂移；拦截判定由 decide_block 纯函数 + pytest 兜底（test_injections_decision.py）。
 LOGIN_PANEL_SELECTORS = (".container", ".reds-modal", ".login-container")
 LOGIN_MASK_SELECTOR = ".reds-mask"
-# R-6.78：登录界面「是否在场」判据。不含 .container——它太通用，浏览页容器也命中，
 # 用它会误判"登录界面在场"；只认登录弹窗/登录面板专属类名。
 LOGIN_UI_SELECTORS = (".reds-modal", ".login-container")
-LOGIN_EXTRA_HIDE_SELECTORS = ".out.right"  # R-6.48p：登录页杂项（活动推广区）净化专用
+LOGIN_EXTRA_HIDE_SELECTORS = ".out.right"
 LOGIN_CLICK_EVENTS = ("pointerdown", "mousedown", "mouseup", "click")
 LOGIN_ESC_EVENTS = ("keydown", "keyup")
-# 关闭按钮选择器（R-6.66 集中常量化）：full-page /login 的 aria-label 关闭、
 # 历史 .close-btn/.close-icon，以及 explore 浏览页 login-modal 的 .close
 # （实测父节点 class="icon-btn-wrapper button close"，旧选择器漏覆盖导致点 × 关闭）。
 LOGIN_CLOSE_SELECTORS = (
@@ -301,7 +290,6 @@ _FORCE_LOGIN_JS = (
     "(function(){"
     "if(window.__xhs_leads_lock_ok)return;"
     # 域名守卫：context.add_init_script 会作用于同 context 所有页面（含 127.0.0.1 壳窗前端），
-    # 非小红书页面直接退出，避免拦截壳窗自身点击（R-6.68 回归修复）。
     "if(!/(^|\\.)xiaohongshu\\.com$/.test(location.hostname))return;"
     "window.__xhs_leads_lock_ok=true;"
     "function ensureStyle(){"
@@ -353,8 +341,6 @@ _register(
          "document 锚点 MutationObserver 事件驱动，无轮询补注（R-6.48k）。",
 )
 
-# ---- 9. 登录页窗口适配（原 login_guard 局部 login_fit_js，R-6.26c） ----
-# R-6.48k：改 add_init_script 注入＋document 锚点事件驱动；remove setInterval 与
 # 守卫循环补注。.container 恒居中独立执行（此前排在 .reds-modal/.login-container
 # 判空 return 之后永不执行——实测弹窗 x=960 视口外的结构根因）。
 _LOGIN_FIT_JS = (
@@ -397,7 +383,6 @@ _register(
          "MutationObserver 事件驱动，无 setInterval、无守卫轮询补注（R-6.48k）。",
 )
 
-# ---- 9b. 登录页净化（R-6.48p：用户实测登录页背后露出活动推广区与按钮） ----
 # 小红书登录页整页模式下，登录面板之外存在 .container.out.right 等推广/活动杂项，
 # 页面自带 .reds-mask（z-index:-1 透明）盖不住 → 用户看到「活动和一个按钮」。
 # 净化：全屏不透明白底遮罩（z=2147483645）盖住面板背后一切 + 登录面板置顶

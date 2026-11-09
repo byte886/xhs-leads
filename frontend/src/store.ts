@@ -14,7 +14,6 @@ export const DEFAULT_PARAMS: SearchParams = {
   fast: false
 }
 
-// R-6.44c：启动同步恢复上次采集条件（坏 JSON/无历史静默降级默认）
 function loadStoredParams(): SearchParams {
   try {
     const raw = localStorage.getItem(CONDITIONS_KEY)
@@ -47,7 +46,6 @@ export const appState = reactive({
   // 采集配置（启动时从 localStorage 恢复用户上次条件）
   params: loadStoredParams() as SearchParams,
   collecting: false,
-  // R-6.53z8p：本次采集因「需要登录」结束（任务已终止，要接着采就重新发起）
   endedNeedLogin: false,
   // 搜索结果
   notes: [] as Note[],
@@ -58,7 +56,6 @@ export const appState = reactive({
   elapsed: 0,
   // 勾选
   selected: {} as Record<string, boolean>,
-  // 登录（R-6.8 增加 kicked：平台已踢/登录超限 → 登录态失效）
   login: { logged_in: false, nickname: '', kicked: false },
   // 登录态刷新信号（登录成功后 +1，采集面板据此重新拉登录状态）
   authRefreshTick: 0,
@@ -69,9 +66,7 @@ export const appState = reactive({
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-// R-6.44c：条件变更即持久化（只存 SearchParams，不存结果数据）
 watch(() => appState.params, (p) => saveParams(p), { deep: true })
-// R-6.43a：error 类红色且不自动消失（需用户感知失败）；ok 类保持 2.4s 自动消失
 export function toast(msg: string, type: 'ok' | 'error' = 'ok') {
   appState.toastMsg = msg
   appState.toastType = type

@@ -33,7 +33,6 @@ DATA_DIR = pathlib.Path(_APP_DATA).expanduser() if _APP_DATA else ROOT / "data"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 CONFIG_FILE = DATA_DIR / "config.json"
 
-# 多账户统一根目录（R-6.59）：<数据目录>/accounts，注册表存相对路径。
 # 跨平台由 DATA_DIR 决定（macOS 打包态在 Application Support，Windows 打包态在 %APPDATA%），
 # 搬数据目录或换平台都不用改注册表。
 ACCOUNTS_DIR_NAME = "accounts"
@@ -95,11 +94,11 @@ _DEFAULTS = {
     "engine_port": 9223,          # 引擎调试端口
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
-    "headless": False,            # R-6.16 路线 A：壳=CFT 引擎窗口（CDP 可控），常态有头；engine_window 可显式切
-    "collect_tab_visible": False, # R-6.18 壳窗口双 Tab：采集过程是否在壳窗口 采集窗 显示。
+    "headless": False,
+    "collect_tab_visible": False,
                                   #   True=采集 tab 前置可见（调试/演示）；False=采集后台完成、
                                   #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
-    "collect_group_enabled": True,  # R-6.84 采集窗标签分组：把采集调试窗的标签页
+    "collect_group_enabled": True,
                                     #   收进原生标签组「采集窗口」（名字+颜色由内置扩展设）。
                                     #   扩展目录缺失时自动跳过，行为与关闭一致。
 }
@@ -165,7 +164,6 @@ def engine_port() -> int:
 
 
 # ---------------------------------------------------------------------------
-# R-6.57 多账号调试端口分配
 #
 # 实测（2026-11-08，两个 persistent context 同带 --remote-debugging-port=9223）：
 # 第二个实例启动成功、页面正常，但 9223 上只有第一个账号的 target——Chromium
@@ -336,7 +334,6 @@ def get_account(account_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # 采集定位（同城 / 附近筛选）
 # ---------------------------------------------------------------------------
-# R-6.81（真机实测）：平台「同城 / 附近」筛选依赖 navigator.geolocation；CFT 是无
 # Google API key 的构建，官方文档写明 geolocation features 不会工作 —— 即使权限
 # 全开也只会等到 code:3（Timeout expired），平台随即静默退回「不限」。所以不能
 # 指望系统定位，必须在启动时注入固定坐标（Playwright geolocation + permissions）。

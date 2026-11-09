@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appState, clearSelected, coverProxy, refreshSysStatus, selectedCount, selectedNotes, setStage, setTab, toast, toggleSelect } from './store'
 
-// R-6.36d：store 纯逻辑守护（选择集 / 图片代理 / stage / toast 计时）。
 describe('coverProxy 图片防盗链代理', () => {
   it('空值返回空串', () => {
     expect(coverProxy(null)).toBe('')

@@ -36,7 +36,6 @@ function coverOf(note: Note): string {
 const broken = ref(new Set<string>())
 function onImgError(note: Note) {
   broken.value.add(note.feed_id)
-  // R-6.22n：CDN 封面瞬时失败不永久占位——4s 后自动重试（封面走远程
   // cover_url 直连，刷新/慢加载可能瞬时失败；失败期间显示占位符）
   setTimeout(() => {
     if (broken.value.delete(note.feed_id)) {

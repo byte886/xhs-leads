@@ -28,7 +28,6 @@ from src import config, injections, logger as xlog, risk, window_layout
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src.engine_types import builtin_cft_candidates, builtin_extension_dir
 
-# 主屏分辨率缓存（R-6.22：双窗口左右分屏布局用）。probe_screen_size() 首次探测后缓存。
 _SCREEN: tuple[int, int] | None = None
 
 def probe_screen_size() -> tuple[int, int]:
@@ -68,7 +67,6 @@ MIN_WIN_H = 480
 # 出现几百毫秒，被用户看成「左边窗口又打开了小红书 / 两个 APP 窗叠在一起」。
 OFFSCREEN_LEFT = -4000
 
-# 采集窗页的 URL 认领依据（R-6.84e）：本实例里落在该域的页就是采集窗页；
 # 内置扩展也按同一判据归组。URL 由导航决定、title 守护改不了，比标题可靠。
 XHS_HOST = "xiaohongshu.com"
 
@@ -138,7 +136,6 @@ def account_window_geometry(account_id: str) -> tuple[int, int, int, int] | None
     top = max(28, sh - win_h - 60 - k * step)
     return win_w, win_h, left, top
 
-# R-6.19：采集窗（采集骨架）创建临界区锁——keeper 兜底轮询与 server 开关联动
 # 并发创建会双开 explore 骨架；共享同一锁串行化「检查+创建」。
 COLLECT_WIN_GUARD_LOCK = asyncio.Lock()
 
@@ -155,7 +152,6 @@ _HEADLESS_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
 )
 
-# 防自动化检测 stealth 注入脚本已收敛到 injections 注册表（R-6.30a）：
 # injections.get("stealth")——引擎 context add_init_script 启动时注入一次。
 
 
@@ -305,14 +301,13 @@ class AccountEngine:
         acc = config.get_account(account_id) or config.add_account(account_id)
         self.user_data_dir = config.resolve_account_dir(acc.get("user_data_dir", ""))
         self.role = acc.get("role", "mixed")
-        # R-6.57：每账号独占 CDP 端口（default=9223，其余 9224 起）。
         # 共用端口时 Chromium 绑定失败静默跳过 → 测试连到的永远是先起的账号。
         self.debug_port = config.account_debug_port(account_id)
         self._context = None
         self._lock = asyncio.Lock()
         self._task_page = None  # 该账号唯一任务 tab（复用，减少反复开关 tab）
-        self._rebuild_ts = 0.0  # R-6.53b：最近一次引擎重建时间戳（0=从未重建）
-        self._fake_dead = False  # R-6.53l：CDP 假死标记（保持级：标记不立即释放）
+        self._rebuild_ts = 0.0
+        self._fake_dead = False
 
     # ---------------- 生命周期 ----------------
 
@@ -461,7 +456,7 @@ class AccountEngine:
             pass
         self._context = None
         self._rebuild_ts = time.monotonic()
-        self._kill_stale_processes()  # R-6.53k：断开重建前清残留
+        self._kill_stale_processes()
         log.warning("账号 %s 引擎连接断开，自动重建", self.account_id)
         return False
 
@@ -486,7 +481,6 @@ class AccountEngine:
                 return self._context
             if await self._context_reuse_if_alive():
                 return self._context
-            # R-6.22j（用户拍板）：无「启动失败 20s 冷却」——失败直接抛错，
             # 由上层（任务 error / 用户重试）处置，避免误拦截与空白窗口观感。
             pw = await _get_pw()
             return await self._context_start(pw)
@@ -511,7 +505,6 @@ class AccountEngine:
             channel="chrome",
             headless=headless,
             args=[
-                # R-6.53j：移除 --no-first-run——Chromium 150+ 带该 flag 有
                 # CHECK/SIGTRAP 崩溃（Debian #1141618）；CFT 无 first-run 向导，移除无副作用。
                 "--no-default-browser-check",
                 "--disable-blink-features=AutomationControlled",
@@ -587,7 +580,6 @@ class AccountEngine:
         log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
         if headless:
             launch_kwargs["user_agent"] = _HEADLESS_UA
-        # R-6.53j：Playwright driver 默认 args 也含 --no-first-run，须显式忽略
         launch_kwargs["ignore_default_args"] = ["--no-first-run"]
 
     def _launch_apply_extension(self, launch_kwargs: dict) -> None:
@@ -626,7 +618,6 @@ class AccountEngine:
             log.warning("force_login 注入失败（不影响引擎启动）: %s", fe)
         # 窗口标题带账号身份：刚开窗时还没有任务页，初始页就是用户看到的那个窗口，
         # 不在这里注入的话，标题会一直是平台的「小红书 - 你的生活兴趣社区」。
-        # default 跳过——它承载 APP 壳窗，标题由 shell_title 恒定守护（用户 R-6.48h 拍板）。
         if self.account_id != "default":
             for pg in list(self._context.pages)[:1]:
                 await self._apply_account_title(pg)
@@ -635,10 +626,8 @@ class AccountEngine:
     async def _launch_context(self, pw):
         """构建并 launch_persistent_context（含 Cookie 回注/stealth），只做编排。"""
         os.makedirs(self.user_data_dir, exist_ok=True)
-        # R-6.53k：启动前清该 profile 残留进程 —— 残留实例占 profile 锁导致
         # Failed to launch，且多实例页面堆积耗内存。
         self._kill_stale_processes()
-        # R-6.48s：启动前清会话恢复文件，避免「启动先闪现小红书页再导航 APP」。
         _clear_session_restore(self.user_data_dir)
         headless = config.account_headless(self.account_id)
         launch_kwargs = self._launch_kwargs_base(headless, self.debug_port)
@@ -647,7 +636,6 @@ class AccountEngine:
         self._launch_apply_chrome_log(launch_kwargs)
         self._launch_apply_binary(launch_kwargs, headless)
         self._launch_apply_geolocation(launch_kwargs)
-        # R-6.84：采集窗标签分组（内置扩展，默认开）与 R-6.70 的按账号桥接开关并集。
         # 两者都只是追加 --load-extension；扩展目录缺失时 _launch_apply_extension 跳过。
         if config.extension_enabled(self.account_id) or config.collect_group_enabled():
             self._launch_apply_extension(launch_kwargs)
@@ -846,7 +834,6 @@ class AccountEngine:
                 pass
             self._task_page = None
         ctx = await self.context()
-        # R-6.84b 采集窗单标签：keeper 已建好采集窗时直接复用它当任务页，不再另开 tab。
         # 同一窗口里多一个组外标签会破坏「采集窗口」组的完整性，也让窗口标题在
         # 「采集调试窗口」与「运营窗口」之间来回跳。复用失败（未登记/已关/跨账号）走原路径。
         reused = await self._reusable_collect_page(ctx)
@@ -854,14 +841,12 @@ class AccountEngine:
             self._task_page = reused
             log.info("账号 %s 复用采集窗页作为任务页（单标签）", self.account_id)
             return reused
-        # R-6.22g（用户约定）：未登录 / 风控需验证时**不创建独立采集调试窗口**——
         # 右窗只在登录有效时用于采集调试；未登录时登录引导统一由左 APP ForceLogin
         # 承接（避免右窗直接弹出小红书平台登录层造成困惑）。任务页退回引擎内新页
         # （无独立调试窗），采集照常失败并触发前端登录引导。
         blocked = await self._debug_window_blocked(ctx)
         if blocked:
             log.info("账号 %s 未登录/风控需验证——跳过独立采集调试窗口，任务页走引擎内新页", self.account_id)
-            # R-6.22j 修复（用户实测反馈「点采集后被引入空白页/窗口消失」）：
             # 原实现把 ctx.pages[0]（壳窗 APP 窗口）整体 minimized——本意是收起
             # 调试窗，但壳窗恰是承载 ForceLogin/登录引导的窗口，被最小化后用户
             # 看不到登录引导，只剩最小化窗口/空白页，观感即「乱」。
@@ -871,15 +856,12 @@ class AccountEngine:
             await self._apply_account_title(p)
             self._task_page = p
             return p
-        # R-6.53r：采集工作页改普通 tab（新 tab 前台激活、渲染完整、CDP 会话稳定）。
         # 转交窗（--app Popen 单实例路由）在 CFT 158 上实测两问题（Nov 5 取证）：
         # ① 后台化渲染节流——wait_cards n=0（同 URL probe 为 22 卡片）；
         # ② CDP 会话不稳——wait_cards 第二轮 evaluate 挂起触发假死强杀。
         # 独立采集调试窗（keeper 采集窗）保留为展示窗，采集执行页与之解耦。
         p = await ctx.new_page()
         await self._apply_account_title(p)
-        # R-6.22：退化路径新窗口校准为右半屏（等宽并排不重叠）
-        # R-6.57：多账号时不能用统一的右半屏——否则第二个账号的窗口会被摆回
         # default 采集窗的位置（实测启动后定位成功又被这里的 960,25 覆盖）。
         try:
             acc_geo = account_window_geometry(self.account_id)
@@ -958,7 +940,6 @@ class AccountEngine:
         try:
             from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
 
-            # R-6.52 修复：不再对壳窗（ctx.pages[0]）执行 setWindowBounds。
             # 原实现把壳窗窗口 bounds 设到右半屏(l2)，随后 open_collect_window 又把
             # 采集窗弹到右半——两窗重叠，开始采集瞬间采集窗(小红书页)覆盖壳窗，
             # 用户观感「主窗瞬间跳小红书再切回」（主窗 URL 全程未变，纯窗口覆盖）。

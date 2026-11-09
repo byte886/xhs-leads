@@ -8,7 +8,6 @@ import { isLoginAbnormal } from '../lib/auth'
 const emit = defineEmits<{ (e: 'collect-started'): void; (e: 'open-login'): void }>()
 
 let timer: ReturnType<typeof setInterval> | null = null
-// R-6.72（用户口径）：采集进行中每 3s 主动问一次进度。
 // 事件推送是快速路径；轮询是保底——丢事件/断线时状态不会永远停在「正在采集」。
 let progressTimer: ReturnType<typeof setInterval> | null = null
 let progressInflight = false
@@ -98,17 +97,15 @@ function buildTaskLabel(): string {
 
 // 登录 UI 改版（用户拍板）：采集中失败/异常（登录失效/被踢/验证码风控）→ emit open-login
 // → App 弹 APP 内部强制登录对话框（不可关闭），点「去登录」才切小红书登录页。
-// R-6.21e：统一判定取自 lib/auth（交互异常驱动，无后台轮询）。
 
 let collectTaskId = ''
 let offCollect: (() => void) | null = null
-// R-6.53z8c：取消进度轮询——改为订阅后端 SSE（collect 事件），状态变化才推。
 
 /** R-6.53z5：进度轮询独立成函数——「用户点开始」与「页面重载后接回在跑任务」共用同一套收尾逻辑 */
 /** 采集收尾（done / stopped / error 三态共用）：按钮复位 + 拉最终列表。 */
 async function finalizeCollect(pr: any) {
   if (timer) { clearInterval(timer); timer = null }
-  stopProgressPolling()  // R-6.72：终态（完成/停止/失败/需登录）立即停进度轮询
+  stopProgressPolling()
   appState.collecting = false
   if (pr.status === 'error') {
     appState.status = '失败'
@@ -153,7 +150,6 @@ function syncFilterWarning(warnings: unknown) {
 async function handleCollectUpdate(pr: any) {
   syncFilterWarning(pr.filter_warnings)
   if (pr.status === 'ended_need_login') {
-    // R-6.53z8p：撞到登录墙 = 本次采集就此结束（已采保留）。
     // 必须让左窗知道，否则它会一直停在「正在采集」；同时弹登录引导，用户登录后可重新采集。
     appState.endedNeedLogin = true
     emit('open-login')
@@ -187,7 +183,6 @@ function armProgressPolling(taskId: string) {
   })
   // 立即同步一次当前状态（挂载/重连的初始对齐，不是轮询）
   apiCollectProgress(taskId).then(handleCollectUpdate).catch(() => { /* 后端未就绪 */ })
-  // R-6.72（用户口径）：开始采集已「立刻返回 ack」，之后每 3s 主动问一次「现在采到哪了」。
   // 事件推送仍是快速路径；轮询兜住丢事件/断线，避免按钮永远卡在「正在采集」。
   stopProgressPolling()
   progressTimer = setInterval(() => {
@@ -200,7 +195,6 @@ function armProgressPolling(taskId: string) {
   }, PROGRESS_POLL_MS)
 }
 
-// R-6.72：组件卸载时清理全部定时器与订阅，避免计时/轮询在后台空转。
 onUnmounted(() => {
   if (timer) { clearInterval(timer); timer = null }
   stopProgressPolling()
@@ -232,7 +226,6 @@ async function doCollect() {
   filterWarning.value = ''
   appState.status = '正在采集'
   appState.selected = {}
-  // R-6.53w：开始新采集先清空旧列表——采集窗口干净进入「正在采集」，
   // 不再挂着上一次的卡片（旧列表要等采集完成才刷新，期间观感像没开始）
   appState.notes = []
   appState.total = 0
@@ -265,7 +258,6 @@ onMounted(async () => {
     const lg = await apiLoginStatus()
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
   } catch { /* 后端未就绪时静默 */ }
-  // R-6.53z5：页面重载（登录往返回 APP、刷新）后 store 是空的，但后端可能仍在采集。
   // 必须把「停止」态接回来：否则按钮显示「开始采集」而任务在跑，用户一点就顶掉它。
   try {
     const sn = await apiStatusNow()
@@ -281,7 +273,6 @@ onMounted(async () => {
       armProgressPolling(sn.task_id)
     }
   } catch { /* 后端未就绪时静默 */ }
-  // R-6.23 对齐：恢复最近一次采集结果仅限"本次运行内采集过"（登录守卫导航
   // 回 APP 重载后 store 清空、列表消失的场景），由 sessionStorage 标记区分——
   // 应用重启后 sessionStorage 清空，不恢复历史搜索（保持空白输入态）。
   if (sessionStorage.getItem('xhs_stage_restore')) {

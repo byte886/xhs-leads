@@ -4,7 +4,6 @@
 // 告知当前状态 → 用户点「去登录」→ apiLoginBegin(force=true) → launcher 守卫导航小红书
 // 真实登录页（无叉）→ 登录成功回 APP 复查：已登录 → emit('done') 关闭本窗进工作台；
 // 仍未登录 → 保持强制（同一逻辑）。主动重登（设置页「重新登录」）不经过本窗。
-// R-6.26 弹框重设计：结构按 Material/Carbon 对话框规范（标题→正文→主操作→辅助行），
 // 文案按 UX Writing 规范（平静、面向解决、去技术术语——不出现 Cookie/风控/强制等词）。
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { apiLoginBegin, apiLoginStatus } from '../api'
@@ -16,9 +15,7 @@ const emit = defineEmits<{ (e: 'done'): void }>()
 
 const stateText = ref('正在检查登录状态…')
 const busy = ref(false)
-// R-6.22f：用户是否已主动点「去登录」——只有走完登录流程且复查真实有效才关窗
 const wentLogin = ref(false)
-// R-6.53z8c：登录复查改为事件驱动——后端在扫码成功时推 login 事件，不再每秒轮询。
 let offEvents: (() => void) | null = null
 
 function stopTimer() {
@@ -26,7 +23,6 @@ function stopTimer() {
 }
 
 // 打开即复查登录态（与登录成功回 APP 复查同一逻辑）：
-//   - **R-6.22f 关键规则：打开后不自动关窗**。自动关依赖 login_status 判定，而风控/
 //     页面渲染时序会让判定抖动（任务页刚导航时风控文案未渲染 → risk_verify=false +
 //     logged_in=true 假阳性 → 闪关，实测用户「登录框没弹/闪一下就回采集」）。强制登录
 //     语义 = 用户**主动**完成登录（点「去登录」→ 官方登录页 → 扫码 → 回 APP 复查真实
@@ -72,7 +68,7 @@ function startCheck() {
 async function goLogin() {
   if (busy.value) return
   busy.value = true
-  wentLogin.value = true // R-6.22f：用户主动去登录 → 复查真实有效才允许关窗
+  wentLogin.value = true
   stateText.value = '正在打开登录页…'
   try {
     const r = await apiLoginBegin(true) // 强制：登录页无叉，登录成功才回
@@ -95,8 +91,6 @@ watch(() => props.open, (v) => {
     stateText.value = '正在检查登录状态…'
     busy.value = false
     wentLogin.value = false
-    // R-6.53z8d：不再收起右窗——右窗就是登录落点（双窗口职责分离后，
-    // 收起它等于把登录入口关掉）。旧 R-6.22g 语义已退役。
     startCheck()
   } else {
     stopTimer()

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiLoginBegin, apiLoginStatus } from './api'
 
-// R-6.36d：api 层 fetch 封装守护（超时保护 / 错误 detail 提取 / POST 契约）。
 function mockFetch(impl: typeof fetch) {
   vi.stubGlobal('fetch', impl)
 }
@@ -33,7 +32,6 @@ describe('apiLoginBegin', () => {
   })
 })
 
-// R-6.36d 表驱动：全部端点 URL/方法契约守护（mock fetch，断言解包 json）。
 import * as api from './api'
 
 function okRes(body: any) {

@@ -26,7 +26,6 @@ export async function apiLoginStatus(timeoutMs = 8000): Promise<LoginStatus> {
   }
 }
 
-// R-6.5：请求打开真实登录页（壳窗口导航由 launcher 登录守卫执行，登录后 Cookie 注入引擎自动返回）
 // 登录 UI 改版：force=true 强制登录（启动未登录/被踢、采集异常被踢、APP 强制登录对话框「去登录」）
 // ——登录页无叉不可关闭；force=false 主动重登（设置页「重新登录」）——登录页带叉可关闭回 APP。
 export async function apiLoginBegin(force = false): Promise<{ ok: boolean; already_logged_in?: boolean; force?: boolean }> {
@@ -41,7 +40,6 @@ export async function apiLoginCancel(): Promise<{ ok: boolean }> {
   return j(await fetch(`${BASE}/api/auth/login_cancel`, { method: 'POST' }))
 }
 
-// R-6.22g：登录引导弹出时收起采集调试窗（右窗关闭），壳窗保留——「需要登录时右侧
 // 要么关闭要么有提示」用户约定。登录完成后再点采集，后端按登录态恢复调试窗。
 export async function apiCollapseDebugWindows(): Promise<{ ok: boolean; closed?: number }> {
   return j(await fetch(`${BASE}/api/auth/collapse_debug_windows`, { method: 'POST' }))
@@ -193,7 +191,6 @@ export async function apiMirrorClose(account: string): Promise<{ ok: boolean; no
   return j(await fetch(`${BASE}/api/mirror/close?account_id=${encodeURIComponent(account)}`, { method: 'POST' }))
 }
 
-// ---- 账号注册表管理（R-6.61 / 账号管理界面） ----
 export async function apiListAccounts(): Promise<AccountListResp> {
   return j(await fetch(`${BASE}/api/accounts`))
 }

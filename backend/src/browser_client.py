@@ -31,7 +31,6 @@ if getattr(sys, "_MEIPASS", None):
     _ROOT = pathlib.Path(sys._MEIPASS).parent / "Resources"
 else:
     _ROOT = pathlib.Path(__file__).resolve().parents[2]  # backend/src -> 项目根
-# 提取脚本统一由 injections 注册表提供（R-6.30a）：extract 来源 = extension/lib/extract.js
 _XHS = "https://www.xiaohongshu.com"
 
 
@@ -156,7 +155,7 @@ async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
         closed = await _close_purgeable_pages(list(ctx.pages), _collect_window_ref())
         if closed:
             log.info("采集前清理残留 xhs 页 %d 个", closed)
-        await _ensure_window_not_empty(ctx)      # R-6.84d：窗口不能停在空页（黑屏）
+        await _ensure_window_not_empty(ctx)
         return closed
     except Exception:  # noqa: BLE001
         return 0
@@ -275,7 +274,6 @@ async def _switch_back_to_shell(page) -> None:
         base = (os.environ.get("XHS_SHELL_URL") or "").rstrip("/")
         shell = _find_shell_tab(page, base)
         if shell is not None:
-            # R-6.53q：CFT 158 在后台 tab 上 Page.bringToFront 会永久挂起（CDP 假死
             # 直接触发点，Nov 5 DIAG 取证 goto 0.5s 后卡死）——cdp_call 绝对超时保护，
             # 焦点切换非关键路径，超时跳过。
             await cdp_call(shell.bring_to_front(), timeout=CDP_QUICK,
@@ -309,7 +307,7 @@ async def _detect_login_wall(page) -> str:
             return wall
         text = await cdp_call(
             page.evaluate("() => document.body ? document.body.innerText.slice(0, 1500) : ''"),
-            timeout=CDP_EVAL, label="login_wall.text", skip=True)  # R-6.53s：引擎卡死不阻塞登录墙检测
+            timeout=CDP_EVAL, label="login_wall.text", skip=True)
         text = text or ""
     except Exception:  # noqa: BLE001
         return ""
@@ -441,7 +439,6 @@ async def _apply_filters(page, filters: dict):
         pt = await _pick_filter_point(page, val)
         if pt:
             await page.mouse.click(pt["x"], pt["y"])
-            # R-6.81：点完必须等一下再读选中态。「同城 / 附近」点击后平台会异步取一次
             # navigator.geolocation，定位返回前面板仍显示旧值；零延迟读会把「实际已生效」
             # 误判成「仍是 不限」（真机踩过：卡片已换成本地内容，日志却报未选中）。
             # 等待后再读不到，才说明是真的没生效。
@@ -550,17 +547,15 @@ def _check_login_wall(account_id: str, wall: str) -> None:
     """登录墙/风控验证命中即中止：软风控标记 + 抛错（页面保留供扫码）。"""
     if not wall:
         return
-    _handle_login_wall(account_id, wall)  # 统一软风控 → 引导扫码恢复（R-6.22i）
+    _handle_login_wall(account_id, wall)
     raise BrowserLoginRequiredError(wall)  # 保留页面供扫码，不关闭
 
 
 LOGIN_URL = "https://www.xiaohongshu.com/login"
 
-# R-6.53z8（用户拍板，Nov 6）：除登录页外**不允许用 URL 进入任何页面**，也不允许
 # 刷新页面——实测首页刷新/直连搜索页 URL 更容易被要求登录或弹风控。搜索、进详情、
 # 进作者页一律模拟真人操作（点搜索框 → 逐字键入 → 回车 / 点卡片）。登录态不确定时
 # 走登录页间接进入：登录页在已登录情况下会自己跳到 explore，我们不插手。
-# R-6.53z8k+（Nov 6 实测）：真登录态下可见搜索框是 #search-input-in-feeds（textarea，
 # 实测 rect≈245,79,580,24）；旧的 #search-input 是隐藏元素（rect 全 0），点它等于点 (0,0)
 # ——这是历史「点搜索框没反应」的代码层原因。按候选顺序取**有尺寸**的那个。
 _SEARCH_BOX_JS = """() => {
@@ -601,7 +596,6 @@ async def _open_login_page(page, timeout_s: float = 30) -> bool:
     return False
 
 
-# R-6.53z8b：对外公开的游客渲染态判据（server 的登录态判定复用同一份 JS，
 # 保证「后端 login_status」与「采集侧未登录拦截」不会口径分裂）。
 NEEDS_LOGIN_JS = _NEEDS_LOGIN_JS
 
@@ -781,7 +775,6 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     if not appeared:
         appeared = await _search_by_typing(page, keyword, account_id)
     if not appeared:
-        # R-6.77：搜索没成功还继续读页，采到的是 explore 首页推荐流——与关键词无关、
         # 类型也不受筛选约束（用户看到「没有采集过程却采到视频」就是这个）。
         # 宁可判失败，也不能把推荐流当关键词结果入库。
         log.warning("搜索未进入结果页（停在 %s），判定失败、不采集", _page_url_now(page))
@@ -821,7 +814,6 @@ async def _drain_page(page, items: list, seen: set, want_type: str | None = None
         # 过滤推广/广告卡片：真实笔记 id 是 24 位 hex（推广位是 UUID 等其他格式）
         if not re.fullmatch(r"[0-9a-f]{24}", str(k or "")):
             continue
-        # R-6.77：用户选了图文/视频时，平台筛选没生效也在这里保证结果正确
         if not _card_type_matches(it, want_type):
             continue
         if k not in seen:
@@ -841,7 +833,6 @@ def _should_stop_collect(count: int, limit: int, stale: int, added: int, should_
         stale += 1
         # 保持原设计：count=0 不提前停（单测 test_no_results_no_stop 断言）——
         # 首屏慢加载场景继续滚动给机会；空壳场景由 _prepare_search_page 的
-        # R-6.53u reload 重试兜底，真 0 条由调用方提示「未采集到数据」。
         if stale >= 2 and count > 0:
             return True, stale
     else:
@@ -901,7 +892,6 @@ async def _search_round(page, items: list, seen: set, limit: int, stale: int,
     added = await cdp_call(_drain_page(page, items, seen, want_type),
                            timeout=CDP_DRAIN, label="drain_page")
     if on_progress:
-        # R-6.53v：回调携带 items 引用——任务级取消收尾时，worker 据此
         # 抢救已采数据（搜索阶段未返回即被 cancel，items 是唯一数据源）
         on_progress(len(items), items)
     done, stale = _should_stop_collect(len(items), limit, stale, added, should_stop)
@@ -934,7 +924,7 @@ async def _search_loop(page, keyword: str, filters, account_id: str, items: list
                 page, items, seen, limit, stale, should_stop, on_progress,
                 want_type=(filters or {}).get("note_type"))
         except CdpTimeoutError:
-            return page, stale  # R-6.53s 假死：绝对超时打断收尾，不空等
+            return page, stale
         except Exception as exc:  # noqa: BLE001
             page = await _search_recover(page, keyword, filters, account_id, exc,
                                          getattr(exc, "_xhs_stage", "采集页"),
@@ -992,7 +982,6 @@ async def search(keyword: str, limit: int = 30, on_progress=None, should_stop=No
 # 详情 / 作者 / 评论
 # ===========================================================================
 # --------------------------------------------------------------------------
-# R-6.53z8：详情/作者/评论一律"点开→提取→返回"，禁止另行 URL 进入
 # --------------------------------------------------------------------------
 _ACTIVE_PAGES: dict[str, object] = {}
 
@@ -1276,7 +1265,7 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                  note_id, list(_ACTIVE_PAGES),
                  "none" if cached is None else cached.is_closed())
         return {}
-    await _assert_logged_in(page, account_id)  # R-6.53z8q：撞登录墙立刻抛，不空跑
+    await _assert_logged_in(page, account_id)
     before = {id(p) for p in page.context.pages}
     if not await _open_note_card(page, note_id):
         log.info("详情卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))

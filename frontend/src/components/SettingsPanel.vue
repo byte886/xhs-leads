@@ -1,6 +1,5 @@
 <script setup lang="ts">
 // SettingsPanel v2.0：设置 Tab（左侧分类导航 + 右侧逐项一行配置）
-// R-6.46 功能域分组 → R-6.47 两栏布局：账号 / 采集 / AI 能力 / 窗口与调试 / 关于与授权
 import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
@@ -63,7 +62,6 @@ const accounts = ref<AccountItem[]>([])
 const acctBusy = ref(false)
 const newAcctId = ref('')
 const newAcctName = ref('')
-// 行内改名（R-6.69）：改的是展示名，不动目录、不动登录态
 const editingAcct = ref('')
 const editName = ref('')
 
