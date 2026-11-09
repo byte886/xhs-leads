@@ -38,13 +38,9 @@ bash scripts/packaging/build_mac.sh
 | PRD（现行需求） | [`docs/Codex自动获客-复刻方案PRD.md`](docs/Codex自动获客-复刻方案PRD.md) |
 | 界面设计（现行 4-Tab 现状） | [`docs/界面重构设计-对齐版.md`](docs/界面重构设计-对齐版.md) |
 | 待办事项（现行） | [`docs/project/待办事项.md`](docs/project/待办事项.md) |
-| 需求实现闭环清单（历史快照） | [`docs/project/需求实现闭环清单.md`](docs/project/需求实现闭环清单.md) |
 | 多专家角色迭代开发工作流（现行 SOP） | [`docs/project/多专家角色迭代开发工作流.md`](docs/project/多专家角色迭代开发工作流.md) |
-| 治理梳理报告（2026-11-03） | [`docs/project/多专家治理梳理报告-2026-11-03.md`](docs/project/多专家治理梳理报告-2026-11-03.md) |
-| 质量报告（Gauntlet 最终态） | [`docs/QUALITY-REPORT-2026-11-03.md`](docs/QUALITY-REPORT-2026-11-03.md) |
 | **资产索引（唯一，全量清单）** | [`docs/project/项目资产与工具清单.md`](docs/project/项目资产与工具清单.md) |
 | 授权机制 ADR | [`docs/授权机制选型与薄层设计-ADR.md`](docs/授权机制选型与薄层设计-ADR.md) |
-| 枚举式全量审计报告（2026-11-03） | [`docs/project/枚举式全量审计报告-2026-11-03.md`](docs/project/枚举式全量审计报告-2026-11-03.md) |
 | 后端模块与测试 | [`backend/README.md`](backend/README.md) |
 | 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
 | macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |

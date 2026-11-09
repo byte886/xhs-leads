@@ -1,7 +1,7 @@
 # 需求变更 — App 内呈现形态（无头引擎 + 登录小窗 + 调试视图 + 状态提示条）
 
 > 版本：v1.4（需求变更）｜日期：2026-10-31｜状态：用户逐条对齐 ✅，已编排进 R 批
-> 关联：PRD `docs/Codex自动获客-复刻方案PRD.md`（v1.3 前置）、待办 `docs/project/待办事项.md`、测试批次 `docs/dev-test-batches.md`（新增 R 批）、界面设计 `docs/界面重构设计-对齐版.md`
+> 关联：PRD `docs/Codex自动获客-复刻方案PRD.md`（v1.3 前置）、待办 `docs/project/待办事项.md`、界面设计 `docs/界面重构设计-对齐版.md`
 >
 > ⚠️ **现行形态勘误（2026-11-03 补，R-6.16 路线A 之后）**：本文件 v1.4 定稿后，形态又经 R-6.5~R-6.30 多轮拍板变更，下列结论**已被推翻/改写**，以本节为准：
 > - **R1 无头化、R3 登录镜像、§三.7 pywebview 壳**：均已推翻。现行壳 = **有头 CFT 应用模式窗口**（R-6.16 路线A，`config.headless=False`），打开 .app 即出可见 Chrome 窗口承载前端，CDP 9223 直接驱动；登录 = **壳窗内导航真实小红书登录页**（截图镜像已被 R-6.5 用户否决），不再用 pywebview/WKWebView、不再有「launcher `_login_guard` 线程」（守卫现为 `shell_window.login_guard` asyncio 任务）。
@@ -36,7 +36,7 @@
 | 原型 | 界面重构设计-对齐版 v1.0 | 新增：登录小窗组件、设置→调试视图、全局状态提示条（线框见该文档 R 批章节） |
 | 开发 | `engine_pool.py`（headless 化 + 独立 profile 归一）、`browser_client.py`（登录判定统一）、`cookie_reader.py`（下线）、`server.py`（新增登录小窗/调试/状态接口 + CDP 桥）、`config.py`（profile 路径） | 引擎/登录/镜像/状态 4 组改造 |
 | 开发·前端 | `LoginModal.vue`（重构为镜像小窗）、`SettingsPanel.vue`（+调试视图入口）、`App.vue`（+全局状态提示条）、`api.ts`（+新接口） | 3 组件改造 |
-| 测试 | `dev-test-batches.md` 新增 **R 批**；`ui_test`（e1 基建改造）；A 批/t 系列回归重跑 | R 批配套测试见该文档 |
+| 测试 | pytest + vitest + 真机 UI 冒烟 | 断言以实跑为准 |
 | 排期 | `docs/project/待办事项.md`（新增 R 阶段）；任务清单 | 见 §四 |
 
 ## 三、方案设计要点
@@ -51,7 +51,7 @@
 
 ## 四、批次编排（R 批 — App 内呈现形态）
 
-> 插入点：dev-test-batches B 批之后、C 批（Windows）之前。重构批已落盘未 push，push 并入本批收尾。
+
 
 | 子任务 | 内容 | 依赖 | 状态 |
 |---|---|---|---|
@@ -95,5 +95,5 @@
 | `docs/需求变更-App内呈现形态.md`（本文档） | 新建 | ✅ |
 | `docs/Codex自动获客-复刻方案PRD.md` | 版本记录 + 决策表追加 v1.4/R 项 | ✅ |
 | `docs/project/待办事项.md` | 新增 R 阶段待办（v3.2→v3.3） | ✅ |
-| `docs/dev-test-batches.md` | 新增 R 批（开发范围/配套测试/验收口径）+ 状态速览 | ✅ |
+
 | `docs/界面重构设计-对齐版.md` | 追加 R 批 UI 补充章节 | ✅ |
