@@ -297,6 +297,9 @@ _register(
 # 防漂移；拦截判定由 decide_block 纯函数 + pytest 兜底（test_injections_decision.py）。
 LOGIN_PANEL_SELECTORS = (".container", ".reds-modal", ".login-container")
 LOGIN_MASK_SELECTOR = ".reds-mask"
+# R-6.78：登录界面「是否在场」判据。不含 .container——它太通用，浏览页容器也命中，
+# 用它会误判"登录界面在场"；只认登录弹窗/登录面板专属类名。
+LOGIN_UI_SELECTORS = (".reds-modal", ".login-container")
 LOGIN_EXTRA_HIDE_SELECTORS = ".out.right"  # R-6.48p：登录页杂项（活动推广区）净化专用
 LOGIN_CLICK_EVENTS = ("pointerdown", "mousedown", "mouseup", "click")
 LOGIN_ESC_EVENTS = ("keydown", "keyup")
@@ -315,8 +318,16 @@ _LOGIN_CLOSE_CSS = "".join(f"{s}{{display:none!important}}" for s in LOGIN_CLOSE
 _LOGIN_CLOSE_QUERY = ",".join(LOGIN_CLOSE_SELECTORS)
 
 
-def decide_block(hits_panel: bool, hits_mask: bool) -> bool:
-    """拦截判定纯函数：命中遮罩（点空白实际命中 .reds-mask）或不在登录组件内 → 拦截；组件内 → 放行。"""
+def decide_block(hits_panel: bool, hits_mask: bool, login_ui_active: bool = True) -> bool:
+    """拦截判定纯函数。
+
+    登录界面不在场（浏览页/搜索页）→ 一律放行（R-6.78：此前缺失此判据，
+    ``not hits_panel`` 在浏览页恒真，把整页鼠标点击全拦死）；
+    登录界面在场时：命中遮罩（点空白实际命中 .reds-mask）或不在登录组件内 → 拦截，
+    组件内 → 放行。
+    """
+    if not login_ui_active:
+        return False
     return hits_mask or not hits_panel
 
 
@@ -343,7 +354,14 @@ _FORCE_LOGIN_JS = (
     "window+document 双捕获四事件（pointerdown/mousedown/mouseup/click）拦截，init script 保证最先注册，"
     "target 不在登录组件内一律阻止（用户实机 bug：点空白登录组件消失并切到活动页）。"
     "选择器由 LOGIN_PANEL_SELECTORS/LOGIN_MASK_SELECTOR 常量生成（R-6.48m）。 */"
+    "function loginUiActive(){"
+    "try{"
+    "if(/\\/(login|website-login)(\\/|$)/.test(location.pathname))return true;"
+    "return !!document.querySelector('" + ",".join(LOGIN_UI_SELECTORS) + "');"
+    "}catch(e){return false;}"
+    "}"
     "function blockIfMask(e){"
+    "if(!loginUiActive())return;"
     "if(!e.target||!e.target.closest)return;"
     "var t=e.target.closest('" + ",".join(LOGIN_PANEL_SELECTORS) + "');"
     "var isMask=!!e.target.closest('" + LOGIN_MASK_SELECTOR + "');"
@@ -353,6 +371,7 @@ _FORCE_LOGIN_JS = (
     "window.addEventListener(ev,blockIfMask,true);document.addEventListener(ev,blockIfMask,true);"
     "});"
     "function escGuard(e){"
+    "if(!loginUiActive())return;"
     "if(e.key==='Escape'||e.key==='Esc'){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}"
     "}"
     "['" + "','".join(LOGIN_ESC_EVENTS) + "'].forEach(function(ev){"

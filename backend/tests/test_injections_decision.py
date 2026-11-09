@@ -73,6 +73,37 @@ class TestForceLoginSelectors:
         assert js.index("location.hostname") < js.index("__xhs_leads_lock_ok=true")
 
 
+class TestLoginUiGate:
+    """R-6.78：登录界面不在场时不拦任何点击。
+
+    根因回归：force_login 作为 context init script 注入到全部页面，原先
+    `not hits_panel` 在浏览页恒真 → 整页 mousedown/click 被 stopImmediatePropagation
+    吞掉，真机表现为「hover 有反应、点击/输入全无」。
+    """
+
+    @pytest.mark.parametrize(
+        "hits_panel,hits_mask",
+        [(False, False), (False, True), (True, False), (True, True)],
+    )
+    def test_absent_login_ui_never_blocks(self, hits_panel, hits_mask):
+        assert injections.decide_block(hits_panel, hits_mask, login_ui_active=False) is False
+
+    def test_present_login_ui_still_blocks_outside_panel(self):
+        assert injections.decide_block(False, False, login_ui_active=True) is True
+
+    def test_js_has_login_ui_gate(self):
+        js = injections.get("force_login")
+        assert "loginUiActive" in js
+        for sel in injections.LOGIN_UI_SELECTORS:
+            assert sel in js, f"登录界面判据选择器 {sel} 未嵌入"
+        # 守卫必须排在拦截动作之前（否则等于没加）
+        assert js.index("if(!loginUiActive())return;") < js.index("stopImmediatePropagation")
+
+    def test_login_path_counts_as_active(self):
+        js = injections.get("force_login")
+        assert "login|website-login" in js
+
+
 class TestLoginFitSelectors:
     """login_fit 并入常量表（R-6.48n）：querySelector 插值常量；CSS 类名防漂移。"""
 
