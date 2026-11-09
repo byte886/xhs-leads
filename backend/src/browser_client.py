@@ -490,11 +490,25 @@ def _wanted_filters(filters: dict) -> list[tuple[str, str]]:
 
 
 async def _open_filter_panel(page) -> None:
-    """把筛选栏滚回视口并展开（React 只认真实鼠标事件，不认 JS el.click()）。"""
+    """展开筛选面板。
+
+    R-6.79（2026-11-09 真机回归）：R-6.77 把这里的展开动作从「JS 直接
+    `div.filter.click()`」改成「Python 发鼠标事件」，结果 `search_result_ai`
+    页上的「筛选」对程序化鼠标事件完全不响应（同坐标、同一手法，两天前那条
+    JS click 通道每次都能展开：tags 0→35、可见选项 19 个、点完「图文」后
+    active 由 综合/综合/不限… 变为 综合/综合/图文/不限…）。这里改回 JS click；
+    面板展开有约 1s 延迟，所以展开后轮询到可见项出现为止，不固定 sleep。
+    """
     opened = await page.evaluate(_FILTER_OPEN_JS)
     if isinstance(opened, dict) and not opened.get("open"):
-        await page.mouse.click(opened["x"], opened["y"])
-    await asyncio.sleep(1.2)
+        await page.evaluate(_FILTER_OPEN_CLICK_JS)
+    vis = 0
+    for _ in range(12):
+        vis = await page.evaluate(_VIS_TAGS_JS)
+        if isinstance(vis, int) and vis >= 5:
+            break
+        await asyncio.sleep(0.4)
+    log.debug("筛选面板可见项=%s", vis)
 
 
 async def _pick_filter_point(page, val: str):
@@ -539,6 +553,10 @@ async def _apply_filters(page, filters: dict):
         pt = await _pick_filter_point(page, val)
         if pt:
             await page.mouse.click(pt["x"], pt["y"])
+            # 点完读一次面板选中态：既证明这次点击真落到了选项上，
+            # 也让实机验收时日志里能看见「图文」进了 active 列表。
+            active = await page.evaluate(_ACTIVE_TAGS_JS)
+            log.info("筛选已选 %s=%s 面板选中态=%s", label, val, active)
         else:
             log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
         await asyncio.sleep(2.5)
@@ -564,6 +582,26 @@ _FILTER_OPEN_JS = """() => {
     if (!r.width || !r.height) return null;
     return {open: false, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
 }"""
+
+_FILTER_OPEN_CLICK_JS = """() => {
+    const el = document.querySelector('div.filter')
+        || [...document.querySelectorAll('div, span, button')].find(x => {
+            const t = (x.innerText || '').trim();
+            return t.length <= 4 && t.includes('筛选');
+        });
+    if (!el) return false;
+    el.click();
+    return true;
+}"""
+
+# 已展开的筛选选项数：可见份（opacity > 0.01）。未展开 0，展开后约 35。
+_VIS_TAGS_JS = """() => [...document.querySelectorAll('div.tags')]
+    .filter(e => Number(getComputedStyle(e).opacity) > 0.01).length"""
+
+# 筛选面板里已被选中的项（active 类），用于验证点击是否真落到选项上。
+_ACTIVE_TAGS_JS = """() => [...document.querySelectorAll('div.tags.active')]
+    .map(e => ((e.innerText || '').trim().split('\\n')[0] || '').trim())
+    .filter(Boolean)"""
 
 _FILTER_CLOSE_JS = """() => {
     const el = [...document.querySelectorAll('[data-hp-kind]')]
