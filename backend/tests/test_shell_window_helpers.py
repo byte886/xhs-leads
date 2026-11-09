@@ -499,21 +499,32 @@ class _CtxExpect:
     def __init__(self, page, new_page=None):
         self._page = page
         self._new_page = new_page
+        self.wait_calls = []
 
     def expect_page(self, timeout=None):
         return _ExpectPage(self._page)
+
+    def wait_for_event(self, event, timeout=None):
+        """模拟 Playwright BrowserContext.wait_for_event（返回 future，可 cancel）。"""
+        import asyncio as _a
+        self.wait_calls.append((event, timeout))
+        fut = _a.get_running_loop().create_future()
+        if self._new_page is not None:
+            fut.set_result(self._new_page)
+        return fut
 
     async def new_page(self):
         return self._new_page
 
 
 class _ShellEval:
-    def __init__(self):
+    def __init__(self, result=None):
         self.calls = []
+        self._result = result
 
     async def evaluate(self, js, arg=None):
         self.calls.append((js, arg))
-        return None
+        return self._result
 
 
 def _pin_geometry(monkeypatch):
@@ -546,7 +557,8 @@ def test_open_collect_window_uses_plain_window(monkeypatch):
     assert isinstance(p, _PgFull)
     assert seen, "必须走 --new-window 命令行路由"
     assert seen["kw"].get("user_data_dir") == "/tmp/udd"
-    assert shell.calls == [], "走命令行路由时不该退回 window.open"
+    # 扩展原子建窗会先试一次（未加载时返回 None），但绝不能再退回 window.open。
+    assert [c for c in shell.calls if "window.open" in c[0]] == [], "走命令行路由时不该退回 window.open"
     assert p.load_calls == 1
     assert p.fronted is True          # 建完置前，用户能看见
 
@@ -559,8 +571,7 @@ def test_open_collect_window_falls_back_to_window_open(monkeypatch):
     shell = _ShellEval()
     p = asyncio.run(sw.open_collect_window(_CtxExpect(page), shell))
     assert p is page
-    assert shell.calls, "兜底路径必须真的窗口化"
-    assert "window.open" in shell.calls[0][0]
+    assert any("window.open" in c[0] for c in shell.calls), "兜底路径必须真的窗口化"
 
 
 def test_open_collect_window_falls_back_to_new_page(monkeypatch):
@@ -725,3 +736,66 @@ def test_keeper_log_snapshot_only_when_changed():
     assert got == frozenset({"a"})
     sw._keeper_log_snapshot(ctx, c, last)  # 页面集没变：不重复打日志
     assert last[0] == frozenset({"a"})
+
+
+def test_create_collect_page_prefers_extension_atomic_window(monkeypatch):
+    """R-6.86：采集窗优先由内置扩展一次调用链建（建窗/摆位/建组命名/导航）。
+
+    走扩展路径时不该再发 `--new-window` 命令行——那才会先在左半屏出现再被挪走。
+    """
+    _pin_geometry(monkeypatch)
+    from src import engine_types
+
+    monkeypatch.setattr(engine_types, "builtin_extension_dir", lambda: "/tmp/ext")
+    monkeypatch.setattr(engine_types, "unpacked_extension_id", lambda d: "abcdefghijklmnop")
+
+    async def _boom(*a, **kw):
+        raise AssertionError("扩展建窗成功时不该再走命令行/兜底路径")
+
+    monkeypatch.setattr(sw, "_launch_plain_window", _boom)
+    monkeypatch.setattr(sw, "_launch_app_window", _boom)
+    monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
+
+    newp = _PgFull("about:blank")
+    ctx = _CtxExpect(None, new_page=newp)
+    shell = _ShellEval({"ok": True, "windowId": 42, "groupId": 7})
+    bounds = {"left": 960, "top": 25, "width": 960, "height": 1140}
+
+    p = asyncio.run(sw._create_collect_page(
+        ctx, shell, "https://www.xiaohongshu.com/explore",
+        user_data_dir="/tmp/udd", executable="/tmp/cft", bounds=bounds))
+
+    assert p is newp
+    assert ctx.wait_calls and ctx.wait_calls[0][0] == "page"
+    js, arg = shell.calls[0]
+    assert "chrome.runtime.sendMessage" in js
+    assert arg["extId"] == "abcdefghijklmnop"
+    assert arg["req"]["type"] == sw._EXT_CREATE_MSG
+    assert (arg["req"]["left"], arg["req"]["top"]) == (960, 25)
+
+
+def test_create_collect_page_falls_back_when_extension_rejects(monkeypatch):
+    """扩展拒绝/未加载时回退命令行建窗，并把失败原因留在日志里而不是静默跳过。"""
+    _pin_geometry(monkeypatch)
+    from src import engine_types
+
+    monkeypatch.setattr(engine_types, "builtin_extension_dir", lambda: "/tmp/ext")
+    monkeypatch.setattr(engine_types, "unpacked_extension_id", lambda d: "abcdefghijklmnop")
+    monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
+
+    seen = {}
+
+    async def _fake_plain(ctx, url, **kw):
+        seen["url"] = url
+        return _PgFull(url)
+
+    monkeypatch.setattr(sw, "_launch_plain_window", _fake_plain)
+
+    shell = _ShellEval({"ok": False, "error": "Could not establish connection"})
+    p = asyncio.run(sw._create_collect_page(
+        _CtxExpect(None), shell, "https://www.xiaohongshu.com/explore",
+        user_data_dir="/tmp/udd", executable="/tmp/cft",
+        bounds={"left": 960, "top": 25, "width": 960, "height": 1140}))
+
+    # 回退路径是「先建 about:blank 离屏窗、摆好位再导航」，所以这里拿到的是空白窗。
+    assert p is not None and seen["url"] == "about:blank"

@@ -24,7 +24,7 @@ import time
 
 from playwright.async_api import async_playwright
 
-from src import config, injections, logger as xlog, risk
+from src import config, injections, logger as xlog, risk, window_layout
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src.engine_types import builtin_cft_candidates, builtin_extension_dir
 
@@ -63,6 +63,11 @@ def probe_screen_size() -> tuple[int, int]:
 MIN_WIN_W = 640
 MIN_WIN_H = 480
 
+# 创建窗口时的初始坐标：先落在屏幕外，等 CDP 摆位完成再显示。
+# 用于「壳窗提升 --app 窗口」与「采集调试窗」——避免新窗先在与壳窗重叠的左半屏
+# 出现几百毫秒，被用户看成「左边窗口又打开了小红书 / 两个 APP 窗叠在一起」。
+OFFSCREEN_LEFT = -4000
+
 # 采集调试窗的恒定标题（与 injections._COLLECT_DEBUG_TITLE_JS 的 T 一致）。
 # 只作视觉标识，不再参与采集窗页认领与分组判定（标题守护会与账号标题互覆盖）。
 COLLECT_DEBUG_TITLE = "XHS Leads · 采集调试窗口"
@@ -85,6 +90,35 @@ def shell_window_geometry() -> tuple[int, int, int, int]:
     win_w = min(1280, max(MIN_WIN_W, sw // 2))
     win_h = max(MIN_WIN_H, min(1200, sh - 60))
     return win_w, win_h, 0, win_w
+
+
+def default_window_layout() -> dict[str, dict]:
+    """首次启动（无历史记录）的默认双窗布局：壳窗左半、采集窗右半，等宽并排。"""
+    win_w, win_h, shell_left, collect_left = shell_window_geometry()
+    return {
+        "shell": {"left": shell_left, "top": 0, "width": win_w, "height": win_h},
+        "collect": {"left": collect_left, "top": 0, "width": win_w, "height": win_h},
+    }
+
+
+_LAYOUT_CACHE: dict[str, dict] | None = None
+
+
+def window_bounds(role: str) -> dict:
+    """该窗口本次启动的生效位置（R-6.85）：上次退出前记录优先，否则默认分屏。
+
+    只在启动期读一次并缓存：启动之后用户拖动窗口不应改变本次进程内的目标位置，
+    否则后续任何一次「重建窗口」都会按拖动后的新位置重摆，产生漂移。
+    """
+    global _LAYOUT_CACHE
+    if _LAYOUT_CACHE is None:
+        sw, sh = probe_screen_size()
+        default = default_window_layout()
+        _LAYOUT_CACHE = {
+            r: window_layout.bounds_for(r, default[r], sw, sh) for r in default
+        }
+    return dict(_LAYOUT_CACHE.get(role) or default_window_layout()[role])
+
 
 
 def account_window_geometry(account_id: str) -> tuple[int, int, int, int] | None:
@@ -207,15 +241,32 @@ def _fix_exit_type(prefs):
     return changed
 
 
+def _drop_window_restore(prefs) -> bool:
+    """删掉 Chrome 记下的「上次窗口摆放」，让命令行 --window-position 生效。R-6.85。
+
+    实测（2026-11-09 冷启动）：profile 里有 window placement 时 Chrome 按记录恢复
+    窗口 bounds，**忽略 --window-position**——首个窗口仍在 (0,25) 完整显示
+    about:blank 约 2.3s，这就是「启动瞬间壳窗区一片白」的直接来源。
+    删掉这一项后，初始普通窗口直接按 --window-position 落在屏幕外。
+    """
+    browser = prefs.get("browser")
+    if not isinstance(browser, dict) or "window_placement" not in browser:
+        return False
+    browser.pop("window_placement", None)
+    return True
+
+
 def _normalize_exit_type(default_dir: str) -> None:
-    """把 Default/Preferences 的 exit_type（顶层 + profile 内）修正为 Normal。"""
+    """把 Default/Preferences 的 exit_type（顶层 + profile 内）修正为 Normal，并清窗口记忆。"""
     prefs_path = os.path.join(default_dir, "Preferences")
     try:
         if not os.path.isfile(prefs_path):
             return
         with open(prefs_path, "r", encoding="utf-8") as f:
             prefs = json.load(f)
-        if not _fix_exit_type(prefs):
+        changed = _fix_exit_type(prefs)
+        changed = _drop_window_restore(prefs) or changed
+        if not changed:
             return
         with open(prefs_path, "w", encoding="utf-8") as f:
             json.dump(prefs, f, ensure_ascii=False)
@@ -459,7 +510,7 @@ class AccountEngine:
         R 批 v1.5：引擎带 CDP 端口供 UI 测试 connect_over_cdp 复用同一实例（同一登录态 profile）。
         R-6.57：端口由调用方传入该账号独占的 debug_port（default=9223，其余 9224 起）。
         """
-        geo = shell_window_geometry()[:2]
+        geo = (window_bounds("shell")["width"], window_bounds("shell")["height"])
         base = dict(
             channel="chrome",
             headless=headless,
@@ -487,9 +538,9 @@ class AccountEngine:
         --window-size/--window-position 让启动初始普通窗口自生自灭：负坐标消除
         「普通→应用提升」时左半屏闪现（CDP 取证：启动期两个 8791 target，先普通后 --app）。
         """
-        win_w, win_h, _, _ = shell_window_geometry()
-        launch_kwargs["args"].append(f"--window-size={win_w},{win_h}")
-        launch_kwargs["args"].append("--window-position=-4000,0")
+        b = window_bounds("shell")
+        launch_kwargs["args"].append(f"--window-size={b['width']},{b['height']}")
+        launch_kwargs["args"].append(f"--window-position={OFFSCREEN_LEFT},0")
 
 
     def _launch_apply_geolocation(self, launch_kwargs: dict) -> None:
@@ -614,41 +665,60 @@ class AccountEngine:
 
 
     async def _place_account_window(self) -> None:
-        """R-6.57：非 default 账号的有头窗口按序号移到屏内可见位置。
+        """R-6.57 + R-6.85：有头窗口启动后的初始定位。
 
-        启动参数统一用 --window-position=-4000,0（消除「普通窗→应用窗」左半屏闪现），
-        default 账号随后由 shell_window 校准；其余账号没有壳窗流程，必须在此自己定位，
-        否则会永久停在屏幕外——用户看到的现象是「第二个账号起了但找不到窗口」。
+        非 default 账号：按序号级联到屏内可见位置（否则永久停在屏幕外，用户看不到）。
+        default（壳窗）账号：先挪到屏幕外——壳窗最终由 shell_window 用 `--app` 窗口
+        在记录位置重建，初始普通窗口若留在左半屏，会和提升出来的新窗重叠闪现
+        （实测冷启动 +11.8s~+12.3s 两个 8791 窗口同时在 left=0）。
         """
-        geo = account_window_geometry(self.account_id)
-        if geo is None or self._context is None:
+        if self._context is None or config.account_headless(self.account_id):
             return
-        if config.account_headless(self.account_id):
-            return  # 无头模式没有窗口，定位无意义
+        geo = account_window_geometry(self.account_id)
+        if geo is None:
+            b = window_bounds("shell")
+            geo = (b["width"], b["height"], OFFSCREEN_LEFT, 0)
         win_w, win_h, left, top = geo
+        await self._apply_window_bounds(win_w, win_h, left, top)
+
+    @staticmethod
+    def _bounds_landed(cur: dict, left: int, top: int) -> bool:
+        """回读坐标是否算「已到位」。
+
+        离屏目标不可能精确达成（macOS 会把窗口钳到至少 40px 可见），故 left<0 的
+        目标只要左边缘确实出了屏幕就算到位——否则每次启动都会刷「定位未确认」告警。
+        """
+        if (cur.get("left"), cur.get("top")) == (left, top):
+            return True
+        return left < 0 and (cur.get("left") or 0) < 0
+
+    async def _apply_window_bounds(self, win_w: int, win_h: int, left: int, top: int) -> bool:
+        """把首窗摆到指定 bounds，回读坐标确认（不确认只告警，不阻断启动）。
+
+        第一次立即 set：窗口此刻可能正显示 about:blank 白屏，越早挪走越好；实测偶尔
+        仍会被随后的默认摆放覆盖，故保留后两次 0.7s 间隔的重试。
+        """
+        cdp, wid = await self._window_cdp()
+        if cdp is None or wid is None:
+            return False
+        target = {"left": left, "top": top, "width": win_w, "height": win_h}
+        cur: dict = {}
         try:
-            page = self._context.pages[0] if self._context.pages else None
-            if page is None:
-                return
-            cdp = await self._context.new_cdp_session(page)
-            info = await cdp.send("Browser.getWindowForTarget")
-            wid = info.get("windowId")
-            if wid is None:
-                return
-            target = {"left": left, "top": top, "width": win_w, "height": win_h}
-            # 实测：启动瞬间窗口仍在校准，立刻 set 会被随后的默认摆放覆盖（回读仍是
-            # 960,25,960x800）；必须等窗口稳定后再设，且回读确认才算成立。
-            cur = {}
-            for _ in range(3):
-                await asyncio.sleep(0.7)
+            for attempt in range(3):
+                if attempt:
+                    await asyncio.sleep(0.7)
                 await cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": target})
-                cur = (await cdp.send("Browser.getWindowBounds", {"windowId": wid})).get("bounds", {})
-                if (cur.get("left"), cur.get("top")) == (left, top):
-                    log.info("账号 %s 窗口定位 (%s,%s %sx%s)", self.account_id, left, top, win_w, win_h)
-                    return
-            log.warning("账号 %s 窗口定位未确认，回读=%s", self.account_id, cur)
+                raw = await cdp.send("Browser.getWindowBounds", {"windowId": wid})
+                cur = raw.get("bounds", {})
+                if self._bounds_landed(cur, left, top):
+                    log.info("账号 %s 窗口定位 (%s,%s %sx%s)", self.account_id,
+                             cur.get("left"), cur.get("top"), win_w, win_h)
+                    return True
         except Exception as e:  # noqa: BLE001（定位失败不影响引擎可用）
             log.warning("账号 %s 窗口定位失败（不影响启动）: %s", self.account_id, e)
+            return False
+        log.warning("账号 %s 窗口定位未确认，回读=%s", self.account_id, cur)
+        return False
 
 
     async def _window_cdp(self):
@@ -852,8 +922,8 @@ class AccountEngine:
             if acc_geo:
                 w2, h2, l2, top2 = acc_geo
             else:
-                w2, h2, _, l2 = shell_window_geometry()
-                top2 = 0
+                b2 = window_bounds("collect")
+                w2, h2, l2, top2 = b2["width"], b2["height"], b2["left"], b2["top"]
             cdp = await p.context.new_cdp_session(p)
             t = await cdp.send("Browser.getWindowForTarget")
             await cdp.send(

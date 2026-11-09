@@ -54,3 +54,76 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
     console.warn('[collect-group] check failed:', e && e.message);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 原子化建采集窗（R-6.86，用户口径：右边窗口一出现就已在目标位置、且已在
+// 「采集窗口」组里，不要「先出现在左边再被挪走」的过渡）。
+//
+// 为什么必须由扩展来做：`--new-window` 由已运行的 Chrome 实例执行，它只把 URL
+// 交给实例，命令行里的 --window-position/--window-size 被丢弃，窗口先落在实例
+// 自己的默认位置（左上角），Python 侧只能事后 setWindowBounds 搬走——这就是用户
+// 看到的「左半屏先闪一下」。chrome.windows.create 是唯一能在**创建时**给定
+// left/top/width/height 的 API，且只有扩展能调。
+//
+// 调用方：APP 页（http://127.0.0.1:8791）经 externally_connectable 用
+// chrome.runtime.sendMessage(<扩展ID>, {type: CREATE_WINDOW, ...}) 触发。
+// 顺序刻意是「建空白窗 → 立刻分组命名 → 再导航」，这样窗口出现的那一帧就已经
+// 在正确位置、带着组标题，小红书页面最后才加载。
+const CREATE_WINDOW = 'xhsCreateCollectWindow';
+const PING = 'xhsPing';
+
+async function createCollectWindow(req) {
+  const { url, left, top, width, height } = req || {};
+  const win = await chrome.windows.create({
+    url: 'about:blank',
+    type: 'normal',
+    width: Math.round(width),
+    height: Math.round(height),
+    focused: true,
+  });
+  const tabId = win.tabs && win.tabs[0] && win.tabs[0].id;
+  if (!tabId) throw new Error('新窗口里没有拿到标签');
+  // macOS 上 windows.create 的 left/top 会被忽略（实测创建后仍在 (0,25)）；而紧邻的
+  // windows.update 虽然立刻生效，但窗口**首次显示**时 Chrome 还会套用它记住的位置，
+  // 把刚才的 update 盖回去（实测 create→update 返回 960，1s 后又回到 0,25）。
+  // 所以：立即校正一次，等窗口稳定后再校正一次。两次都在扩展 SW 内，间隔约 120ms，
+  // 与 Python 侧跨进程 CDP 搬窗（约 700ms，用户能看见「先闪在左边」）不是一个量级。
+  const L = Math.round(left);
+  const T = Math.round(top);
+  const W = Math.round(width);
+  const H = Math.round(height);
+  await chrome.windows.update(win.id, { left: L, top: T, width: W, height: H });
+  await new Promise((r) => setTimeout(r, 120));
+  await chrome.windows.update(win.id, { left: L, top: T, width: W, height: H });
+  const gid = await chrome.tabs.group({
+    tabIds: [tabId],
+    createProperties: { windowId: win.id },
+  });
+  await chrome.tabGroups.update(gid, {
+    title: GROUP_TITLE,
+    color: GROUP_COLOR,
+    collapsed: false,
+  });
+  // 组标题就位之后才导航：用户看到窗口的那一刻，位置、组、标题都已经对了，只剩页面在加载。
+  if (typeof url === 'string' && url) {
+    await chrome.tabs.update(tabId, { url });
+  }
+  return { ok: true, windowId: win.id, tabId, groupId: gid };
+}
+
+chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
+  if (!msg) return undefined;
+  // 连通性探测：调用方先用它确认扩展在线，再走建窗，避免扩展没加载时干等页面超时。
+  // 必须异步回（同步 sendResponse 时外部消息通道实测会报
+  // "The message port closed before a response was received"）。
+  if (msg.type === PING) {
+    setTimeout(() => sendResponse({ ok: true, id: chrome.runtime.id }), 0);
+    return true;
+  }
+  if (msg.type !== CREATE_WINDOW) return undefined;
+  createCollectWindow(msg)
+    .then(sendResponse)
+    .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+  return true; // 异步响应：保持消息通道直到 sendResponse
+});
+

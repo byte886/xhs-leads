@@ -664,9 +664,11 @@ async def _refresh_engine_after_inject(eng) -> None:
     page = await eng.new_page()
     await page.goto("https://www.xiaohongshu.com/login",
                     wait_until="domcontentloaded", timeout=30000)
-    # R-6.22：新开小红书窗口校准为右半屏（等宽并排不重叠）
-    _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-    await _shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
+    # R-6.22/R-6.85：新开小红书窗口校准到采集窗记录位置（默认右半屏）
+    _cb = engine_pool.window_bounds("collect")
+    await _shell_window._calibrate_window(
+        page, _cb["left"], _cb["top"], _cb["width"], _cb["height"],
+    )
     await asyncio.sleep(3)
 
 
@@ -3051,8 +3053,10 @@ async def _ensure_collect_skeleton(eng) -> None:
             # R-6.84e：不再挂「采集调试窗口」标题守护（与账号运营窗口守护互相覆盖，
             # 标题会变成「账号名 · 运营窗口」）；采集窗标识改由标签组名与 URL 承担。
             # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
-            _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
-            await shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)
+            _cb = engine_pool.window_bounds("collect")
+            await shell_window._calibrate_window(
+                page, _cb["left"], _cb["top"], _cb["width"], _cb["height"],
+            )
             await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
                            label="server.collect_win_bring_to_front", skip=True)
             log.info("app_config：已创建 采集窗 采集骨架（开关开）")

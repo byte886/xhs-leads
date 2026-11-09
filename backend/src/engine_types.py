@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import sys
 
@@ -71,3 +72,14 @@ def builtin_extension_dir() -> str | None:
         if c and (pathlib.Path(c) / "manifest.json").exists():
             return c
     return None
+
+
+def unpacked_extension_id(ext_dir: str) -> str:
+    """未打包扩展的扩展 ID（R-6.86）。
+
+    Chromium 对 `--load-extension` 的目录型扩展，ID 由**绝对路径**的 SHA256 派生：
+    取前 16 字节，每个 nibble 映射为 'a'+n。实测与运行时
+    `chrome-extension://<id>/background.js` 的 ID 完全一致，所以不需要再问浏览器。
+    """
+    digest = hashlib.sha256(str(pathlib.Path(ext_dir).resolve()).encode()).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(c, 16)) for c in digest)

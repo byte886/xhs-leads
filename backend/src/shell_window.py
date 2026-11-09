@@ -30,6 +30,7 @@ import json as _json_mod
 from src import injections  # noqa: E402
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src import logger as xlog  # noqa: E402
+from src import window_layout  # noqa: E402
 log = xlog.get("shell")
 
 
@@ -81,17 +82,24 @@ async def open_collect_window(
     """
     from src import engine_pool  # noqa: PLC0415（与文件内其他延迟导入一致）
 
-    # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
-    win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
+    # R-6.22 双窗口左右分屏 / R-6.85 位置记忆：采集窗放上次记录的位置（默认右半）
+    cb = engine_pool.window_bounds("collect")
     page = await _create_collect_page(
         ctx, shell, url, user_data_dir=user_data_dir, executable=executable,
-        win_w=win_w, win_h=win_h, win_left=win_left,
+        bounds=cb,
     )
+    # 先摆位、再加载：窗口是空白离屏创建的，摆到目标位置后才第一次出现内容。
+    # 旧顺序先 wait_for_load_state（最长 12s）再校准，期间窗口就压在壳窗上。
+    await _calibrate_window(page, cb["left"], cb["top"], cb["width"], cb["height"])
+    if (page.url or "").startswith("about:"):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        except Exception:  # noqa: BLE001（导航慢：不算失败，先让窗口可用）
+            log.warning("采集窗导航失败（保留空白窗，可手动刷新）: %r", url)
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=12000)
     except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
         pass
-    await _calibrate_window(page, win_left, 0, win_w, win_h)
     try:
         await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
                        label="shell.bring_to_front", skip=True)
@@ -100,18 +108,103 @@ async def open_collect_window(
     return page
 
 
+_EXT_CREATE_MSG = "xhsCreateCollectWindow"
+
+# 网页（APP 页）没有扩展 API，只有 externally_connectable 允许的 runtime 消息通道。
+# 建窗必须由扩展在它自己的 SW 里做：chrome.windows.create 是唯一能在创建时指定 bounds
+# 的能力，也只有扩展持有 windows 权限。
+_EXT_CREATE_JS = """
+(payload) => new Promise((resolve) => {
+  if (!(window.chrome && chrome.runtime && chrome.runtime.sendMessage)) {
+    resolve({ ok: false, error: 'page has no chrome.runtime' });
+    return;
+  }
+  const t = setTimeout(() => resolve({ ok: false, error: 'no response' }), 6000);
+  chrome.runtime.sendMessage(payload.extId, payload.req, (r) => {
+    clearTimeout(t);
+    resolve(r || { ok: false, error: String((chrome.runtime.lastError || {}).message) });
+  });
+})
+"""
+
+
+async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
+    """让内置扩展一次调用链完成「建窗 → 摆位 → 建组命名 → 导航」（R-6.86）。
+
+    为什么不再用 `--new-window`：那个参数由已运行的 Chrome 实例执行，实例只取走 URL，
+    丢掉 `--window-position/--window-size`，窗口先落在左上角，Python 侧只能事后用 CDP
+    搬走（实测约 700ms —— 就是用户看到的「左半屏先闪一下、再被挪到右边」）。
+    扩展里 create → update → 建组命名 → 导航 是一条链，实测整条 0.1s 级完成，
+    **用户看到窗口时位置和组标题都已就位**，剩下的只是页面在加载。
+
+    扩展未加载 / 网页无 chrome.runtime / 建窗失败时返回 None，调用方回退旧路径。
+    """
+    from src import engine_types  # noqa: PLC0415（扩展目录与 ID 推导同源）
+
+    ext_dir = engine_types.builtin_extension_dir()
+    if not ext_dir:
+        return None
+    payload = {
+        "extId": engine_types.unpacked_extension_id(ext_dir),
+        "req": {
+            "type": _EXT_CREATE_MSG,
+            "url": url,
+            "left": bounds["left"],
+            "top": bounds["top"],
+            "width": bounds["width"],
+            "height": bounds["height"],
+        },
+    }
+    # 先挂监听再发消息：新窗口是在 evaluate 内部创建的，晚一步注册就会漏掉 page 事件。
+    page_task = asyncio.ensure_future(ctx.wait_for_event("page", timeout=8000))
+    try:
+        res = await shell.evaluate(_EXT_CREATE_JS, payload)
+    except Exception as e:  # noqa: BLE001（页面切走/扩展未加载：回退命令行建窗）
+        page_task.cancel()
+        log.info("扩展原子建窗不可用，回退命令行建窗: %r", e)
+        return None
+    if not isinstance(res, dict) or not res.get("ok"):
+        page_task.cancel()
+        log.info("扩展原子建窗被拒绝（回退命令行建窗）: %s", res)
+        return None
+    try:
+        page = await page_task
+    except Exception as e:  # noqa: BLE001（窗口建了但 Playwright 没 attach 到：仍回退）
+        log.warning("扩展建窗后未捕获到页面，回退命令行建窗: %r", e)
+        return None
+    log.info(
+        "采集窗由扩展原子创建 windowId=%s groupId=%s bounds=(%s,%s %sx%s)",
+        res.get("windowId"), res.get("groupId"),
+        bounds["left"], bounds["top"], bounds["width"], bounds["height"],
+    )
+    return page
+
+
 async def _create_collect_page(
-    ctx, shell, url: str, *, user_data_dir, executable, win_w, win_h, win_left,
+    ctx, shell, url: str, *, user_data_dir, executable, bounds: dict,
 ):
     """建采集调试窗的页（三条路径选一，R-6.83）：
     ① 命令行 `--new-window` 标准窗口（带地址栏/标签栏）；
     ② window.open 同 context 新窗口（Chrome 多不给地址栏）；
     ③ 引擎内新页（拿不到独立窗口时的能力兜底）。
+
+    R-6.85：① 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
+    避免 `--new-window` 沿用它记住的旧位置、先把窗口叠在壳窗上。
     """
+    from src import engine_pool  # noqa: PLC0415
+    # ① 首选：内置扩展用 chrome.windows.create 原子化建窗（位置/分组/导航一步到位）。
+    page = await _create_window_via_extension(ctx, shell, url=url, bounds=bounds)
+    if page is not None:
+        return page
+    win_w, win_h, win_left = bounds["width"], bounds["height"], bounds["left"]
     if executable and user_data_dir:
+        # 先开 `about:blank` 空白窗：Chrome 对同一 profile 的第二个窗口不认
+        # --window-position，窗口必然先出现在它自己的默认位置（左上角）。这时若已经
+        # 带着小红书 URL，用户看到的就是「左半屏先闪出一个小红书页，再被挪到右边」。
+        # 空白窗先出、由调用方摆位，之后再 goto 目标页。
         page = await _launch_plain_window(
-            ctx, url, user_data_dir=user_data_dir, executable=executable,
-            left=win_left, width=win_w, height=win_h,
+            ctx, "about:blank", user_data_dir=user_data_dir, executable=executable,
+            left=win_left, width=win_w, height=win_h, offscreen=True,
         )
         if page is not None:
             return page
@@ -488,6 +581,7 @@ def current_collect_page():
 async def _launch_window(
     ctx, url: str, *, user_data_dir: str, executable: str,
     left: int, width: int, height: int, app_mode: bool = True,
+    offscreen: bool = False,
 ):
     """命令行路由开窗口，app_mode 决定窗口外观。
 
@@ -505,6 +599,8 @@ async def _launch_window(
     """
     page = None
     if executable and user_data_dir:
+        from src import engine_pool  # noqa: PLC0415（离屏常量与布局同源）
+        pos_left = engine_pool.OFFSCREEN_LEFT if offscreen else left
         for attempt in range(3):
             try:
                 async with ctx.expect_page(timeout=8000) as pinfo:
@@ -516,7 +612,7 @@ async def _launch_window(
                             f"--user-data-dir={user_data_dir}",
                             *url_args,
                             f"--window-size={width},{height}",
-                            f"--window-position={left},0",
+                            f"--window-position={pos_left},0",
                         ],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -582,6 +678,46 @@ async def _calibrate_window(page, left: int, top: int, width: int, height: int) 
     )
 
 
+async def _read_window_bounds(page) -> dict | None:
+    """回读页面所属系统窗口的 bounds（CDP Browser.getWindowBounds）；失败返回 None。"""
+    try:
+        cdp = await page.context.new_cdp_session(page)
+    except Exception:  # noqa: BLE001（页面刚关/会话失效：本轮不记录）
+        return None
+    try:
+        wid = (await cdp.send("Browser.getWindowForTarget")).get("windowId")
+        if wid is None:
+            return None
+        return (await cdp.send("Browser.getWindowBounds", {"windowId": wid})).get("bounds")
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            await cdp.detach()  # 每次采样都释放，避免长跑累积 CDP 会话
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def watch_window_layout(stop, coord, interval: float = 3.0) -> None:
+    """记录两窗的「最后位置」（R-6.85）：低频回读，只在变化时写盘。
+
+    纯读取：不重建、不导航、不关闭窗口，也不改坐标——用户拖动后窗口保持原样，
+    只是把结果记住，供下次启动沿用。
+    """
+    while not stop.is_set():
+        await asyncio.sleep(interval)
+        for role, getter in (("shell", coord.shell), ("collect", coord.collect_win)):
+            page = getter()
+            if page is None:
+                continue
+            b = await _read_window_bounds(page)
+            if not b:
+                continue
+            if window_layout.save(role, b):
+                log.info("窗口位置已记录 %s=(%s,%s %sx%s)", role,
+                         b.get("left"), b.get("top"), b.get("width"), b.get("height"))
+
+
 async def _goto_base_with_retry(page, base) -> None:
     """壳 tab 导航前端（uvicorn 刚起时静态路由未就绪 → 重试 ≤20s）。R-6.36e 拆自 ensure_shell。"""
     last_err = None
@@ -608,8 +744,12 @@ async def _close_matching_tabs(ctx, keep, predicate) -> None:
                 pass
 
 
-async def _promote_shell_to_app_window(ctx, eng, base, win_w, win_h):
-    """应用模式提升壳窗（--app 路由）：成功返回 app_page；不可用返回 None。R-6.36e 拆自 ensure_shell。"""
+async def _promote_shell_to_app_window(ctx, eng, base, bounds):
+    """应用模式提升壳窗（--app 路由）：成功返回 app_page；不可用返回 None。
+
+    R-6.85：新窗离屏创建 → 立即摆到记录位置 → 才置前，避免与初始普通窗口在左半屏
+    重叠闪现（实测冷启动两窗同时在 left=0 停留约 0.26s）。
+    """
     from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
 
     cfts = builtin_cft_candidates()
@@ -617,15 +757,18 @@ async def _promote_shell_to_app_window(ctx, eng, base, win_w, win_h):
         ctx, base,
         user_data_dir=eng.user_data_dir,
         executable=cfts if cfts else None,  # 返回值为单个路径 str（非列表），勿取 [0]
-        left=0, width=win_w, height=win_h,
+        left=bounds["left"], width=bounds["width"], height=bounds["height"],
+        offscreen=True,
     )
     if app_page is None:
         return None
+    await _calibrate_window(
+        app_page, bounds["left"], bounds["top"], bounds["width"], bounds["height"],
+    )
     try:
         await app_page.goto(base, wait_until="domcontentloaded", timeout=12000)
     except Exception:  # noqa: BLE001（--app=base 已带 URL，goto 仅保险）
         pass
-    await _calibrate_window(app_page, 0, 0, win_w, win_h)
     try:
         await app_page.bring_to_front()
     except Exception:  # noqa: BLE001
@@ -667,14 +810,17 @@ async def ensure_shell(base_url: str):
     await _goto_base_with_retry(page, base)
     # R-6.19：导航成功后清理其余空白残留 tab（启动默认页已复用，此处仅清理异常残留）
     await _close_matching_tabs(ctx, page, lambda p: (p.url or "").strip() in ("", "about:blank"))
-    win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+    # R-6.85：壳窗用上次记录的位置（默认左半屏）；初始普通窗此时在屏幕外
+    # （engine_pool._place_account_window），提升新窗也离屏创建，故用户只会看到
+    # 一次「APP 窗口直接出现在目标位置」。
+    sb = engine_pool.window_bounds("shell")
     # R-6.22c：统一走 --app 命令行路由（与采集调试窗口同法）弹应用模式窗口；
     # 路由不可用时退回普通 tab（能力兜底），仅校准。
-    app_page = await _promote_shell_to_app_window(ctx, eng, base, win_w, win_h)
+    app_page = await _promote_shell_to_app_window(ctx, eng, base, sb)
     if app_page is not None:
         page = app_page
     else:
-        await _calibrate_window(page, 0, 0, win_w, win_h)
+        await _calibrate_window(page, sb["left"], sb["top"], sb["width"], sb["height"])
     try:
         await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
                        label="shell.bring_to_front", skip=True)
@@ -1097,8 +1243,10 @@ async def _rebind_if_closed(win: "ShellWindow", base: str) -> bool:
             if p is not None:
                 win.rebind(p)
                 # R-6.22：重绑定目标若是重建的新窗口，校准为左半屏布局
-                win_w, win_h, _, _ = engine_pool.shell_window_geometry()
-                await _calibrate_window(p, 0, 0, win_w, win_h)
+                sb = engine_pool.window_bounds("shell")
+                await _calibrate_window(
+                    p, sb["left"], sb["top"], sb["width"], sb["height"],
+                )
                 # R-6.48i：重绑定目标补标题守护——裸窗口 document 无注入即
                 # 用户实测「登录页 title 变小红书 / 看到标题变化过程」的根因路径。
                 await _ensure_shell_title(p)
@@ -1172,14 +1320,15 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
     """应用模式重建壳窗（--app 路由）；路由不可用退回普通 tab。"""
     from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
 
-    win_w, win_h, _, _ = engine_pool.shell_window_geometry()
+    sb = engine_pool.window_bounds("shell")
     eng = await engine_pool.pool.get("default")
     cfts = builtin_cft_candidates()
     page = await _launch_app_window(
         ctx, base,
         user_data_dir=eng.user_data_dir,
         executable=cfts if cfts else None,
-        left=0, width=win_w, height=win_h,
+        left=sb["left"], width=sb["width"], height=sb["height"],
+        offscreen=True,
     )
     if page is None:
         page = await ctx.new_page()
@@ -1196,7 +1345,7 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
                        label="shell.bring_to_front", skip=True)
     except Exception:  # noqa: BLE001
         pass
-    await _calibrate_window(page, 0, 0, win_w, win_h)
+    await _calibrate_window(page, sb["left"], sb["top"], sb["width"], sb["height"])
     await _ensure_shell_title(page)
     coord.register_shell(page)
     coord.watch(page, is_shell=True)
@@ -1409,8 +1558,8 @@ async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None
         # R-6.84e：不再做「采集调试窗口」标题守护（用户拍板）——两份 title 守护
         # （这份与账号运营窗口）会互相覆盖，标题最终变成「账号名 · 运营窗口」，
         # 按标题认领/分组全部失配。采集窗的标识改由标签组名「采集窗口」与 URL 承担。
-        win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
-        await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
+        cb = engine_pool.window_bounds("collect")
+        await _calibrate_window(t2, cb["left"], cb["top"], cb["width"], cb["height"])
         coord.register_collect_win(t2)
         coord.watch(t2, is_shell=False)
         _watch_collect_win_login(getattr(t2, "page", t2))
@@ -1545,5 +1694,10 @@ async def keep_shell_tab(base_url: str, stop: "threading.Event", on_shell_closed
     # R-6.53z8d：取消 5s 兜底轮询。「壳窗被关=退出应用」由 close 事件驱动
     # （_handle_close → 3s 校验 → _shell_closed_verify）。
     # R-6.72：右窗被关不再自动重建（关窗即中断采集，见 _abort_collect_on_win_close）。
-    # 此处只阻塞等待停止信号，零周期查询。
-    await asyncio.to_thread(stop.wait)
+    # R-6.85：只额外起一个低频位置记录 watcher（纯读取、变化才写盘），
+    # 不做任何窗口守护/重建；停止信号一到随之退出。
+    watcher = asyncio.create_task(watch_window_layout(stop, coord))
+    try:
+        await asyncio.to_thread(stop.wait)
+    finally:
+        watcher.cancel()

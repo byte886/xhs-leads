@@ -167,6 +167,9 @@ class Probe:
             shell_wid,
             tuple(sorted(p["url"] for p in wins[shell_wid]["pages"])) if shell_wid else None,
             tuple(sorted(wins.keys())),
+            # 窗口 bounds 也算变化：验证「采集窗有没有先在左半屏出现再被挪走」
+            # 靠的就是 coordinates 的变化，只看 URL 集会漏掉整个移动过程。
+            tuple(sorted((wid, self._bounds_key(w["bounds"])) for wid, w in wins.items())),
         )
         changed = key != self.last_key
         self.last_key = key
@@ -193,6 +196,14 @@ class Probe:
                 },
             }
             self._emit(out, detail, force=True)
+
+    @staticmethod
+    def _bounds_key(b: dict) -> tuple:
+        """窗口坐标/尺寸的可比较签名（windowState 单列，避免 normal↔maximized 噪声）。"""
+        if not isinstance(b, dict):
+            return ()
+        return (b.get("left"), b.get("top"), b.get("width"), b.get("height"),
+                b.get("windowState"))
 
     def _emit(self, out, obj: dict, force: bool = False) -> None:
         obj.setdefault("t", round(time.time(), 3))
