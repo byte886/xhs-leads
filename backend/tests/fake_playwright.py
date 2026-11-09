@@ -24,6 +24,9 @@ class FakePage:
         self._eval_results: dict[str, Any] = {}
         self._on_navigate = None
         self._handlers: dict[str, list] = {}
+        self._selector_ready: dict[str, bool] = {}
+        self.clicked: list[str] = []
+        self._on_click = None
 
     async def goto(self, url: str, wait_until: str = "load", timeout: int = 30000):
         self.url = url
@@ -74,6 +77,21 @@ class FakePage:
 
     async def bring_to_front(self):
         pass
+
+    def set_selector(self, selector: str, ready: bool):
+        """配置 wait_for_selector 命中（True）或超时（False）。"""
+        self._selector_ready[selector] = ready
+
+    async def wait_for_selector(self, selector: str, timeout: int = 30000):
+        if not self._selector_ready.get(selector, False):
+            # 模拟 Playwright 内部超时（open_contact 统一 except 转 ContactOpenError）
+            raise RuntimeError(f"selector not ready: {selector}")
+        return None
+
+    async def click(self, selector: str, **kw):
+        self.clicked.append(selector)
+        if self._on_click:
+            await self._on_click(selector)
 
     async def set_viewport_size(self, size: dict):
         pass

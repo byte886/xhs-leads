@@ -1797,6 +1797,76 @@ _COMMENT_EXPAND_JS = """() => {
 
 
 # ===========================================================================
+# O1-5 去联系：打开用户主页 → 点聊天按钮 → 落到私信会话页（不代发消息）
+# ===========================================================================
+
+_CONTACT_IM_BTN = "button.xhs-user-im-btn"
+_CHAT_URL_PREFIX = "https://www.xiaohongshu.com/chat?openUid="
+
+
+class ContactOpenError(RuntimeError):
+    """去联系前置失败（主页链接无效 / 聊天按钮没出现 / 私信页没落地），带用户可读原因。"""
+
+
+async def _wait_chat_page(ctx, want_url: str, timeout: float):
+    """点击后等出现 /chat?openUid=<uid> 会话页；超时返回 None。
+
+    平台会复用已存在的同 openUid target（不新开），所以按 URL 匹配、不限新旧。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for pg in ctx.pages:
+            try:
+                if (pg.url or "").startswith(want_url):
+                    return pg
+            except Exception:  # noqa: BLE001（页面还在导航：下轮再看）
+                continue
+        await asyncio.sleep(0.4)
+    return None
+
+
+async def open_contact(profile_url: str, account_id: str = "default") -> str:
+    """在采集窗打开用户主页并点聊天按钮，落到私信会话页，返回会话页 URL。
+
+    工具只把人带到可输入的会话页：不代写话术、不自动发送（用户口径）。
+    任一步没落地就抛 ContactOpenError，由接口转 409 明说，不静默假装成功。
+
+    真机验证（2026-11-09）：主页头部「关注」旁的纯图标按钮 `button.xhs-user-im-btn`
+    点击后会新开 target `/chat?openUid=<uid>`，页内有输入框 `.xhs-im-input-bar-editor`。
+    """
+    if not profile_url or "/user/profile/" not in profile_url:
+        raise ContactOpenError("缺少有效的用户主页链接，无法打开私信")
+    # profile 末段即用户 uid，聊天页用它作 openUid（平台可能复用已存在的同 uid 会话页）
+    uid = profile_url.split("/user/profile/", 1)[1].split("?", 1)[0].strip("/")
+    want_chat = _CHAT_URL_PREFIX + uid
+    ctx = await _ctx(account_id)
+    page = await ctx.new_page()
+    try:
+        await cdp_call(page.goto(profile_url, wait_until="domcontentloaded"),
+                       timeout=CDP_NAV, label="contact.profile", skip=True)
+        try:
+            # 外层 15s > 内部 12s：wait_for_selector 能完整跑完；超时/冻结才真正报错（不 skip）
+            await cdp_call(page.wait_for_selector(_CONTACT_IM_BTN, timeout=12000),
+                           timeout=CDP_NAV, label="contact.im_btn")
+        except Exception as exc:  # noqa: BLE001（playwright 内部超时 / 外层 CdpTimeoutError 同口径）
+            raise ContactOpenError(
+                "用户主页未加载出聊天按钮（可能未登录或被风控拦截）"
+            ) from exc
+        await cdp_call(page.click(_CONTACT_IM_BTN), timeout=CDP_EVAL,
+                       label="contact.im_click")
+        chat_page = await _wait_chat_page(ctx, want_chat, timeout=10)
+        if chat_page is None:
+            raise ContactOpenError("点击聊天按钮后未打开私信会话页")
+        await cdp_call(chat_page.bring_to_front(), timeout=CDP_QUICK,
+                       label="contact.chat_front", skip=True)
+        return chat_page.url
+    except ContactOpenError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ContactOpenError(f"打开私信会话失败：{str(exc)[:80]}") from exc
+
+
+# ===========================================================================
 # 引擎生命周期（server shutdown / 一次性动作）
 # ===========================================================================
 

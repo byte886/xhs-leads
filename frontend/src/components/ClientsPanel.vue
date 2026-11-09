@@ -3,7 +3,7 @@
 // 采集完成/新增线索后由 App.vue 调 refresh() 重新拉取
 import { onMounted, ref } from 'vue'
 import type { ClientUser, ClientsAgg } from '../types'
-import { apiClientsList, apiClientsAgg } from '../api'
+import { apiClientsList, apiClientsAgg, apiContactOpen } from '../api'
 import { saveTextToPath, shortPath } from '../lib/saveApi'
 import SaveDialog from './SaveDialog.vue'
 import { toast } from '../store'
@@ -96,11 +96,23 @@ async function exportClientsCsv() {
   }
 }
 
-/** O1-5 去联系：跳转用户主页，由用户自行沟通（工具不代写话术、不自动发送） */
-function goTalk(c: ClientUser) {
-  if (c.profile) window.open(c.profile, '_blank')
-  // eslint-disable-next-line no-alert
-  alert('已打开该用户主页。工具不提供话术、不代发私信：请自行沟通，注意平台私信限额与导流词红线（详见「获客指引」）。')
+/** O1-5 去联系：后端在采集窗打开用户主页并点聊天按钮，落到私信会话页（工具不代写、不代发）。 */
+const talkingUid = ref('')
+async function goTalk(c: ClientUser) {
+  if (!c.profile) {
+    toast('该客户缺少主页链接，无法打开私信', 'error')
+    return
+  }
+  if (talkingUid.value) return
+  talkingUid.value = c.uid
+  try {
+    const r = await apiContactOpen(c.profile)
+    toast(r.note || '已打开私信会话页')
+  } catch (e) {
+    toast('去联系失败：' + (e as Error).message, 'error')
+  } finally {
+    talkingUid.value = ''
+  }
 }
 
 /** O1-5 获客指引折叠态 */
@@ -120,7 +132,7 @@ defineExpose({ refresh })
         <div class="info-item"><span class="k">线索总数</span><span class="v">{{ agg?.total ?? clSummary().total }}</span></div>
         <div class="info-item"><span class="k">高意向</span><span class="v" style="color:#FF2442">{{ clSummary().high }}</span></div>
         <div class="info-item"><span class="k">留联系方式命中</span><span class="v" style="color:#00A86B">{{ agg?.contact ?? clSummary().contact }}</span></div>
-        <div class="info-item"><span class="k">采集说明</span><span class="v small">高意向置顶；「去联系」跳转用户主页，沟通与话术由你自行完成，工具不代写、不自动发送</span></div>
+        <div class="info-item"><span class="k">采集说明</span><span class="v small">高意向置顶；「去联系」打开私信会话页，沟通与话术由你自行完成，工具不代写、不自动发送</span></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn sm primary" @click="exportClientsCsv">导出线索 CSV</button>
         </div>
@@ -138,7 +150,7 @@ defineExpose({ refresh })
             <ul class="guide-ul">
               <li>对方在评论区主动问需求 = 有对话基础，是优先触达对象</li>
               <li>建议先在其评论区回应引导，再考虑私信（<b>被动回复优先</b>，主动私信限制多、风险高）</li>
-              <li>点「去联系」打开其主页，沟通内容由你自行组织</li>
+              <li>点「去联系」打开与该用户的私信会话页，沟通内容由你自行组织</li>
             </ul>
           </div>
           <div class="guide-block">
@@ -191,7 +203,6 @@ defineExpose({ refresh })
       </div>
       <div class="cl-list">
         <div v-for="c in clients" :key="c.uid" class="cl-row">
-          <div class="cl-av au-ph">{{ (c.nickname || '客')[0] }}</div>
           <div class="cl-main">
             <div class="cl-top">
               <span class="cl-nick">{{ c.nickname || '未知用户' }}</span>
@@ -199,13 +210,15 @@ defineExpose({ refresh })
               <span v-if="c.matched_word" class="cl-word">命中「{{ c.matched_word }}」</span>
               <span v-if="c.ip_location" class="cl-ip">📍 {{ c.ip_location }}</span>
               <span v-if="c.comment_time" class="cl-time">{{ c.comment_time }}</span>
-              <a v-if="c.profile" :href="c.profile" target="_blank" class="cl-link" @click.stop>主页 ↗</a>
             </div>
             <div class="cl-cmt">“{{ (c.sample_comment || '—').slice(0, 90) }}”</div>
             <div class="cl-foot">足迹 {{ c.comment_count }} 次 · 关联 {{ c.note_count }} 篇 · 采集于 {{ (c.created_at || '').slice(0, 10) }}</div>
           </div>
           <div class="cl-act">
-            <button class="btn sm" @click="goTalk(c)">去联系</button>
+            <a v-if="c.profile" :href="c.profile" target="_blank" class="cl-home" @click.stop>主页</a>
+            <button class="cl-talk" :disabled="talkingUid === c.uid" @click="goTalk(c)">
+              {{ talkingUid === c.uid ? '打开中…' : '去联系' }}
+            </button>
           </div>
         </div>
       </div>
@@ -253,13 +266,6 @@ defineExpose({ refresh })
 .cl-row:hover {
   border-color: #e0b36b;
 }
-.cl-av {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  font-size: 16px;
-}
 .cl-main {
   flex: 1;
   min-width: 0;
@@ -300,12 +306,6 @@ defineExpose({ refresh })
   font-size: 11px;
   color: var(--ink-2, #999);
 }
-.cl-link {
-  margin-left: auto;
-  font-size: 12px;
-  color: #b08a4d;
-  text-decoration: none;
-}
 .cl-cmt {
   margin-top: 5px;
   font-size: 12px;
@@ -319,7 +319,33 @@ defineExpose({ refresh })
 }
 .cl-act {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
 }
+.cl-home {
+  font-size: 12px;
+  color: #b08a4d;
+  text-decoration: none;
+}
+.cl-home:hover { text-decoration: underline; }
+.cl-talk {
+  min-width: 76px;
+  padding: 7px 14px;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  background: var(--red);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.cl-talk:hover:not(:disabled) { background: #e51f3a; border-color: #e51f3a; }
+.cl-talk:disabled { opacity: 0.6; cursor: default; }
 /* ===== O1-5 获客指引卡片 ===== */
 .guide-card {
   background: linear-gradient(135deg, #fff9f0, #fff3e0);

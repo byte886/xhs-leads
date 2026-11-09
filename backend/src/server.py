@@ -2362,6 +2362,31 @@ def clients_list(feed_id: str = "", intent: str = ""):
     return {"total": len(ordered), "clients": [dict(r) for r in ordered]}
 
 
+class ContactOpenReq(BaseModel):
+    profile: str
+
+
+@app.post("/api/contact_open")
+async def contact_open(req: ContactOpenReq):
+    """O1-5 去联系：在采集窗打开用户主页并点「聊天」按钮，落到私信会话页（工具不代发消息）。
+
+    任一步没落地返回 409，让前端照原话提示，不静默假装成功。
+    """
+    await _require_login()
+    from src import browser_client
+    try:
+        chat_url = await browser_client.open_contact(req.profile)
+    except browser_client.ContactOpenError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"浏览器操作失败：{e}") from e
+    return {
+        "ok": True,
+        "chat_url": chat_url,
+        "note": "已打开私信会话页，工具不代写、不代发：请自行沟通，注意平台私信限额与导流词红线（详见「获客指引」）",
+    }
+
+
 # ================= 客户库聚合（O1-4）：线索/意向分布/属地TOP/近7天/留联系方式 =================
 def _build_week_timeline(day_counts: dict) -> list:
     """R-6.37a 拆自 clients_agg：近 7 天时间线（含今天往前 7 天，无数据的天补 0）。"""

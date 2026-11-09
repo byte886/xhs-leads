@@ -114,6 +114,15 @@ export async function apiClientsAgg(): Promise<ClientsAgg> {
   return j(await fetch(`${BASE}/api/clients_agg`))
 }
 
+/** O1-5 去联系：后端在采集窗打开用户主页并点聊天按钮，落到私信会话页（不代发消息）。 */
+export async function apiContactOpen(profile: string): Promise<{ ok: boolean; chat_url?: string; note?: string }> {
+  return j(await fetch(`${BASE}/api/contact_open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile }),
+  }))
+}
+
 export async function apiClone(feedId: string): Promise<ClonePayload> {
   return j(await fetch(`${BASE}/api/clone`, {
     method: 'POST',
