@@ -28,6 +28,29 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+class TestCardTypeFilter:
+    """R-6.77：提取层按「图文/视频」兜底过滤（平台筛选点击失败时仍保证结果正确）。"""
+
+    def test_default_or_all_passes(self):
+        note = {"type": "video"}
+        assert bc._card_type_matches(note, None)
+        assert bc._card_type_matches(note, "")
+        assert bc._card_type_matches(note, "全部")
+
+    def test_note_type_wanted(self):
+        assert bc._card_type_matches({"type": "note"}, "图文")
+        assert not bc._card_type_matches({"type": "video"}, "图文")
+        # 卡片缺 type 字段时按图文处理（extract.js 只在有播放图标时才给 video）
+        assert bc._card_type_matches({}, "图文")
+
+    def test_video_type_wanted(self):
+        assert bc._card_type_matches({"type": "video"}, "视频")
+        assert not bc._card_type_matches({"type": "note"}, "视频")
+
+    def test_unknown_want_type_passes(self):
+        assert bc._card_type_matches({"type": "video"}, "其他")
+
+
 class TestSearchRound:
     """单轮：提取→播报→判定→滚动；滚动阶段崩溃必须带归因标记。"""
 
@@ -37,7 +60,7 @@ class TestSearchRound:
         async def fake_cdp(aw, *, timeout=None, label="", skip=False):
             return await aw
 
-        async def fake_drain(page, items, seen):
+        async def fake_drain(page, items, seen, want_type=None):
             items.extend([{"feed_id": "a"}])
             return 1
 
@@ -59,7 +82,7 @@ class TestSearchRound:
                 raise RuntimeError("Target closed")
             return await aw
 
-        async def fake_drain(page, items, seen):
+        async def fake_drain(page, items, seen, want_type=None):
             return 0
 
         monkeypatch.setattr(bc, "cdp_call", fake_cdp)
@@ -247,7 +270,12 @@ class TestPrepareSearchPage:
         got = _run(bc._prepare_search_page("翡翠"))
         assert got is page and applied == [{}] and waits == []
 
-    def test_empty_twice_returns_page_without_reload(self, monkeypatch):
+    def test_search_fail_returns_none_not_recommend_feed(self, monkeypatch):
+        """R-6.77：两次都进不了结果页 → 返回 None，绝不拿 explore 首页推荐流当结果。
+
+        旧行为是「返回 page 继续采」：explore 首页本来就有 30 张卡片，于是用户看到
+        「压根没有采集过程」却采回一堆与关键词无关的笔记（视频也混在里面）。
+        """
         page = _SearchPage()
 
         async def fake_page(_a="default"):
@@ -266,8 +294,7 @@ class TestPrepareSearchPage:
         monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
         monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
-        got = _run(bc._prepare_search_page("翡翠"))
-        assert got is page and page.closed is False
+        assert _run(bc._prepare_search_page("翡翠")) is None
 
     def test_filter_step_wall_raises(self, monkeypatch):
         page, waits = _SearchPage(), [(True, "完成验证")]
@@ -295,3 +322,56 @@ class TestPrepareSearchPage:
         monkeypatch.setattr(bc, "_handle_login_wall", lambda acc, wall: None)
         with pytest.raises(bc.BrowserLoginRequiredError):
             _run(bc._prepare_search_page("翡翠", {"sort": "综合"}))
+
+
+class TestNoteTypeFilter:
+    """R-6.77：笔记类型兜底过滤。
+
+    平台筛选靠点击页面选项实现，点不中就一个筛选都没生效（用户实测「选图文却采到视频」）。
+    提取层这道兜底保证：即使筛选失败，交出去的卡片类型也一定是用户选的那种。
+    """
+
+    def test_default_passes_everything(self):
+        assert bc._card_type_matches({"type": "video"}, "") is True
+        assert bc._card_type_matches({"type": "note"}, "全部") is True
+        assert bc._card_type_matches({"type": "video"}, "全部") is True
+
+    def test_tuwen_excludes_video(self):
+        assert bc._card_type_matches({"type": "note"}, "图文") is True
+        assert bc._card_type_matches({"type": "video"}, "图文") is False
+
+    def test_video_only_keeps_video(self):
+        assert bc._card_type_matches({"type": "video"}, "视频") is True
+        assert bc._card_type_matches({"type": "note"}, "视频") is False
+
+    def test_drain_page_drops_video_and_ads(self, monkeypatch):
+        cards = [
+            {"id": "a" * 24, "type": "note"},
+            {"id": "b" * 24, "type": "video"},
+            {"id": "promo-uuid", "type": "note"},  # 非 24 位 hex：广告位
+        ]
+
+        class _P:
+            async def evaluate(self, js):
+                return cards
+
+        async def fake_inject(page, name):
+            return None
+
+        monkeypatch.setattr(bc.injections, "inject_once", fake_inject)
+        items, seen = [], set()
+        added = _run(bc._drain_page(_P(), items, seen, "图文"))
+        assert added == 1
+        assert [it["type"] for it in items] == ["note"]
+
+
+class TestSearchFailGuard:
+    """R-6.77：搜索失败不能退回首页推荐流。"""
+
+    def test_search_returns_zero_when_prepare_none(self, monkeypatch):
+        async def fake_prepare(*a, **kw):
+            return None
+
+        monkeypatch.setattr(bc, "_search_prepare", fake_prepare)
+        got = _run(bc.search("翡翠", limit=10))
+        assert got["count"] == 0 and got["items"] == []

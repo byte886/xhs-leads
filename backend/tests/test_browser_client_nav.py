@@ -46,6 +46,11 @@ class _FakePage:
     async def evaluate(self, js, *args):
         if "placeholder" in js and "登录探索更多内容" in js:
             return self.needs_login
+        # R-6.77：聚焦探针 / 全选探针要能区分出来，否则假页会把它们都当成坐标结果
+        if "activeElement === el" in js:
+            return self.box is not None
+        if "typeof el.select" in js:
+            return True
         return self.box
 
     async def goto(self, url, **kw):
@@ -114,7 +119,12 @@ class TestSearchByTyping:
     def test_no_box_returns_false(self):
         assert _run(bc._search_by_typing(_FakePage(box=None), "翡翠", "default")) is False
 
-    def test_click_type_enter_and_wait(self, monkeypatch):
+    def test_focus_type_enter_and_wait(self, monkeypatch):
+        """R-6.77：聚焦路径（JS focus 成功就不再坐标点击）。
+
+        坐标点击实测会把焦点落在 BODY，输入的字进不了框、回车无效，
+        页面停在 explore 首页，于是把推荐流当结果采（视频混进来）。
+        """
         p = _FakePage(box={"x": 480, "y": 36})
         seen = {}
 
@@ -129,7 +139,8 @@ class TestSearchByTyping:
         monkeypatch.setattr(bc, "_is_on_search_result", fake_on_search)
         assert _run(bc._search_by_typing(p, "翡翠", "default")) is True
         assert seen["search_page"] is True
-        assert p.rec[0] == ("click", 480, 36)
+        assert ("click", 480, 36) not in p.rec  # 聚焦成功就不走坐标点击
+        assert ("press", "Backspace") in p.rec  # 清掉上次残留关键词
         assert ("type", "翡翠") in p.rec
         assert ("press", "Enter") in p.rec
         assert seen["cards"] is True

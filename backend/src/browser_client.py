@@ -470,6 +470,55 @@ async def _wait_note_cards(page, timeout_s: float = 45) -> tuple[bool, str]:
     return False, ""
 
 
+_FILTER_LABELS = (
+    ("排序依据", "sort"),
+    ("笔记类型", "note_type"),
+    ("发布时间", "time_range"),
+    ("搜索范围", "scope"),
+    ("位置距离", "distance"),
+)
+_FILTER_DEFAULTS = ("综合", "全部", "不限", "")
+
+
+def _wanted_filters(filters: dict) -> list[tuple[str, str]]:
+    """按固定顺序取出要点击的筛选项，跳过默认值。"""
+    return [
+        (label, filters.get(key))
+        for label, key in _FILTER_LABELS
+        if filters.get(key) and filters.get(key) not in _FILTER_DEFAULTS
+    ]
+
+
+async def _open_filter_panel(page) -> None:
+    """把筛选栏滚回视口并展开（React 只认真实鼠标事件，不认 JS el.click()）。"""
+    opened = await page.evaluate(_FILTER_OPEN_JS)
+    if isinstance(opened, dict) and not opened.get("open"):
+        await page.mouse.click(opened["x"], opened["y"])
+    await asyncio.sleep(1.2)
+
+
+async def _pick_filter_point(page, val: str):
+    """轮询等选项渲染出来，再等平滑滚动停稳后重取一次坐标。"""
+    pt = None
+    for _ in range(4):
+        pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
+        if pt:
+            break
+        await asyncio.sleep(0.8)
+    if not pt:
+        return None
+    await asyncio.sleep(0.8)
+    return await page.evaluate(_FILTER_TAG_POINT_JS, val) or pt
+
+
+async def _close_filter_panel(page) -> None:
+    """收起筛选面板，等结果重新加载。"""
+    closer = await page.evaluate(_FILTER_CLOSE_JS)
+    if isinstance(closer, dict) and closer.get("x") is not None:
+        await page.mouse.click(closer["x"], closer["y"])
+    await asyncio.sleep(1.2)
+
+
 async def _apply_filters(page, filters: dict):
     """搜索页应用筛选（排序 / 笔记类型 / 发布时间 / 搜索范围 / 位置距离）。
 
@@ -482,36 +531,18 @@ async def _apply_filters(page, filters: dict):
     于是"选了图文/最新"实际一个筛选都没应用（用户看到 chips 变了、结果仍是视频）。
     现在优先按 data-hp-kind 精确锁定、用真鼠标点坐标；取不到坐标再退回首段文本比较。
     """
-    wanted = [
-        (label, val)
-        for label, val in [
-            ("排序依据", filters.get("sort")),
-            ("笔记类型", filters.get("note_type")),
-            ("发布时间", filters.get("time_range")),
-            ("搜索范围", filters.get("scope")),
-            ("位置距离", filters.get("distance")),
-        ]
-        if val and val not in ("综合", "全部", "不限", "")
-    ]
+    wanted = _wanted_filters(filters)
     if not wanted:
         return
-    for _label, val in wanted:
-        await page.evaluate(_FILTER_OPEN_JS)
-        await asyncio.sleep(1.2)
-        # 点完上一项后页面会重渲染面板，选项可能还没出来：轮询最多 ~3s 再放弃
-        pt = None
-        for _ in range(4):
-            pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
-            if pt:
-                break
-            await asyncio.sleep(0.8)
+    for label, val in wanted:
+        await _open_filter_panel(page)
+        pt = await _pick_filter_point(page, val)
         if pt:
             await page.mouse.click(pt["x"], pt["y"])
         else:
-            log.info("筛选选项未找到 val=%s，跳过该项", val)
+            log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
         await asyncio.sleep(2.5)
-    await page.evaluate(_FILTER_CLOSE_JS)
-    await asyncio.sleep(1.2)
+    await _close_filter_panel(page)
 
 
 # 「筛选」是开关：面板已展开时再点会收起，导致后面找不到选项。
@@ -521,26 +552,31 @@ async def _apply_filters(page, filters: dict):
 _FILTER_OPEN_JS = """() => {
     const vis = [...document.querySelectorAll('div.tags')]
         .filter(e => Number(getComputedStyle(e).opacity) > 0.01).length;
-    if (vis > 5) return true;
-    const byClass = document.querySelector('div.filter');
-    if (byClass) { byClass.click(); return true; }
-    const el = [...document.querySelectorAll('div, span, button')].find(x => {
-        const t = (x.innerText || '').trim();
-        return t.length <= 4 && t.includes('筛选');
-    });
-    if (el) { el.click(); return true; }
-    return false;
+    if (vis > 5) return {open: true};
+    const el = document.querySelector('div.filter')
+        || [...document.querySelectorAll('div, span, button')].find(x => {
+            const t = (x.innerText || '').trim();
+            return t.length <= 4 && t.includes('筛选');
+        });
+    if (!el) return null;
+    el.scrollIntoView({block: 'center', inline: 'nearest'});
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return {open: false, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
 }"""
 
 _FILTER_CLOSE_JS = """() => {
-    const op = [...document.querySelectorAll('[data-hp-kind]')]
-        .find(e => e.getAttribute('data-hp-kind') === 'xhs-filter-op-收起');
-    if (op) { op.click(); return; }
-    const el = [...document.querySelectorAll('div, span, button')].find(x => {
-        const t = (x.innerText || '').trim();
-        return t.length <= 4 && t.includes('收起');
-    });
-    if (el) el.click();
+    const el = [...document.querySelectorAll('[data-hp-kind]')]
+        .find(e => e.getAttribute('data-hp-kind') === 'xhs-filter-op-收起')
+        || [...document.querySelectorAll('div, span, button')].find(x => {
+            const t = (x.innerText || '').trim();
+            return t.length <= 4 && t.includes('收起');
+        });
+    if (!el) return null;
+    el.scrollIntoView({block: 'center', inline: 'nearest'});
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
 }"""
 
 # 按 data-hp-kind 锚点取选项坐标（属性值精确比较，不做选择器拼接，免注入/转义问题）；
@@ -677,16 +713,33 @@ async def _ensure_browse_page(page, account_id: str) -> bool:
 
 
 async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
-    """模拟真人搜索：点搜索框 → 逐字输入 → 回车 → 等卡片。不碰 URL、不刷新。"""
-    box = await cdp_call(page.evaluate(_SEARCH_BOX_JS), timeout=CDP_EVAL, label="search.box")
-    if not box:
-        return False
-    await cdp_call(page.mouse.click(box["x"], box["y"]), timeout=CDP_QUICK, label="search.click")
-    await asyncio.sleep(0.8)
+    """模拟真人搜索：聚焦搜索框 → 清空残留 → 逐字输入 → 回车 → 核对真的进了结果页。
+
+    R-6.77（实机复现）：坐标点击搜索框会让焦点落在 BODY——`elementFromPoint(535,72)`
+    明明是 TEXTAREA（#search-input-in-feeds），点完 activeElement 却是 BODY，输入
+    的文字一个都不进框、回车无效，页面停在 explore。旧代码只看「有没有卡片」，
+    而 explore 首页本来就有 30 张推荐卡，于是把推荐流当成关键词结果入库
+    （用户看到的就是「压根没有采集过程，还混进视频」）。
+    改法：用 JS focus 直接聚焦（实测可靠），聚焦后清空残留再输入。
+    """
+    focused = await cdp_call(page.evaluate(_FOCUS_SEARCH_BOX_JS), timeout=CDP_EVAL,
+                             label="search.focus")
+    log.info("搜索聚焦=%s url=%s", focused, _page_url_now(page))
+    if not focused:
+        # 退路：仍取不到焦点时按坐标点一次，至少不放弃
+        box = await cdp_call(page.evaluate(_SEARCH_BOX_JS), timeout=CDP_EVAL, label="search.box")
+        if not box:
+            return False
+        await cdp_call(page.mouse.click(box["x"], box["y"]), timeout=CDP_QUICK, label="search.click")
+        await asyncio.sleep(0.8)
+    # 上一次采集可能残留关键词：全选后删除，避免拼成「翡翠翡翠」
+    await cdp_call(page.evaluate(_SELECT_FOCUSED_TEXT_JS), timeout=CDP_EVAL, label="search.select")
+    await cdp_call(page.keyboard.press("Backspace"), timeout=CDP_QUICK, label="search.clear")
     await cdp_call(page.keyboard.type(keyword, delay=90), timeout=CDP_EVAL, label="search.type")
     await asyncio.sleep(0.5)
     await cdp_call(page.keyboard.press("Enter"), timeout=CDP_QUICK, label="search.enter")
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
+    log.info("搜索回车后 url=%s cards_ok=%s wall=%s", _page_url_now(page), appeared, wall or "-")
     _check_login_wall(account_id, wall)
     if not appeared:
         return False
@@ -705,6 +758,25 @@ async def _is_on_search_result(page) -> bool:
     except Exception:  # noqa: BLE001
         return False
 
+
+_FOCUS_SEARCH_BOX_JS = """() => {
+  const cands = ['#search-input-in-feeds', 'textarea.search-input', '#search-input', 'input.search-input'];
+  for (const sel of cands) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 20 || r.height < 10) continue;
+    el.focus();
+    return document.activeElement === el;
+  }
+  return false;
+}"""
+
+_SELECT_FOCUSED_TEXT_JS = """() => {
+  const el = document.activeElement;
+  if (el && typeof el.select === 'function') { el.select(); return true; }
+  return false;
+}"""
 
 _LOGO_JS = """() => {
   const el = document.querySelector('a.side-bar-logo-wrapper') || document.querySelector('.header-logo');
@@ -755,17 +827,39 @@ async def _prepare_search_page(keyword: str, filters: dict | None = None,
     appeared = await _search_by_typing(page, keyword, account_id)
     if not appeared:
         appeared = await _search_by_typing(page, keyword, account_id)
+    if not appeared:
+        # R-6.77：搜索没成功还继续读页，采到的是 explore 首页推荐流——与关键词无关、
+        # 类型也不受筛选约束（用户看到「没有采集过程却采到视频」就是这个）。
+        # 宁可判失败，也不能把推荐流当关键词结果入库。
+        log.warning("搜索未进入结果页（停在 %s），判定失败、不采集", _page_url_now(page))
+        return None
     _remember_page(page, account_id)
-    if appeared:
-        await _apply_filters(page, filters or {})
-        if filters:
-            _, wall = await _wait_note_cards(page, timeout_s=20)
-            _check_login_wall(account_id, wall)
+    await _apply_filters(page, filters or {})
+    if filters:
+        _, wall = await _wait_note_cards(page, timeout_s=20)
+        _check_login_wall(account_id, wall)
     return page
 
 
-async def _drain_page(page, items: list, seen: set) -> int:
-    """提取当前页可见卡片并入 items（广告卡过滤 + 去重）。返回新增条数。"""
+def _card_type_matches(it: dict, want_type: str | None) -> bool:
+    """搜索卡片是否符合「图文/视频」筛选（R-6.77 兜底）。
+
+    平台筛选是靠点击页面上的筛选按钮实现的，点击失败或没生效时视频就会混进来。
+    这里在提取层再兜一道：卡片字段是 extract.js 给的 type='video'/'note'，
+    want_type 是前端中文值（图文/视频/全部），「全部」或空恒通过。
+    """
+    if not want_type or want_type == "全部":
+        return True
+    is_video = (it.get("type") or "").lower() == "video"
+    if want_type == "视频":
+        return is_video
+    if want_type == "图文":
+        return not is_video
+    return True
+
+
+async def _drain_page(page, items: list, seen: set, want_type: str | None = None) -> int:
+    """提取当前页可见卡片并入 items（广告卡过滤 + 类型过滤 + 去重）。返回新增条数。"""
     await injections.inject_once(page, "extract")  # 注册表幂等注入：页面已注入则跳过
     got = await page.evaluate("() => xhsExtractSearchNotes()")
     added = 0
@@ -773,6 +867,9 @@ async def _drain_page(page, items: list, seen: set) -> int:
         k = it.get("feed_id") or it.get("id")
         # 过滤推广/广告卡片：真实笔记 id 是 24 位 hex（推广位是 UUID 等其他格式）
         if not re.fullmatch(r"[0-9a-f]{24}", str(k or "")):
+            continue
+        # R-6.77：用户选了图文/视频时，平台筛选没生效也在这里保证结果正确
+        if not _card_type_matches(it, want_type):
             continue
         if k not in seen:
             seen.add(k)
@@ -842,13 +939,13 @@ async def _search_recover(page, keyword: str, filters, account_id: str,
 
 
 async def _search_round(page, items: list, seen: set, limit: int, stale: int,
-                        should_stop, on_progress) -> tuple[int, int, bool]:
+                        should_stop, on_progress, want_type: str | None = None) -> tuple[int, int, bool]:
     """一轮：提取新卡片 → 播报进度 → 终止判定 → 滚动下一页。
 
     返回 (added, stale, done)。done=True 表示本轮后收尾（采满/用户停止/不再增长）。
     假死与崩溃异常直接上抛，由 `_search_loop` 统一处置。
     """
-    added = await cdp_call(_drain_page(page, items, seen),
+    added = await cdp_call(_drain_page(page, items, seen, want_type),
                            timeout=CDP_DRAIN, label="drain_page")
     if on_progress:
         # R-6.53v：回调携带 items 引用——任务级取消收尾时，worker 据此
@@ -881,7 +978,8 @@ async def _search_loop(page, keyword: str, filters, account_id: str, items: list
     while time.time() < deadline:
         try:
             _added, stale, done = await _search_round(
-                page, items, seen, limit, stale, should_stop, on_progress)
+                page, items, seen, limit, stale, should_stop, on_progress,
+                want_type=(filters or {}).get("note_type"))
         except CdpTimeoutError:
             return page, stale  # R-6.53s 假死：绝对超时打断收尾，不空等
         except Exception as exc:  # noqa: BLE001
