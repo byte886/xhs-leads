@@ -215,6 +215,18 @@ def _normalize_exit_type(default_dir: str) -> None:
         pass
 
 
+def _collect_win_executable() -> str | None:
+    """采集调试窗命令行路由用的内置 CFT 路径；拿不到就 None（退 window.open）。
+
+    R-6.83：右窗要标准浏览器外观（地址栏/标签栏），只能靠命令行 `--new-window`
+    路由，因此建窗时必须带上可执行路径。
+    """
+    try:
+        return builtin_cft_candidates()
+    except Exception:  # noqa: BLE001（打包/权限异常不该阻断建窗）
+        return None
+
+
 def _clear_session_restore(user_data_dir: str) -> None:
     """启动前清理 Chrome 会话恢复（R-6.48s / R-6.49b）。
 
@@ -856,16 +868,10 @@ class AccountEngine:
             # 用户观感「主窗瞬间跳小红书再切回」（主窗 URL 全程未变，纯窗口覆盖）。
             # 壳窗位置由 keeper 守护（左半），采集窗位置由 open_collect_window 内部校准。
             src_page = ctx.pages[0]
-            executable = None
-            try:
-                cfts = builtin_cft_candidates()
-                if cfts:
-                    executable = cfts
-            except Exception:  # noqa: BLE001
-                executable = None
             page = await shell_window.open_collect_window(
                 ctx, src_page, url="https://www.xiaohongshu.com/explore",
-                user_data_dir=self.user_data_dir, executable=executable,
+                user_data_dir=self.user_data_dir,
+                executable=_collect_win_executable(),
             )
             self._task_page = page
             return page

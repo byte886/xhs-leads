@@ -56,54 +56,82 @@ async def open_collect_window(
     user_data_dir: str | None = None,
     executable: str | None = None,
 ):
-    """R-6.21b 采集独立窗口：**应用模式**（无地址栏/无标签条）+ 调试窗口标题。
+    """R-6.83 采集独立窗口：**标准浏览器窗口**（保留地址栏/标签栏）+ 调试窗口标题。
+
+    R-6.83 用户拍板：右窗不再封装成 APP 形态，要留出地址栏等浏览器特征
+    （与 R-6.49c 当时「要 app 形态、不要地址栏」相反，以最新要求为准）；
+    `--app` 应用模式从此只留给壳窗口（APP 主体）。
 
     双窗口形态：窗口一=APP/登录（壳窗口应用模式，keep_shell_tab 监护固定不可关）；
-    窗口二=采集（应用模式独立 CFT 窗口，同引擎同 profile —— 登录态/Cookie 完全
-    共享、CDP 可控），由设置开关 collect_tab_visible 控制开/关。
+    窗口二=采集（标准 CFT 窗口，同引擎同 profile —— 登录态/Cookie 完全共享、
+    CDP 可控），由设置开关 collect_tab_visible 控制开/关。
     R-6.73 用户拍板（方案 A）：窗口二被手动关闭后**不自动重建**，且关窗即中断本次
     采集；要接着采就重新点「开始采集」——collect_start 走 engine.new_page() 天然
     会新建一页。
 
-    应用模式实现：Chrome 无「为既有 target 创建 app 窗口」API，window.open 只能
-    开普通窗口（带地址栏/标签条）。采用**命令行路由**：向已运行的引擎实例
-    （同 --user-data-dir 单实例锁）传 `--app=<url>`，Chrome 会让现有实例弹出
-    **应用模式新窗口**（实测 CFT 156 生效），Playwright 对同 context 新 target
-    自动 attach（expect_page 捕获）。窗口尺寸沿用引擎 --window-size=1280,800。
-    标题跟随 document.title——采集页为真实小红书页，注入轻量 title 守护显示
-    「XHS Leads · 采集调试窗口」（SPA 导航重设 title 由 interval 覆盖）。
-    命令行路由不可用时（无 CFT/实例未起）退回 window.open 普通窗口（能力兜底）。
+    实现（优先→兜底）：
+    ① 命令行转交 `--new-window <url>`：Chrome 在现有实例里开**标准窗口**，
+       带地址栏/标签栏/前进后退（实测 app 窗 innerHeight 1112、标准窗 1053，
+       差 87px 就是浏览器 chrome）；Playwright 对同 context 新 target 自动 attach。
+    ② window.open：同 context 新窗口，但带 features 时 Chrome 不给地址栏。
+    ③ 引擎内新页：拿不到独立窗口时的能力兜底。
+    窗口几何统一由 CDP setWindowBounds 后置校准到右半屏（命令行/features 的尺寸
+    参数都不可靠）。标题跟随 document.title——采集页为真实小红书页，注入轻量
+    title 守护显示「XHS Leads · 采集调试窗口」（SPA 导航重设 title 由 interval 覆盖）。
     """
-    page = None
     from src import engine_pool  # noqa: PLC0415（与文件内其他延迟导入一致）
 
+    # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
+    win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
+    page = await _create_collect_page(
+        ctx, shell, url, user_data_dir=user_data_dir, executable=executable,
+        win_w=win_w, win_h=win_h, win_left=win_left,
+    )
+    try:
+        await page.wait_for_load_state("domcontentloaded", timeout=12000)
+    except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
+        pass
+    await _ensure_debug_title(page)
+    await _calibrate_window(page, win_left, 0, win_w, win_h)
+    try:
+        await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
+                       label="shell.bring_to_front", skip=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return page
+
+
+async def _create_collect_page(
+    ctx, shell, url: str, *, user_data_dir, executable, win_w, win_h, win_left,
+):
+    """建采集调试窗的页（三条路径选一，R-6.83）：
+    ① 命令行 `--new-window` 标准窗口（带地址栏/标签栏）；
+    ② window.open 同 context 新窗口（Chrome 多不给地址栏）；
+    ③ 引擎内新页（拿不到独立窗口时的能力兜底）。
+    """
     if executable and user_data_dir:
-        # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
-        win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
-        page = await _launch_app_window(
+        page = await _launch_plain_window(
             ctx, url, user_data_dir=user_data_dir, executable=executable,
             left=win_left, width=win_w, height=win_h,
         )
-    if page is None:
+        if page is not None:
+            return page
+    try:
         async with ctx.expect_page(timeout=8000) as pinfo:
-            win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
             await shell.evaluate(
                 "(u) => window.open(u, 'xhs_collect', "
                 f"'width={win_w},height={win_h},left={win_left},top=0')",
                 url,
             )
         page = await pinfo.value
+    except Exception as e:  # noqa: BLE001（window.open 被拦：退化到引擎内新页）
+        log.warning("采集调试窗 window.open 未返回新页——退化到引擎内新页: %r", e)
+        page = None
+    if page is not None:
+        return page
+    page = await ctx.new_page()
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=12000)
-    except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
-        pass
-    await _ensure_debug_title(page)
-    # R-6.22 双窗口左右分屏：采集调试窗口放主屏右半（等宽并排不重叠）
-    win_w, win_h, _, win_left = engine_pool.shell_window_geometry()
-    await _calibrate_window(page, win_left, 0, win_w, win_h)
-    try:
-        await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
-                       label="shell.bring_to_front", skip=True)
+        await page.goto(url, wait_until="domcontentloaded", timeout=12000)
     except Exception:  # noqa: BLE001
         pass
     return page
@@ -476,11 +504,16 @@ def current_shell_page():
     return _COORD.shell() if _COORD is not None else None
 
 
-async def _launch_app_window(
+async def _launch_window(
     ctx, url: str, *, user_data_dir: str, executable: str,
-    left: int, width: int, height: int,
+    left: int, width: int, height: int, app_mode: bool = True,
 ):
-    """R-6.22c 应用模式窗口（无菜单栏/标签栏/地址栏）：--app 命令行路由。
+    """命令行路由开窗口，app_mode 决定窗口外观。
+
+    - app_mode=True：`--app=<url>` 应用模式（无菜单栏/标签栏/地址栏），壳窗专用；
+    - app_mode=False：`--new-window <url>` 标准窗口（带地址栏/标签栏/前进后退），
+      R-6.83 用户拍板采集调试窗走这条（实测 innerHeight 比 app 窗少 87px =
+      标题栏+标签栏+地址栏）。
 
     Chrome 无「为既有 target 创建 app 窗口」API；向已运行实例（同
     --user-data-dir 单实例锁）传 `--app=<url>`，现有实例会弹出应用模式新窗口，
@@ -494,11 +527,13 @@ async def _launch_app_window(
         for attempt in range(3):
             try:
                 async with ctx.expect_page(timeout=8000) as pinfo:
+                    # R-6.83：--app 只给壳窗；采集调试窗用 --new-window 换标准外观。
+                    url_args = [f"--app={url}"] if app_mode else ["--new-window", url]
                     subprocess.Popen(
                         [
                             executable,
                             f"--user-data-dir={user_data_dir}",
-                            f"--app={url}",
+                            *url_args,
                             f"--window-size={width},{height}",
                             f"--window-position={left},0",
                         ],
@@ -510,7 +545,8 @@ async def _launch_app_window(
             except Exception as e:  # noqa: BLE001（路由失败：重试，仍失败则调用方兜底）
                 import traceback as _tb
                 log.warning(
-                    f"--app 窗口路由失败（第{attempt + 1}/3 次）: {e!r}\n"
+                    f"{'--app' if app_mode else '--new-window'} 窗口路由失败"
+                    f"（第{attempt + 1}/3 次）: {e!r}\n"
                     f"  cwd={os.getcwd()} executable={executable!r}\n"
                     f"  user_data_dir={user_data_dir!r} url={url!r}\n"
                     f"  {''.join(_tb.format_exception_only(type(e), e)).strip()}",
@@ -518,6 +554,16 @@ async def _launch_app_window(
                 )
                 await asyncio.sleep(1.5)
     return page
+
+
+async def _launch_app_window(ctx, url: str, **kw):
+    """`--app` 应用模式（无菜单栏/标签栏/地址栏）：壳窗口专用。"""
+    return await _launch_window(ctx, url, app_mode=True, **kw)
+
+
+async def _launch_plain_window(ctx, url: str, **kw):
+    """`--new-window` 标准窗口（带地址栏/标签栏/前进后退）：采集调试窗专用（R-6.83）。"""
+    return await _launch_window(ctx, url, app_mode=False, **kw)
 
 
 async def _calibrate_window(page, left: int, top: int, width: int, height: int) -> None:
@@ -1402,21 +1448,15 @@ async def _keeper_setup_collect_win(ctx, eng, coord, engine_pool, config):
             return
         for _attempt in range(2):
             try:
-                # R-6.49c：启动路径 采集窗 走 open_collect_window 应用模式（--app 无地址栏/标签条），
-                # 与采集路径形态一致——不再 new_page 建普通 tab（带地址栏，用户反馈
-                # 「采集调试窗口变了、出现地址栏、不是 app 形态」）。
+                # R-6.83：采集调试窗走标准浏览器窗口（保留地址栏/标签栏），
+                # 与采集路径形态一致；--app 应用模式只留给壳窗口（APP 主体）。
                 from src.engine_types import builtin_cft_candidates  # noqa: PLC0415
-                _cfts = builtin_cft_candidates()
-                # R-6.53p：builtin_cft_candidates() 返回 str（单个路径）而非列表——
-                # 旧写法 _cfts[0] 取到首字符 '/'，Popen 用 '/' 当引擎路径 →
-                # PermissionError(13) → 初始 采集窗（login-hint 窗）创建 3 次全失败。
-                _exec = _cfts if _cfts else None
                 page = await open_collect_window(
                     ctx,
                     coord.shell(),
                     url=_t2_url,
                     user_data_dir=eng.user_data_dir,
-                    executable=_exec,
+                    executable=builtin_cft_candidates(),
                 )
                 # open_collect_window 已内建 goto/login-hint、标题守护、窗口校准
                 coord.register_collect_win(page)

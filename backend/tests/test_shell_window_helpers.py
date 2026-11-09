@@ -506,11 +506,15 @@ class _ExpectPage:
 
 
 class _CtxExpect:
-    def __init__(self, page):
+    def __init__(self, page, new_page=None):
         self._page = page
+        self._new_page = new_page
 
     def expect_page(self, timeout=None):
         return _ExpectPage(self._page)
+
+    async def new_page(self):
+        return self._new_page
 
 
 class _ShellEval:
@@ -528,27 +532,37 @@ def _pin_geometry(monkeypatch):
                         lambda: (960, 800, 0, 960))
 
 
-def test_open_collect_window_uses_app_mode(monkeypatch):
-    """有内置 CFT + user_data_dir：走命令行 app 模式（无地址栏），不退回 window.open。"""
+def test_open_collect_window_uses_plain_window(monkeypatch):
+    """R-6.83 用户拍板：采集调试窗要标准浏览器外观（地址栏/标签栏）。
+    带 CFT 路径时必须走 `--new-window` 命令行路由，绝不能再走 `--app`。"""
     _pin_geometry(monkeypatch)
     monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
 
-    async def _fake_launch(ctx, url, **kw):
+    seen = {}
+
+    async def _fake_plain(ctx, url, **kw):
+        seen["kw"] = kw
         return _PgFull(url)
 
-    monkeypatch.setattr(sw, "_launch_app_window", _fake_launch)
+    async def _boom(ctx, url, **kw):
+        raise AssertionError("R-6.83 后采集窗不再走 --app 应用模式")
+
+    monkeypatch.setattr(sw, "_launch_plain_window", _fake_plain)
+    monkeypatch.setattr(sw, "_launch_app_window", _boom)
     shell = _ShellEval()
     p = asyncio.run(sw.open_collect_window(
         _CtxExpect(None), shell, url="https://www.xiaohongshu.com/explore",
         user_data_dir="/tmp/udd", executable="/tmp/cft"))
     assert isinstance(p, _PgFull)
+    assert seen, "必须走 --new-window 命令行路由"
+    assert seen["kw"].get("user_data_dir") == "/tmp/udd"
+    assert shell.calls == [], "走命令行路由时不该退回 window.open"
     assert p.load_calls == 1
-    assert shell.calls == []          # 没走兜底 window.open
     assert p.fronted is True          # 建完置前，用户能看见
 
 
 def test_open_collect_window_falls_back_to_window_open(monkeypatch):
-    """命令行路由不可用（无 CFT）：退回 window.open 普通窗口兜底。"""
+    """没有 CFT 路径（无命令行路由）：退回 window.open 开独立窗口。"""
     _pin_geometry(monkeypatch)
     monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
     page = _PgFull()
@@ -557,7 +571,16 @@ def test_open_collect_window_falls_back_to_window_open(monkeypatch):
     assert p is page
     assert shell.calls, "兜底路径必须真的窗口化"
     assert "window.open" in shell.calls[0][0]
-    assert p.load_calls == 1
+
+
+def test_open_collect_window_falls_back_to_new_page(monkeypatch):
+    """window.open 没吐出新页（被拦/弹窗策略吃掉）：退化到引擎内新页，不抛给上层。"""
+    _pin_geometry(monkeypatch)
+    fallback = _PgFull()
+    shell = _ShellEval()
+    p = asyncio.run(sw.open_collect_window(
+        _CtxExpect(None, new_page=fallback), shell))
+    assert p is fallback
 
 
 def test_launch_app_window_success(monkeypatch):
