@@ -504,6 +504,16 @@ def current_shell_page():
     return _COORD.shell() if _COORD is not None else None
 
 
+def current_collect_page():
+    """engine_pool.new_page 优先复用的采集窗页（R-6.84b）。
+
+    复用而不是另开 tab：采集窗里只留一个标签，窗口标题恒为「XHS Leads · 采集调试窗口」，
+    内置扩展才能稳定把它收进「采集窗口」组；否则同一窗口里会多出一个组外标签。
+    协调器未就绪/采集窗已关闭返回 None（调用方按原路径新建）。
+    """
+    return _COORD.collect_win() if _COORD is not None else None
+
+
 async def _launch_window(
     ctx, url: str, *, user_data_dir: str, executable: str,
     left: int, width: int, height: int, app_mode: bool = True,

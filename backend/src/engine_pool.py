@@ -63,6 +63,10 @@ def probe_screen_size() -> tuple[int, int]:
 MIN_WIN_W = 640
 MIN_WIN_H = 480
 
+# 采集调试窗的恒定标题（与 injections._COLLECT_DEBUG_TITLE_JS 的 T 一致）。
+# 既用于按标题认领采集窗页（R-6.84b 单标签），也是内置扩展分组的匹配依据。
+COLLECT_DEBUG_TITLE = "XHS Leads · 采集调试窗口"
+
 def shell_window_geometry() -> tuple[int, int, int, int]:
     """双窗口并排布局（R-6.22，R-6.80 高度改为按屏幕自适应）。
 
@@ -741,6 +745,34 @@ class AccountEngine:
                 pass
         return None
 
+    async def _reusable_collect_page(self, ctx):
+        """R-6.84b：可复用的采集窗页（同 context、未关闭），否则 None。
+
+        两级判定：先认协调器登记的采集窗引用（keeper 建窗时写入），取不到再按恒定标题
+        在 context 里认领——标题由 init script 守护（injections._COLLECT_DEBUG_TITLE_JS），
+        跨导航不变，是本进程里最稳的「这就是采集窗」信号。
+        跨账号（context 不同）一律不复用，避免 A 账号的采集跑进 B 账号窗口。
+        """
+        try:
+            from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
+
+            page = shell_window.current_collect_page()
+        except Exception:  # noqa: BLE001（协调器未就绪：退到标题认领）
+            page = None
+        if page is not None:
+            try:
+                if not page.is_closed() and getattr(page, "context", None) == ctx:
+                    return page
+            except Exception:  # noqa: BLE001
+                pass
+        for pg in ctx.pages:
+            try:
+                if (await pg.title()).startswith(COLLECT_DEBUG_TITLE):
+                    return pg
+            except Exception:  # noqa: BLE001（页在导航/已关：跳过）
+                continue
+        return None
+
     async def new_page(self):
         """取一个可用页面：优先复用该账号缓存的【任务 tab】（同 tab 导航覆盖，
         从机制上消除「反复开关 tab」的观感）；无缓存则**在独立采集窗口**新建，
@@ -760,6 +792,14 @@ class AccountEngine:
                 pass
             self._task_page = None
         ctx = await self.context()
+        # R-6.84b 采集窗单标签：keeper 已建好采集窗时直接复用它当任务页，不再另开 tab。
+        # 同一窗口里多一个组外标签会破坏「采集窗口」组的完整性，也让窗口标题在
+        # 「采集调试窗口」与「运营窗口」之间来回跳。复用失败（未登记/已关/跨账号）走原路径。
+        reused = await self._reusable_collect_page(ctx)
+        if reused is not None:
+            self._task_page = reused
+            log.info("账号 %s 复用采集窗页作为任务页（单标签）", self.account_id)
+            return reused
         # R-6.22g（用户约定）：未登录 / 风控需验证时**不创建独立采集调试窗口**——
         # 右窗只在登录有效时用于采集调试；未登录时登录引导统一由左 APP ForceLogin
         # 承接（避免右窗直接弹出小红书平台登录层造成困惑）。任务页退回引擎内新页
