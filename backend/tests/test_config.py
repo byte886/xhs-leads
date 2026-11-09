@@ -1,4 +1,5 @@
-"""config.py 特征测试（R-6.36b：路径规范化/配置合并/端口策略现行行为固化）。"""
+"""config.py 特征测试（路径规范化/配置合并/端口策略现行行为固化）。"""
+import json
 import os
 
 import pytest
@@ -80,17 +81,19 @@ def test_read_json_corrupted_returns_empty(tmp_path):
     assert config._read_json(f) == {}
 
 
-# ------------------------------------------------ engine_port / front_port / mode
+# ------------------------------------------------ engine_port / front_port
 
-def test_engine_port_env_override(monkeypatch):
-    monkeypatch.setenv("XHS_PROFILE_PORT", "9333")
+def test_engine_port_reads_config(monkeypatch, tmp_path):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"engine_port": 9333}), encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_FILE", f)
     assert config.engine_port() == 9333
 
 
-def test_engine_port_env_bad_falls_through(monkeypatch):
-    monkeypatch.setenv("XHS_PROFILE_PORT", "notaport")
-    monkeypatch.delenv("XHS_SHELL_URL", raising=False)
-    # 回退到默认值
+def test_engine_port_bad_value_falls_back(monkeypatch, tmp_path):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"engine_port": "notaport"}), encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_FILE", f)
     assert isinstance(config.engine_port(), int)
 
 

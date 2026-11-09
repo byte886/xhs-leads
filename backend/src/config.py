@@ -4,9 +4,7 @@
 - 读取优先级：环境变量 > data/config.json > 默认值
 - 路径一律 ~ 相对存储、读取时 expanduser（可移植：换用户/换机不失效）
 - 账号注册表 data/accounts.json：多账户引擎池的数据源（每账号独立 user_data_dir）
-- 引擎端口支持动态探测（生产独立 App 形态），XHS_PROFILE_PORT 可强制指定
-- 向后兼容：XHS_BROWSER_MODE / XHS_PROFILE_PORT / XHS_PROFILE_DIR 环境变量仍生效
-  （映射到 default 账号），现有调用方零改动。
+- 所有账号 profile 统一放 <数据目录>/accounts/<账号名>
 
 用法示例：
     from src import config
@@ -94,7 +92,7 @@ def resolve_account_dir(raw: str | None) -> str:
 # 通用配置（config.json）：引擎/端口/行为参数
 # ---------------------------------------------------------------------------
 _DEFAULTS = {
-    "engine_port": 9223,          # 引擎调试端口（XHS_PROFILE_PORT 可覆盖）
+    "engine_port": 9223,          # 引擎调试端口
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
     "headless": False,            # R-6.16 路线 A：壳=CFT 引擎窗口（CDP 可控），常态有头；engine_window 可显式切
@@ -159,14 +157,11 @@ def _port_free(port: int) -> bool:
 
 
 def engine_port() -> int:
-    """引擎调试端口：XHS_PROFILE_PORT > config.engine_port。"""
-    env = os.environ.get("XHS_PROFILE_PORT")
-    if env:
-        try:
-            return int(env)
-        except ValueError:
-            pass
-    return int(get_config().get("engine_port", 9223))
+    """引擎调试端口：config.engine_port（默认 9223；非法值回退默认）。"""
+    try:
+        return int(get_config().get("engine_port", 9223))
+    except (TypeError, ValueError):
+        return 9223
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +197,7 @@ def _alloc_account_port(account_id: str) -> int:
 def account_debug_port(account_id: str) -> int:
     """该账号独占的 CDP 调试端口。
 
-    default：engine_port()（环境变量 XHS_PROFILE_PORT / config.engine_port 可覆盖）。
+    default：engine_port()（config.engine_port，默认 9223）。
     其他：accounts.json 的 debug_port；缺失或与他号冲突则重新分配并回写。
 
     注意：端口已被本账号引擎监听时不再"探测空闲"改号——那会导致每次启动端口漂移，
@@ -317,17 +312,10 @@ def active_account() -> str:
 
 
 def default_user_data_dir() -> str:
-    """default 账号的 user_data_dir：XHS_PROFILE_DIR > 旧 cdp_config > accounts/default（相对数据目录）。
+    """default 账号的 user_data_dir：<数据目录>/accounts/default。
 
-    R-6.59 归一：所有账号 profile 统一放 <数据目录>/accounts/<账号名>，default 不再特殊；
-    历史 data/profile 由迁移搬到 accounts/default，登录态随目录一起走。
+    所有账号 profile 统一放 <数据目录>/accounts/<账号名>，default 不特殊。
     """
-    env = os.environ.get("XHS_PROFILE_DIR")
-    if env:
-        return expand(env)
-    old = _read_json(DATA_DIR / "cdp_config.json").get("profile_dir")
-    if old:
-        return expand(old)
     return f"{ACCOUNTS_DIR_NAME}/default"
 
 

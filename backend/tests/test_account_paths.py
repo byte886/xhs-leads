@@ -44,10 +44,8 @@ def test_new_account_stores_relative_path(monkeypatch, tmp_path):
     assert acc["user_data_dir"] == "accounts/zhubao_main"
 
 
-def test_default_account_dir_is_relative(monkeypatch):
-    """default 不再特例为 data/profile，默认 accounts/default。"""
-    monkeypatch.delenv("XHS_PROFILE_DIR", raising=False)
-    monkeypatch.setattr(config, "_read_json", lambda _p: {})
+def test_default_account_dir_is_relative():
+    """default 不特殊，固定 accounts/default。"""
     assert config.default_user_data_dir() == "accounts/default"
 
 
