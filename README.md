@@ -48,7 +48,7 @@ bash scripts/packaging/build_mac.sh
 | 后端模块与测试 | [`backend/README.md`](backend/README.md) |
 | 前端工程与组件 | [`frontend/README.md`](frontend/README.md) |
 | macOS 壳与打包 | [`scripts/packaging/README.md`](scripts/packaging/README.md) |
-| UI 自动化测试（t / e1 / b 系列） | [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md) |
+| UI 验收清单 | [`docs/ui-test-checklist.md`](docs/ui-test-checklist.md) |
 
 ## 提交前检查（每轮 R 批强制）
 
@@ -62,14 +62,9 @@ bash /Users/wenjiechen/Doubao/skills/clean-code-gauntlet/tooling/bin/quality-che
 
 （gates 配置：[`quality-gates/gates.yaml`](quality-gates/gates.yaml)、[`tools/python.yaml`](quality-gates/tools/python.yaml)、[`tools/typescript.yaml`](quality-gates/tools/typescript.yaml)；等价变异体登记 [`EQUIVALENT-MUTANTS.md`](EQUIVALENT-MUTANTS.md)。）
 
-## UI 回归（一键入口）
+## UI 验收
 
-```bash
-# 一键 UI 回归（登录 e2e + smoke + 启动未登录校验）
-bash scripts/ui_tests/run_all.sh
-```
-
-入口脚本：[`scripts/ui_tests/run_all.sh`](scripts/ui_tests/run_all.sh)、[`g4_login_e2e_skeleton.py`](scripts/ui_tests/g4_login_e2e_skeleton.py)、[`smoke_login_ui.py`](scripts/ui_tests/smoke_login_ui.py)、[`startup_unlogged_verify.py`](scripts/ui_tests/startup_unlogged_verify.py)；说明见 [`scripts/ui_tests/README.md`](scripts/ui_tests/README.md)。
+真机验收按 [`docs/ui-test-checklist.md`](docs/ui-test-checklist.md) 手工+脚本执行：启动应用 → 搜索采集 → 核对卡片数 == DB 行数 → 停止后无残留采集页。自动化断言走 `backend/tests`（pytest）+ 前端 vitest，UI 行为由真机冒烟守护。
 
 ## 常用命令
 

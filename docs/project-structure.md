@@ -33,10 +33,8 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   └── dist/                  # 构建产物（打包进 .app，不入库）
 ├── scripts/                   # 脚本与壳（非业务代码）
 │   ├── packaging/             # macOS 壳三件套（launcher.py / xhs_leads.spec / build_mac.sh）
-│   ├── ui_tests/              # UI 自动化（t 系列 headless + e1 系列真实态，见其 README）
 │   └── gen_license.py         # 激活码签发工具
 ├── docs/                      # PRD / 需求 / 质检 / 阶段门文档（立项调研已收敛进 PRD §10.1）
-├── data/                      # 开发态本地数据目录（账号/采集/cookie/激活码，全部不入库）
 ├── .github/                   # CI 工作流（quality-gates）
 ├── constitution/ roles/       # 多 Agent 协作提示词（engineering/project/workflow + 六角色）
 ├── docker/                    # 历史容器资产（当前交付无 Docker）
@@ -89,12 +87,6 @@ cd frontend && npm install && npm run build        # → frontend/dist/
 # macOS 壳打包（含前端重建；可加 --no-frontend-build 跳过）
 bash scripts/packaging/build_mac.sh                # → dist/XHSLeads.app
 
-# UI 回归（t 系列 headless，不依赖登录）
-bash scripts/ui_tests/run_all.sh                   # 当前基线 PASS=9 FAIL=0 SKIP=2
-
-# e1 真实链路（连本机引擎实例 9223，同一登录态 profile；无需另开外部可见 Chrome）
-backend/.venv/bin/python scripts/ui_tests/e1_s1_filters.py   # s1–s6 逐个
-
 # .app 冒烟（免浏览器）
 CZ_NO_BROWSER=1 dist/XHSLeads.app/Contents/MacOS/XHSLeads
 ```
@@ -106,5 +98,5 @@ CZ_NO_BROWSER=1 dist/XHSLeads.app/Contents/MacOS/XHSLeads
 | 壳构成 / 打包 / 冒烟细节 | `scripts/packaging/README.md` |
 | 后端模块职责 / 测试写法 | `backend/README.md` |
 | 前端工程 / 组件 / 构建 | `frontend/README.md` |
-| UI 测试体系（t/e1/b 系列） | `scripts/ui_tests/README.md` |
+| UI 验收清单 | `docs/ui-test-checklist.md` |
 | PRD / 调研 / 质检历史 | `docs/`（research/、project/ 子目录） |

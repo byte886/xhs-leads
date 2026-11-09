@@ -166,4 +166,4 @@
 - AI 文稿真实生成：依赖用户自备 LLM Key；按钮门控/未配置灰态已自动化，生成质量不属 UI 回归范畴。
 
 ## 四、建议补测后回归基线
-t01-t11 + e1_s1-s6 + b1-b11（补测脚本建议放 scripts/ui_tests/b1_batch.py / b2_draft_img.py / b3_cookie_stop.py）
+真机 UI 自动化冒烟（启动 → 采集 → 停止；断言以 pytest + vitest 为准）

@@ -156,14 +156,14 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 | TS3 | 采集遇登录墙→扫码恢复 | 风控态点采集 → error → ForceLogin → 去登录 → 扫码 → 回 APP → 重采 | 全链 PASS | 历史 PASS（真实扫码已验证） |
 | TS4 | 硬风控词（B1 修复前） | 触发非软风控词 | 当前 24h 熔断；修复后 = 等同软处理 | 待修复后验证 |
 | TS5 | 同关键词立即重启 | 同 keyword 连点两次 | 均 200（R-6.22h） | PASS |
-| TS6 | 运行中停止 | 采集中点「停止」 | stopped，不落错数据 | **PASS**（`c02_ui_collect_pipeline.py stop` 同 TS8 一并验证：状态回「空闲」、卡片不增、DB 无多余行） |
+| TS6 | 运行中停止 | 采集中点「停止」 | stopped，不落错数据 | **PASS**（stop 场景 同 TS8 一并验证：状态回「空闲」、卡片不增、DB 无多余行） |
 | TS7 | 运行中被踢（T3） | 采集期间引擎被踢 | kicked 感知 → ForceLogin 弹 → 扫码恢复 | 待验证 |
-| TS8 | 停止后三方一致 | 采集中点「停止」 | UI 卡片数 == DB 行数 == 停止瞬间计数 | **PASS**（`scripts/ui_tests/c02_ui_collect_pipeline.py stop`，2026-11-06 复跑：22s 1 条 / 32s 2 条 → 停止 → UI 2 = DB 2） |
-| TS9 | 自动采满 | limit=3 正常采集 | 卡片逐条出现后自动收尾 done，三处同为 3 | **PASS**（同脚本 `c02_ui_collect_pipeline.py auto`，2026-11-06 复跑：22s/32s/42s 各 1 条 → 卡片 3 = limit 3 = DB 3） |
+| TS8 | 停止后三方一致 | 采集中点「停止」 | UI 卡片数 == DB 行数 == 停止瞬间计数 | **PASS**（真机脚本 stop（已退役），2026-11-06 复跑：22s 1 条 / 32s 2 条 → 停止 → UI 2 = DB 2） |
+| TS9 | 自动采满 | limit=3 正常采集 | 卡片逐条出现后自动收尾 done，三处同为 3 | **PASS**（同脚本 auto 场景，2026-11-06 复跑：22s/32s/42s 各 1 条 → 卡片 3 = limit 3 = DB 3） |
 | TS10 | saved=0 全被拒收 | 候选均缺 `feed_id` | done +「未采集到有效数据（候选均缺少笔记 ID）」且 DB 0 行 | 待验证（`_rank_and_insert` 单测可覆盖） |
 | TS11 | 搜索页空壳 reload | 平台空响应（无 note-item） | 页内 reload ≤2 次后恢复卡片，不空跑 | 待验证 |
-| TS12 | 停止真正停 CDP | 点停止后观察引擎窗 | 采集窗 CDP 行为停止、无残留导航/滚动 | **PASS**（`scripts/ui_tests/c02b_stop_settle.py`，2026-11-06：停止后 `ctx.pages` 内 xiaohongshu 页面数=0，静置 5/10/15/20s 卡片恒 2、DB 恒 2、停止后请求计数 0） |
-| TS13 | 采集中被新任务顶掉 | 采集中再调一次 `/api/collect_start`（换关键词） | 旧任务被 cancel 且采集窗复位；新任务跑满 limit；收尾无采集类页面 | **PASS**（`scripts/ui_tests/c02c_takeover.py`，2026-11-06 连跑两次：切换期采集页反复归零（旧页关闭→新页重开）、后端 done 时 `collected=3`、刷新后 UI 卡片 3 = DB 3、收尾采集类页面 0） |
+| TS12 | 停止真正停 CDP | 点停止后观察引擎窗 | 采集窗 CDP 行为停止、无残留导航/滚动 | **PASS**（真机脚本（已退役），2026-11-06：停止后 `ctx.pages` 内 xiaohongshu 页面数=0，静置 5/10/15/20s 卡片恒 2、DB 恒 2、停止后请求计数 0） |
+| TS13 | 采集中被新任务顶掉 | 采集中再调一次 `/api/collect_start`（换关键词） | 旧任务被 cancel 且采集窗复位；新任务跑满 limit；收尾无采集类页面 | **PASS**（真机脚本（已退役），2026-11-06 连跑两次：切换期采集页反复归零（旧页关闭→新页重开）、后端 done 时 `collected=3`、刷新后 UI 卡片 3 = DB 3、收尾采集类页面 0） |
 
 ## 七、Bug 迭代记录（R-6.22 系列）
 
@@ -243,9 +243,7 @@ worker error note 含「登录后查看/扫码登录/请先登录/验证」→ �
 | 资产 | 覆盖 | 判据 |
 |---|---|---|
 | `backend/tests/`（pytest，全绿） | 采集状态机 15 例（`test_collect_state_machine.py`，含 2 例顶掉旧任务复位）、搜索/准备页 13 例（`test_browser_search_flow.py`）、keeper 与关窗校验 16 例（`test_shell_keeper_pass.py`）、登录守卫 15 例（`test_shell_guard_unit.py`）、引擎池与 browser_client 既有用例 | 全绿（`cd backend && .venv/bin/python -m pytest tests -q -p no:warnings`）。注意点阵输出没有 "N passed" 字样，**只认 EXIT=0** |
-| `scripts/ui_tests/c02_ui_collect_pipeline.py` | 真实 UI 双场景：`c02_ui_collect_pipeline.py stop|auto` | 硬判据「UI 卡片数 == DB 行数」；返回码 0 通过 / 1 判定失败 / 2 环境异常 |
-| `scripts/ui_tests/c02b_stop_settle.py` | 停止后静置验证：采集窗复位 + 20s 无新请求/无新入库 | 硬判据「引擎内无 xiaohongshu 页面 且 卡片/DB 20s 不变」；返回码同上 |
-| `scripts/ui_tests/c02c_takeover.py` | 采集中被新任务顶掉：旧任务取消 + 采集窗复位 + 新任务跑满 | 硬判据「后端 `collect_progress` 走到 done 且 `collected==limit`、刷新页面后卡片==DB==limit、收尾后引擎内无采集类页面（`/explore/`、`/search_result`、`/discovery/item`）」；返回码同上 |
+| 真机 UI 自动化 | 采集冒烟：启动 → 搜索采集 → 核对卡片数 | 硬判据「UI 卡片数 == DB 行数」，停止后引擎内无采集类页面 |
 | 变异测试 | `mutator --root . -s backend/src --lines …`（**禁止 `--mutate-all`**） | 存活变异体=0；等价变异体登记 `EQUIVALENT-MUTANTS.md` 后 `--equiv-ok` |
 
 > 单实例前置检查（血泪教训）：启动前必须 `lsof -nP -iTCP:8791 -iTCP:9223 -sTCP:LISTEN` 无输出、残留进程计数为 0；否则新实例会漂到 8800 且引擎 `launch_persistent_context` 收 SIGTERM。旧 launcher/壳进程需 `kill -9` + `pkill -9 -f "xhs-leads/engine/chrome-mac-x64"` + `pkill -9 -f "scripts/packaging/launcher.py"`。
