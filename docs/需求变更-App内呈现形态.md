@@ -70,6 +70,7 @@
 
 **R-6.5 附注（登录形态升级）**：用户明确否决截图镜像登录（交互不便、手机号验证码无法真实获取）——拍板「APP 壳内直接打开小红书真实登录页（扫码/手机号+验证码/微信原生完成，验证码走『获取验证码』），登录后 Cookie 由 pywebview 拿到注入无头采集引擎独立 profile」。技术 PoC 实测通过（pywebview 6.2.1 cocoa `get_cookies()` 含 HttpOnly、按窗口当前 URL 域过滤；`create_window` 必须本地起步、start 后 `load_url` 切换，直接外链会 `Main window failed to start`）。工程落地：
 - **server.py**：`_LOGIN_GATE` + `/api/auth/login_begin`（已登录直接返回）/`login_begin_state`（pending）/`import_cookies`（过滤 xiaohongshu/xhscdn 域 → SimpleCookie/Morsel → `inject_cookies()` 幂等注入 → reload → `_engine_login_state` 真实判定 → 清 30s 缓存）。
+  - **现状（已变更）**：Cookie 落盘与注入链已整体删除（改用各账号 Chrome profile 自然持久化，见 `docs/架构改造-B方案引擎池与多账户机制设计.md`）；`import_cookies`、`login_begin_state` 两个端点已下线，登录态改由 `POST /api/auth/login_ok` 上报。
 - **launcher.py**：`_login_guard` 守卫线程——轮询 pending → 壳窗口 `load_url` + `evaluate_js` 双保险导航登录页 → 循环 `get_cookies()` 找 `web_session` → 注入引擎 → 仅真登录成功/30 分钟超时回前端；**注入未通过留在登录页继续轮询**（15s 节流，修复占位 web_session 误捕拉回抖动）；`CZ_SKIP_LOGIN_GUARD=1` 跳过开关。
 - **LoginModal.vue**：重写为登录引导版（「前往登录」→ 触发守卫导航；成功自动关）。
 - **判定修复**：`extension/lib/extract.js` 的 `xhsIsLoggedIn()` 收紧——未登录态小红书 explore 同样渲染推荐流，旧「推荐流兜底 → true」会假阳性；现改为显式未登录 UI 特征（顶栏登录按钮/「登录探索更多内容」）→ false，仅头像/用户菜单 → true。

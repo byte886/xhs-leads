@@ -382,3 +382,5 @@ cooldown ──(人工确认/到期)────► ok
 | 单测 | 新增 `test_login_session.py` 13 例 + 重写 engine_window 相关；后端全量全绿 |
 
 **踩坑**：首版超时 300s，用户扫码耗时超过 5 分钟导致会话先退出（登录本身成功、仅未自动切无头），已延长到 600s；独立进程脚本读不到后端进程内存里的 `_SESSIONS`（跨进程，同 `_active_page` 恒 None），以后端日志为准。
+
+**现状（已退役）**：用户后续拍板「不做登录后自动切无头守护」，`LoginSession` 事件监听、`_SESSIONS` 注册表与 `POST /api/mirror/auto_headless` 端点已全部删除。本节保留为当时的验证记录，不再代表现行实现。
