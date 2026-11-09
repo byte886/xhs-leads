@@ -628,16 +628,62 @@ async def _session_cookie_alive(page) -> bool:
     return any(c.get("name") == "web_session" and c.get("value") for c in (cookies or []))
 
 
+def _is_browse_host(url: str) -> bool:
+    """是否在「浏览站」（www.xiaohongshu.com/web 首页域）内。
+
+    只认浏览站：creator.xiaohongshu.com（创作服务平台）与其它子域虽然有同一批
+    Cookie，却是完全不同的信息架构——没有首页搜索框、没有侧边栏，落在那里就
+    搜不了。旧判定用「'xiaohongshu.com' in url」把它们当浏览页放过，采集会在
+    创作平台页上找搜索框，必然落空。
+    """
+    if not url:
+        return False
+    try:
+        host = url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split(":", 1)[0]
+    except Exception:  # noqa: BLE001
+        return False
+    return host in ("www.xiaohongshu.com", "xiaohongshu.com")
+
+
 async def _ensure_browse_page(page, account_id: str) -> bool:
     """确保页面处于登录态浏览页；不确定就走 /login（唯一允许 URL 的页面）。"""
     try:
         url = page.url or ""
     except Exception:  # noqa: BLE001
         url = ""
-    on_browse = "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url
+    on_browse = _is_browse_host(url) and "/login" not in url and "captcha" not in url
     if on_browse and not await _page_needs_login(page) and await _session_cookie_alive(page):
         return True
     return await _open_login_page(page)
+
+
+async def _preflight_browse(page, account_id: str) -> bool:
+    """采集前置自检：域 → 登录 → 首页位置，逐项纠偏，任一不满足就修到满足再返回。
+
+    不再假定「任务页一定停在首页且已登录」（实测：用户点过私信、创作或发布入口后，
+    采集窗那一个标签就停在 /chat 或创作平台域，复用为任务页时旧逻辑一路放过，
+    最后报「未采集到数据」而窗口明明登录着）。四步：
+
+    1. 域：不在浏览站 → 走 /login（唯一允许 URL 的入口，平台自己跳 explore）
+    2. 登录：渲染态 + web_session 双判定 → 未登录/被踢 → 走 /login，仍不行抛登录引导
+    3. 位置：不在首页 → 点左上 logo 回首页（不用 URL、不刷新，防风控）
+    4. 确认：回到首页后搜索框必须可聚焦，否则再走一次 /login 兜底
+
+    返回 True 表示「可以开始搜索」。抛 BrowserLoginRequiredError 表示需要人工登录/验证。
+    """
+    if not await _ensure_browse_page(page, account_id):
+        raise BrowserLoginRequiredError(
+            "小红书要求登录（请在采集窗完成扫码/人机验证后重试）")
+    if not await _back_to_feeds(page):
+        # 页面既没 logo 可点也回不了首页（例如被钉在某个子域）：走 /login 兜底跳转
+        if not await _open_login_page(page):
+            raise BrowserLoginRequiredError(
+                "页面无法回到小红书首页（请在采集窗手动回到首页后重试）")
+        if not await _back_to_feeds(page):
+            raise BrowserLoginRequiredError(
+                "页面无法回到小红书首页（请在采集窗手动回到首页后重试）")
+    log.info("前置自检通过：url=%s", _page_url_now(page))
+    return True
 
 
 async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
@@ -733,43 +779,56 @@ _LOGO_JS = """() => {
 }"""
 
 
-async def _back_to_feeds(page) -> bool:
-    """在搜索结果页时点左上 logo 回首页（模拟点击；不用 URL、不刷新）。
+def _is_on_feeds(url: str) -> bool:
+    """是否已在首页（/explore 且不是结果页）。"""
+    return "xiaohongshu.com/explore" in url and "search_result" not in url
 
-    +（Nov 6 实测）：结果页顶部搜索区的位置与首页不同，同坐标命中的是
-    DIV、点下去焦点落在 BODY，直接点框不会聚焦输入框。回首页后搜索入口才是稳定
-    可点的 #search-input-in-feeds。
-    """
-    try:
-        url = page.url or ""
-    except Exception:  # noqa: BLE001
-        return False
-    if "search_result" not in url:
-        return True
+
+async def _click_logo_back(page) -> bool:
+    """点左上 logo 回首页；页面没有可点的 logo 时返回 False。"""
     pos = await cdp_call(page.evaluate(_LOGO_JS), timeout=CDP_EVAL, label="back.logo", skip=True)
     if not pos:
         return False
     await cdp_call(page.mouse.click(pos["x"], pos["y"]), timeout=CDP_QUICK, label="back.click")
     await asyncio.sleep(2.5)
-    try:
-        return "search_result" not in (page.url or "")
-    except Exception:  # noqa: BLE001
+    return True
+
+
+async def _back_to_feeds(page) -> bool:
+    """把页面带回首页（模拟点击左上 logo；不用 URL、不刷新）。
+
+    （Nov 6 实测）：结果页顶部搜索区的位置与首页不同，同坐标命中的是
+    DIV、点下去焦点落在 BODY，直接点框不会聚焦输入框。回首页后搜索入口才是稳定
+    可点的 #search-input-in-feeds。
+
+    （Nov 9 补）：只认 search_result 是不够的——采集任务页复用采集窗里那个标签，
+    用户点过「消息/发布/个人页」后页面停在 /chat、/user/profile 等子页，旧逻辑
+    直接判「已在首页」放过，接着在子页找搜索框必然落空，采集报「未采集到数据」
+    而窗口明明是登录态。现在只要不在首页就点 logo 回首页。
+    """
+    if _is_on_feeds(_page_url_now(page)):
+        return True
+    if not await _click_logo_back(page):
+        log.warning("回首页失败：当前页（%s）没有可点的 logo", _page_url_now(page))
         return False
+    if _is_on_feeds(_page_url_now(page)):
+        return True
+    log.warning("点 logo 后仍未回到首页（停在 %s）", _page_url_now(page))
+    return False
 
 
 async def _prepare_search_page(keyword: str, filters: dict | None = None,
                                account_id: str = "default"):
     """进入搜索页并等卡片渲染——只靠页面内交互，不用 URL、不刷新。
 
-    路径：取新页 → 进 /login（已登录则平台自己跳 explore）→ 点搜索框输入关键词回车。
+    路径：取任务页 → 前置自检（域/登录/回首页逐项纠偏）→ 点搜索框输入关键词回车。
     未登录/停在登录页 → 抛 BrowserLoginRequiredError（页面保留供扫码/验证）。
     空结果重试一次（重新点框输入），仍空则按 0 条收尾，不再 reload。
     """
     page = await _page(account_id)
-    if not await _ensure_browse_page(page, account_id):
+    if not await _preflight_browse(page, account_id):
         raise BrowserLoginRequiredError(
             "小红书要求登录（请在采集窗完成扫码/人机验证后重试）")
-    await _back_to_feeds(page)
     appeared = await _search_by_typing(page, keyword, account_id)
     if not appeared:
         appeared = await _search_by_typing(page, keyword, account_id)

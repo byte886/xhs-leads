@@ -99,6 +99,68 @@ class TestEnsureBrowsePage:
         _run(bc._ensure_browse_page(p, "default"))
         assert p.gotos == [bc.LOGIN_URL]
 
+    def test_creator_host_is_not_browse_page(self):
+        # 创作平台与浏览站共用 Cookie 但没有首页搜索框：必须当「不在浏览页」纠偏。
+        # 假页不会像平台那样自己跳 explore，所以这里只断言「已发起 /login 导航」。
+        p = _FakePage(url="https://creator.xiaohongshu.com/publish/publish")
+        assert _run(bc._ensure_browse_page(p, "default")) is False
+        assert p.gotos == [bc.LOGIN_URL]
+
+
+class TestIsBrowseHost:
+    def test_www_host_pass(self):
+        assert bc._is_browse_host("https://www.xiaohongshu.com/chat?channel_id=") is True
+
+    def test_bare_host_pass(self):
+        assert bc._is_browse_host("https://xiaohongshu.com/explore") is True
+
+    def test_creator_subdomain_rejected(self):
+        assert bc._is_browse_host("https://creator.xiaohongshu.com/publish/publish") is False
+
+    def test_empty_rejected(self):
+        assert bc._is_browse_host("") is False
+
+
+class TestPreflightBrowse:
+    """开始采集前的自检纠偏：不假定任务页已在首页/已登录。"""
+
+    def test_chat_page_clicks_logo_back_to_feeds(self):
+        p = _FakePage(url="https://www.xiaohongshu.com/chat?channel_id=",
+                      box={"x": 82, "y": 50})
+
+        async def click(x, y):
+            p.url = "https://www.xiaohongshu.com/explore"
+
+        p.mouse.click = click
+        assert _run(bc._preflight_browse(p, "default")) is True
+        assert "xiaohongshu.com/explore" in p.url
+
+    def test_creator_page_corrected_via_login_then_feeds(self):
+        p = _FakePage(url="https://creator.xiaohongshu.com/publish/publish")
+
+        async def fake_goto(url, **kw):
+            p.gotos.append(url)
+            p.url = "https://www.xiaohongshu.com/explore"
+
+        p.goto = fake_goto
+        assert _run(bc._preflight_browse(p, "default")) is True
+        assert p.gotos == [bc.LOGIN_URL]
+
+    def test_search_result_page_goes_back_to_feeds(self):
+        p = _FakePage(url="https://www.xiaohongshu.com/search_result?keyword=x",
+                      box={"x": 82, "y": 50})
+
+        async def click(x, y):
+            p.url = "https://www.xiaohongshu.com/explore"
+
+        p.mouse.click = click
+        assert _run(bc._preflight_browse(p, "default")) is True
+
+    def test_unrecoverable_page_raises_login_required(self):
+        p = _FakePage(url="https://www.xiaohongshu.com/chat", box=None)
+        with pytest.raises(bc.BrowserLoginRequiredError):
+            _run(bc._preflight_browse(p, "default"))
+
 
 class TestOpenLoginPage:
     def test_platform_redirect_counts_as_success(self):

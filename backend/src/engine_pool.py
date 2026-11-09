@@ -67,8 +67,7 @@ MIN_WIN_H = 480
 # 出现几百毫秒，被用户看成「左边窗口又打开了小红书 / 两个 APP 窗叠在一起」。
 OFFSCREEN_LEFT = -4000
 
-# 内置扩展也按同一判据归组。URL 由导航决定、title 守护改不了，比标题可靠。
-XHS_HOST = "xiaohongshu.com"
+# 采集窗页的认领判据：只认小红书浏览站域（www.），创作平台等子域不算（见 _page_by_url）。
 
 def shell_window_geometry() -> tuple[int, int, int, int]:
     """双窗口并排布局。
@@ -798,10 +797,15 @@ class AccountEngine:
         return None
 
     async def _page_by_url(self, ctx):
-        """在 context 内按 URL 认领采集窗页：本实例里落在小红书域的页就是采集窗页。"""
+        """在 context 内按 URL 认领采集窗页：落在小红书**浏览站**的页才算采集窗页。
+
+        只认 www.xiaohongshu.com：创作服务平台（creator.*）与其它子域共用同一批
+        Cookie 但信息架构不同（没有首页搜索框），认领过去会让采集在创作平台页上
+        找搜索框、必然落空。
+        """
         for pg in ctx.pages:
             try:
-                if XHS_HOST in (pg.url or ""):
+                if "www.xiaohongshu.com" in (pg.url or ""):
                     return pg
             except Exception:  # noqa: BLE001（页在导航/已关：跳过）
                 continue

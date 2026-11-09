@@ -244,7 +244,7 @@ class TestPrepareSearchPage:
             return False
 
         monkeypatch.setattr(bc, "_page", fake_page)
-        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_preflight_browse", fake_browse)
         with pytest.raises(bc.BrowserLoginRequiredError):
             _run(bc._prepare_search_page("翡翠"))
         assert page.closed is False  # 保留页面供扫码/验证
@@ -265,7 +265,7 @@ class TestPrepareSearchPage:
             applied.append(f)
 
         monkeypatch.setattr(bc, "_page", fake_page)
-        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_preflight_browse", fake_browse)
         monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
         got = _run(bc._prepare_search_page("翡翠"))
@@ -292,7 +292,7 @@ class TestPrepareSearchPage:
             raise AssertionError("空壳不应进入筛选步骤")
 
         monkeypatch.setattr(bc, "_page", fake_page)
-        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_preflight_browse", fake_browse)
         monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
         assert _run(bc._prepare_search_page("翡翠")) is None
@@ -316,7 +316,7 @@ class TestPrepareSearchPage:
             return None
 
         monkeypatch.setattr(bc, "_page", fake_page)
-        monkeypatch.setattr(bc, "_ensure_browse_page", fake_browse)
+        monkeypatch.setattr(bc, "_preflight_browse", fake_browse)
         monkeypatch.setattr(bc, "_search_by_typing", fake_type)
         monkeypatch.setattr(bc, "_wait_note_cards", fake_wait)
         monkeypatch.setattr(bc, "_apply_filters", fake_filters)
