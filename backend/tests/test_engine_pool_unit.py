@@ -24,14 +24,28 @@ class TestProbeScreenSize:
 
 class TestShellWindowGeometry:
     def test_left_right_split(self, monkeypatch):
+        # R-6.80：高度不再写死 800，改为 min(1200, 屏高-60)；2880x1800 → 1200 封顶
         monkeypatch.setattr(engine_pool, "probe_screen_size", lambda: (2880, 1800))
         w, h, left, right = engine_pool.shell_window_geometry()
-        assert w == 1280 and h == 800 and left == 0 and right == 1280
+        assert w == 1280 and h == 1200 and left == 0 and right == 1280
 
     def test_narrow_screen_half(self, monkeypatch):
+        # 1400x900 → 宽平分 700，高 900-60=840
         monkeypatch.setattr(engine_pool, "probe_screen_size", lambda: (1400, 900))
         w, h, left, right = engine_pool.shell_window_geometry()
-        assert w == 700 and right == 700
+        assert w == 700 and right == 700 and h == 840
+
+    def test_tiny_screen_clamped_to_min(self, monkeypatch):
+        # 800x600 极小屏：宽 400→钳到 640，高 540 保持（高于下限 480）
+        monkeypatch.setattr(engine_pool, "probe_screen_size", lambda: (800, 600))
+        w, h, _, _ = engine_pool.shell_window_geometry()
+        assert w == engine_pool.MIN_WIN_W == 640 and h == 540
+
+    def test_height_floor_on_very_short_screen(self, monkeypatch):
+        # 1920x500 极矮屏：500-60=440 < 480，抬到下限
+        monkeypatch.setattr(engine_pool, "probe_screen_size", lambda: (1920, 500))
+        _, h, _, _ = engine_pool.shell_window_geometry()
+        assert h == engine_pool.MIN_WIN_H == 480
 
 
 class TestClearSessionRestore:

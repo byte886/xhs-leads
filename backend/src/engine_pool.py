@@ -58,15 +58,25 @@ def probe_screen_size() -> tuple[int, int]:
     _SCREEN = (w, h)
     return _SCREEN
 
-def shell_window_geometry() -> tuple[int, int, int, int]:
-    """双窗口并排布局（R-6.22）：返回 (壳窗口宽, 壳窗口高, 壳窗口 left, 采集窗口 left)。
+# 窗口最小尺寸：低于这个尺寸前端上下布局也会挤成一团（640×480 是桌面应用常见可用下限，
+# 也与 Material 3 Medium 档位下限呼应）。用于窗口放置时的钳制，防止被拖到不可用尺寸。
+MIN_WIN_W = 640
+MIN_WIN_H = 480
 
-    主屏宽 SW：壳窗口宽 = min(1280, SW // 2)，位置 (0, 0)（主屏左半）；
+def shell_window_geometry() -> tuple[int, int, int, int]:
+    """双窗口并排布局（R-6.22，R-6.80 高度改为按屏幕自适应）。
+
+    主屏 SW×SH：壳窗口宽 = min(1280, SW // 2)，位置 (0, 0)（主屏左半）；
     采集调试窗口同宽，位置 (win_w, 0)（主屏右半）。两窗等宽并排、互不重叠。
+
+    高度旧版写死 800：在 1200 高的屏上底部空 400，页面内容一屏装不下、需多滚。
+    现在取 SH - 60（留菜单栏/程序坞余量），上限 1200（大屏不无限拉高），
+    下限 MIN_WIN_H。宽度同样钳到 MIN_WIN_W，保证小屏机器也不会开出不可用窄窗。
     """
-    sw, _ = probe_screen_size()
-    win_w = min(1280, sw // 2)
-    return win_w, 800, 0, win_w
+    sw, sh = probe_screen_size()
+    win_w = min(1280, max(MIN_WIN_W, sw // 2))
+    win_h = max(MIN_WIN_H, min(1200, sh - 60))
+    return win_w, win_h, 0, win_w
 
 
 def account_window_geometry(account_id: str) -> tuple[int, int, int, int] | None:
@@ -418,16 +428,21 @@ class AccountEngine:
     def _launch_kwargs_base(self, headless: bool, eng_port: int) -> dict:
         """构造 launch_persistent_context 基础参数（channel/viewport/args）。
 
-        R-6.27：非无头（壳窗口）时 viewport 必须与窗口几何对齐，否则 960 宽窗口
-        显示 1280 布局、右侧内容被裁；无头引擎固定 1280x800 采集布局。
+        R-6.27：非无头（壳窗口）时视口必须与窗口几何一致，否则 960 宽窗口显示
+        1280 布局、右侧内容被裁；无头引擎固定采集布局。
+        R-6.80：非无头改为「无视口模式」（Playwright 的 no_viewport=True，注意公开
+        API 是 snake_case 的 no_viewport，不是 driver 层的 noViewport）。固定数值
+        viewport 会把页面尺寸锁死，窗口被拖大/缩小后页面不跟随重排——这就是
+        「APP 窗口不会自适应页面大小」的直接原因。另注意不能只传 viewport=None：
+        Playwright 客户端会把值为 None 的字段当作「未传」丢掉，服务端随即套用默认
+        1280x720（实测 innerWidth=1280 而 outerWidth=960），必须显式 no_viewport。
         R 批 v1.5：引擎带 CDP 端口供 UI 测试 connect_over_cdp 复用同一实例（同一登录态 profile）。
         R-6.57：端口由调用方传入该账号独占的 debug_port（default=9223，其余 9224 起）。
         """
-        geo = shell_window_geometry()[:2] if not headless else (1280, 800)
-        return dict(
+        geo = shell_window_geometry()[:2]
+        base = dict(
             channel="chrome",
             headless=headless,
-            viewport={"width": geo[0], "height": geo[1]},
             args=[
                 # R-6.53j：移除 --no-first-run——Chromium 150+ 带该 flag 有
                 # CHECK/SIGTRAP 崩溃（Debian #1141618）；CFT 无 first-run 向导，移除无副作用。
@@ -436,6 +451,13 @@ class AccountEngine:
                 f"--remote-debugging-port={eng_port}",
             ],
         )
+        if headless:
+            # 无头引擎不弹窗，固定采集布局
+            base["viewport"] = {"width": geo[0], "height": geo[1]}
+        else:
+            # 有头：页面尺寸 = 真实窗口，随窗口缩放重排（no_viewport 关闭固定视口）
+            base["no_viewport"] = True
+        return base
 
 
     def _launch_apply_shell_window(self, launch_kwargs: dict) -> None:

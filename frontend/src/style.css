@@ -22,10 +22,12 @@ body {
 /* 顶部 FlowBar 根(.flow-wrap) + 实时状态条(.status-bar)：自然高度，不参与滚动 */
 .app-shell > .flow-wrap,
 .app-shell > .status-bar { flex: none; }
-/* 各 Tab 主容器：占满剩余高度（min-height:0 允许内部 overflow 滚动） */
+/* 各 Tab 主容器：占满剩余高度（min-height:0 允许内部 overflow 滚动）。
+   四个 Tab（采集/创作/客户/设置）共用这一条，全部带 min-width:0——
+   任一页缺了它，该 Tab 在窄窗口下就会横向溢出 */
 .app-shell > .workbench,
 .app-shell > .publish-wrap,
-.app-shell > .work { flex: 1 1 auto; min-height: 0; }
+.app-shell > .work { flex: 1 1 auto; min-height: 0; min-width: 0; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; font-size: 13px; }
 input, select, textarea {
   font-family: inherit; font-size: 14px; border: 1px solid var(--line);
@@ -51,13 +53,16 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .flow .step.done .dot { background: var(--green); color: #fff; }
 .flow .arrow { color: #C8C8C8; font-size: 12px; }
 
-/* 主工作台：在固定外壳内占满剩余高度（不再用 100vh 计算，window 不滚动） */
-.workbench { display: flex; align-items: stretch; height: 100%; min-height: 0; }
+/* 主工作台：在固定外壳内占满剩余高度（不再用 100vh 计算，window 不滚动）
+   min-width:0 是关键——flex 子项默认 min-width:auto，会被内容撑开；
+   缺了它窗口拖窄时页面就"不跟着变"，右侧内容横向溢出被裁 */
+.workbench { display: flex; align-items: stretch; height: 100%; min-height: 0; min-width: 0; }
 
 /* 左面板：常用输入 + 选项折叠，默认 272px（控件一行化后收窄，让结果区更宽）。
-   固定在外壳内，内容超高时面板内部滚动 */
+   固定在外壳内，内容超高时面板内部滚动。
+   用 flex-basis 锁默认宽、同时 min-width:0 允许窄档位让出空间（旧写法 min-width:272px 会撑住不让） */
 .panel {
-  width: 272px; min-width: 272px; background: var(--panel); border-right: 1px solid var(--line);
+  flex: 0 0 272px; width: 272px; min-width: 0; background: var(--panel); border-right: 1px solid var(--line);
   padding: 16px 14px; display: flex; flex-direction: column; gap: 16px; overflow: auto; height: 100%;
 }
 .sec-title { font-size: 12px; color: var(--ink-2); font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
@@ -113,8 +118,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 
 /* 右工作区：只保留左右/底部 padding，顶部 padding 设为 0——
    这样内部 sticky 工具栏 top:0 直接吸到滚动视口最顶端，不会因 padding-top 留缝
-   导致卡片从工具栏上方透出（透视）；顶部间距由 .sticky-tools 自身 padding-top 提供 */
-.work { flex: 1; padding: 0 14px 14px; overflow: auto; min-height: 0; }
+   导致卡片从工具栏上方透出（透视）；顶部间距由 .sticky-tools 自身 padding-top 提供
+   min-width:0 同样必需：否则卡片/长标题会把右栏撑出窗口宽度 */
+.work { flex: 1 1 auto; min-width: 0; padding: 0 14px 14px; overflow: auto; min-height: 0; }
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 60vh; color: var(--ink-2); gap: 12px; text-align: center;
@@ -276,16 +282,36 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 }
 .toast.error { background: #c0392b; }
 
-/* 窄视口（≤900px）：宽度不够时转为上下结构——上采集条件、下搜索结果。
-   固定外壳下：上面板限高内部滚动，下结果区占满剩余高度 */
-@media (max-width: 900px) {
+/* ── 响应式档位：对齐 Material Design 3 断点体系（Compact/Medium/Expanded/Large）
+   Compact  <600   Medium 600–839   Expanded 840–1199   Large ≥1200
+   四个 Tab（采集/创作/客户/设置）共用这套档位，改一处全局生效。
+   采集窗口默认 960 宽落在 Expanded，旧版固定 272px 时右区只剩约 660。 */
+
+/* Large（≥1200）：左右分栏，左面板保持 272px 标准宽度 */
+
+/* Expanded（840–1199）：左右分栏保留，左面板让到 240px，把宽度还给结果区 */
+@media (max-width: 1199px) {
+  .panel { flex-basis: 240px; width: 240px; padding: 14px 12px; gap: 14px; }
+}
+
+/* Medium（600–839）：宽度不足以并排，转上下结构——上条件、下结果。
+   min-height 兜底：窗口再矮也不把上面板压成一条 */
+@media (max-width: 839px) {
   .workbench { flex-direction: column; }
   .panel {
     width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line);
-    height: auto; max-height: 42vh; flex: none;
+    height: auto; min-height: 132px; max-height: 42vh; flex: none;
   }
   .publish { padding: 16px; }
   .float-bar { bottom: 14px; right: 14px; }
+}
+
+/* Compact（<600）：窗口被拖到最小尺寸时的最后一道兜底。
+   压缩外层内边距，保住结果区至少一列卡片不溢出 */
+@media (max-width: 599px) {
+  .app-shell > .flow-wrap { padding: 8px 10px; }
+  .panel { padding: 10px; gap: 10px; max-height: 46vh; }
+  .work { padding: 0 8px 8px; }
 }
 
 /* 卡片评分徽标：在 .score-wrap（已绝对定位到封面右上角）内作为 flex 项，
