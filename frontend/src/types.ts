@@ -157,7 +157,6 @@ export interface AccountItem {
   status: string
   debug_port: number | null
   user_data_dir: string
-  cookie_expires_at?: string | number | null
   /** 引擎是否在运行 */
   running: boolean
   /** 当前是否无头 */

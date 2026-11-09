@@ -1597,7 +1597,6 @@ async def accounts_list():
             "debug_port": port_map.get(aid),
             "user_data_dir": acc.get("user_data_dir")
             or config.home_relative(config.default_user_data_dir()),
-            "cookie_expires_at": acc.get("cookie_expires_at"),
             "running": engine_pool.pool.peek(aid) is not None,
             "headless": config.account_headless(aid),
         }

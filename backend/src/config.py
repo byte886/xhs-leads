@@ -346,7 +346,6 @@ def get_account(account_id: str) -> dict | None:
             "role": "mixed",
             "user_data_dir": home_relative(default_user_data_dir()),
             "status": "ok",
-            "cookie_expires_at": None,
         }
     return None
 
@@ -452,7 +451,6 @@ def add_account(account_id: str, role: str = "mixed",
         "user_data_dir": user_data_dir,
         "status": status,
         "extension_enabled": False,
-        "cookie_expires_at": None,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -461,7 +459,7 @@ def add_account(account_id: str, role: str = "mixed",
 
 
 def update_account(account_id: str, **fields) -> dict | None:
-    """更新账号字段（role / user_data_dir / status / cookie_expires_at ...）。"""
+    """更新账号字段（role / user_data_dir / status / headless ...）。"""
     data = _accounts_data()
     acc = data.setdefault("accounts", {}).get(account_id)
     if acc is None:
