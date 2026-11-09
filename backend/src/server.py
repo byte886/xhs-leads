@@ -559,12 +559,6 @@ async def collapse_debug_windows():
         return {"ok": True, "closed": 0}
 
 
-@app.get("/api/auth/login_begin_state")
-async def login_begin_state():
-    """壳 launcher 守卫轮询：是否有待处理的登录请求（pending 由登录成功清除）+ force 标志。"""
-    return {"pending": _LOGIN_GATE["pending"], "force": bool(_LOGIN_GATE.get("force"))}
-
-
 @app.post("/api/auth/login_cancel")
 async def login_cancel():
     """取消待处理登录请求（主动重登用户点「✕」回 APP 时由守卫调用；强制登录无取消路径）。"""
@@ -639,39 +633,6 @@ async def mirror_close(account_id: str = "default"):
     from src import engine_window
     return await engine_window.close_account(account_id)
 
-
-@app.post("/api/mirror/minimize")
-async def mirror_minimize(account_id: str = "default"):
-    """最小化收起账号窗口：瞬时、不重启、不打断任务、page 不失效。"""
-    from src import engine_window
-    return await engine_window.minimize_account(account_id)
-
-
-@app.post("/api/mirror/restore")
-async def mirror_restore(account_id: str = "default"):
-    """恢复最小化的账号窗口到级联位置。"""
-    from src import engine_window
-    return await engine_window.restore_account(account_id)
-
-
-@app.post("/api/mirror/minimize_all")
-async def mirror_minimize_all():
-    """全部收起：所有在跑的有头第三类账号最小化，default 不动。"""
-    from src import engine_window
-    return await engine_window.minimize_all_accounts()
-
-
-@app.post("/api/mirror/auto_headless")
-async def mirror_auto_headless(account_id: str = "default", on: bool = True):
-    """开启/取消「登录完成自动切无头」守护。
-
-    on=true：开窗扫码时挂上，检测到 id_token 登录成功后自动切无头；
-    on=false：取消守护。
-    """
-    from src import engine_window
-    if on:
-        return await engine_window.start_auto_headless(account_id)
-    return await engine_window.cancel_auto_headless(account_id)
 
 
 class SearchReq(BaseModel):

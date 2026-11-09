@@ -67,7 +67,7 @@ class TestApiSmoke:
 
 
 class TestLoginGate:
-    """登录 UI 改版：login_begin(force)/login_begin_state/login_cancel（纯 mock，不碰浏览器）。"""
+    """登录 UI 改版：login_begin(force)/login_cancel（纯 mock，不碰浏览器）。"""
 
     def test_begin_active_relogin_when_logged_in(self, client, monkeypatch):
         # R-6.13：「已登录短路」已移除——force=False 主动重登也总是置 pending
@@ -90,15 +90,13 @@ class TestLoginGate:
         assert r["ok"] is True and r["already_logged_in"] is False
         assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is False
 
-    def test_begin_state_and_cancel(self, client, monkeypatch):
+    def test_begin_and_cancel(self, client, monkeypatch):
         monkeypatch.setattr(server, "_LOGIN_CACHE", {"data": None, "t": 0.0})
         client.post("/api/auth/login_begin", json={"force": True})
-        st = client.get("/api/auth/login_begin_state").json()
-        assert st == {"pending": True, "force": True}
+        assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is True
         r = client.post("/api/auth/login_cancel").json()
         assert r == {"ok": True}
-        st2 = client.get("/api/auth/login_begin_state").json()
-        assert st2 == {"pending": False, "force": False}
+        assert server._LOGIN_GATE["pending"] is False and server._LOGIN_GATE["force"] is False
 
 
 class TestPersistNotes:

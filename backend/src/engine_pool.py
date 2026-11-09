@@ -745,14 +745,6 @@ class AccountEngine:
         return await self.set_window_state("minimized")
 
 
-    async def restore_window(self) -> bool:
-        """恢复有头窗口到账号级联位置（带 bounds，实测比只给 windowState 可靠）。"""
-        geo = account_window_geometry(self.account_id)
-        if geo is None:
-            return await self.set_window_state("normal")
-        win_w, win_h, left, top = geo
-        return await self.set_window_state(
-            "normal", {"left": left, "top": top, "width": win_w, "height": win_h})
 
 
     async def close(self):

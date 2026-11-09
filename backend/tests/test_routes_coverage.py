@@ -214,11 +214,6 @@ def test_import_cookies_endpoint_removed(client):
     assert r.status_code == 404
 
 
-def test_login_begin_state_default(client):
-    r = client.get("/api/auth/login_begin_state").json()
-    assert "pending" in r and "force" in r
-
-
 def test_collapse_debug_windows_no_engine(client):
     # 无引擎实例应返回 closed=0 而非 500
     r = client.post("/api/auth/collapse_debug_windows").json()

@@ -558,17 +558,6 @@ def set_account_headless(account_id: str, headless: bool) -> bool:
         update_account(account_id, headless=bool(headless))
     return True
 
-
-
-
-def set_account_auto_headless(account_id: str, on: bool) -> bool:
-    """设置/清除「登录后自动切无头」标记；账号不存在返回 False。"""
-    if get_account(account_id) is None:
-        return False
-    update_account(account_id, auto_headless=bool(on))
-    return True
-
-
 def collect_group_enabled() -> bool:
     """采集窗标签分组开关：全局、默认开。
 

@@ -16,10 +16,6 @@ from src import engine_pool, logger as xlog
 log = xlog.get("login")
 
 USER_ME_MARK = "/api/sns/web/v2/user/me"
-LOGIN_STABLE = 3.0      # 登录事件后等 cookie/页面稳定的时间
-LOGIN_TIMEOUT = 600.0   # 等待登录的最长时间（10 分钟，给用户宽松扫码时间），超时退出
-
-_SESSIONS: dict[str, "LoginSession"] = {}
 
 
 def is_real_login_me(payload: dict) -> bool:
@@ -130,96 +126,3 @@ async def capture_user_me(account_id: str, timeout: float = 20.0) -> dict | None
         return None
     finally:
         ctx.remove_listener("response", _on_response)
-
-
-class LoginSession:
-    """单个账号的事件驱动登录会话。"""
-
-    def __init__(self, account_id: str):
-        self.account_id = account_id
-        self._ctx = None
-        self._task = None
-
-    async def _run(self) -> None:
-        from src import config, engine_window  # noqa: PLC0415（避免循环导入）
-
-        eng = engine_pool.pool.peek(self.account_id)
-        if eng is None:
-            log.warning("账号 %s 引擎未运行，登录会话退出", self.account_id)
-            return
-        ctx = await eng.context()
-        self._ctx = ctx
-        logged_in = asyncio.Event()
-
-        async def _inspect(resp):
-            try:
-                payload = await resp.json()
-            except Exception:  # noqa: BLE001（非 JSON/读取失败，忽略该次）
-                return
-            if is_real_login_me(payload):
-                log.info("账号 %s 捕获 user/me guest=false 登录事件", self.account_id)
-                # 业务锚点：昵称 + 小红书号 + 内部 uid 一次性落盘，
-                # 账号列表与窗口标题零额外请求即可显示「这是哪个号」
-                ident = cache_identity(self.account_id, payload)
-                if ident["nickname"] or ident["red_id"]:
-                    log.info("账号 %s 缓存身份 昵称=%s 小红书号=%s",
-                             self.account_id, ident["nickname"] or "-",
-                             ident["red_id"] or "-")
-                # 标题立刻跟上身份：登录前窗口标题是内部 id，登录后要变成昵称+小红书号
-                await eng.refresh_window_title()
-                logged_in.set()
-
-        def _on_response(resp):
-            if USER_ME_MARK in resp.url:
-                asyncio.create_task(_inspect(resp))
-
-        ctx.on("response", _on_response)
-        log.info("账号 %s 登录会话已启动，context 级监听 user/me 等待登录事件",
-                 self.account_id)
-        try:
-            await asyncio.wait_for(logged_in.wait(), timeout=LOGIN_TIMEOUT)
-        except asyncio.TimeoutError:
-            log.info("账号 %s 等待登录超时，登录会话退出", self.account_id)
-            return
-        finally:
-            ctx.remove_listener("response", _on_response)
-
-        await asyncio.sleep(LOGIN_STABLE)  # 等 cookie 落盘与页面稳定
-        try:
-            cookies = await eng.read_cookies()
-        except Exception:  # noqa: BLE001
-            cookies = []
-        if not any(c.get("name") == "id_token" for c in cookies):
-            log.warning("账号 %s user/me 已登录但暂未读到 id_token，仍执行切无头",
-                        self.account_id)
-        config.set_account_auto_headless(self.account_id, False)
-        r = await engine_window.set_window(self.account_id, on=False)
-        log.info("账号 %s 登录后自动切无头 %s", self.account_id,
-                 "成功" if r.get("ok") else f"失败: {r.get('error')}")
-
-    def start(self) -> None:
-        self._task = asyncio.create_task(self._run())
-
-    async def cancel(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-
-
-def start_login_session(account_id: str) -> LoginSession | None:
-    """开启（或复用）账号的事件驱动登录会话。已在会话中返回 None 表示幂等。"""
-    existing = _SESSIONS.get(account_id)
-    if existing is not None and existing._task is not None and not existing._task.done():
-        return None
-    sess = LoginSession(account_id)
-    _SESSIONS[account_id] = sess
-    sess.start()
-    return sess
-
-
-async def stop_login_session(account_id: str) -> bool:
-    """取消并移除账号的登录会话。返回是否曾存在活动会话。"""
-    sess = _SESSIONS.pop(account_id, None)
-    if sess is None:
-        return False
-    await sess.cancel()
-    return True

@@ -55,13 +55,7 @@ def test_login_begin_force_sets_gate(client, monkeypatch):
     monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
     r = client.post("/api/auth/login_begin", json={"force": True}).json()
     assert r["ok"] is True and r["force"] is True
-    st = client.get("/api/auth/login_begin_state").json()
-    assert st["pending"] is True and st["force"] is True
-
-
-def test_login_begin_state_default_not_pending(client):
-    r = client.get("/api/auth/login_begin_state").json()
-    assert r == {"pending": False, "force": False}
+    assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is True
 
 
 # ------------------------------------------------------- 登录成功通知（R-6.87）

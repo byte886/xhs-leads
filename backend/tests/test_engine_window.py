@@ -82,80 +82,18 @@ def test_close_account_closes_running_engine(monkeypatch):
     assert "已关闭" in r["note"]
 
 
-# ------------------------------------------------ R-6.62 最小化/恢复
+# ------------------------------------------------ 可见窗口 LRU 上限
 
 class _FakeVisibleEng:
-    """有头引擎 stub：记录最小化/恢复调用次数。"""
+    """有头引擎 stub：记录最小化调用次数。"""
 
     def __init__(self):
         self.min_n = 0
-        self.rest_n = 0
 
     async def minimize_window(self):
         self.min_n += 1
         return True
 
-    async def restore_window(self):
-        self.rest_n += 1
-        return True
-
-
-def test_minimize_refuses_default():
-    r = asyncio.run(engine_window.minimize_account("default"))
-    assert r["ok"] is False
-
-
-def test_minimize_noop_when_engine_not_running(monkeypatch):
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: None)
-    r = asyncio.run(engine_window.minimize_account("acc_x"))
-    assert r["ok"] is True
-    assert "未运行" in r["note"]
-
-
-def test_minimize_skips_headless_account(monkeypatch):
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: object())
-    monkeypatch.setattr(config, "account_headless", lambda _aid: True)
-    r = asyncio.run(engine_window.minimize_account("acc_x"))
-    assert r["ok"] is True
-    assert "无头" in r["note"]
-
-
-def test_minimize_calls_engine(monkeypatch):
-    fake = _FakeVisibleEng()
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
-    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
-    r = asyncio.run(engine_window.minimize_account("acc_x"))
-    assert r["ok"] is True
-    assert fake.min_n == 1
-
-
-def test_restore_calls_engine(monkeypatch):
-    fake = _FakeVisibleEng()
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
-    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
-    r = asyncio.run(engine_window.restore_account("acc_x"))
-    assert r["ok"] is True
-    assert fake.rest_n == 1
-
-
-def test_minimize_all_only_running_visible(monkeypatch):
-    """全部收起：只动在跑且有头的账号，default 与没开的都跳过。"""
-    fake = _FakeVisibleEng()
-    monkeypatch.setattr(config, "list_accounts",
-                        lambda: {"default": {}, "acc_run": {}, "acc_off": {}})
-
-    def _peek(aid):
-        return fake if aid == "acc_run" else None
-
-    monkeypatch.setattr(engine_pool.pool, "peek", _peek)
-    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
-    r = asyncio.run(engine_window.minimize_all_accounts())
-    assert r["ok"] is True
-    assert r["minimized"] == ["acc_run"]
-    assert fake.min_n == 1
-
-
-# ------------------------------------------------ R-6.62 可见窗口 LRU 上限
 
 def test_mark_visible_lru_order():
     ep = engine_pool.EnginePool()
@@ -187,80 +125,8 @@ def test_enforce_visible_cap_noop_under_limit():
     assert hidden == []
 
 
-def test_restore_reports_made_room(monkeypatch):
-    """恢复时可见已满：先 enforce 收起最旧，返回 made_room。"""
-    fake = _FakeVisibleEng()
-    monkeypatch.setattr(engine_pool.pool, "peek", lambda _aid: fake)
-    monkeypatch.setattr(config, "account_headless", lambda _aid: False)
-
-    async def _enforce(_aid, limit=None):
-        return ["old1"]
-
-    monkeypatch.setattr(engine_pool.pool, "enforce_visible_cap", _enforce)
-    r = asyncio.run(engine_window.restore_account("acc_x"))
-    assert r["ok"] is True
-    assert r["made_room"] == ["old1"]
-    assert fake.rest_n == 1
 
 
-# ------------------------------------------------ R-6.67 登录完成自动切无头（事件驱动）
-
-def test_start_auto_refuses_default():
-    r = asyncio.run(engine_window.start_auto_headless("default"))
-    assert r["ok"] is False
-
-
-def test_start_auto_rejects_unknown(monkeypatch):
-    monkeypatch.setattr(config, "get_account", lambda _a: None)
-    r = asyncio.run(engine_window.start_auto_headless("nope"))
-    assert r["ok"] is False
-
-
-def test_start_auto_noop_when_already_headless(monkeypatch):
-    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
-    monkeypatch.setattr(config, "account_headless", lambda _a: True)
-    r = asyncio.run(engine_window.start_auto_headless("acc_x"))
-    assert r["ok"] is True and "已是无头" in r["note"]
-
-
-def test_start_auto_starts_event_session(monkeypatch):
-    """正常开启：委托 login_session 启动事件监听。"""
-    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
-    monkeypatch.setattr(config, "account_headless", lambda _a: False)
-    started = {}
-
-    def _start(aid):
-        started["aid"] = aid
-        return object()  # 非 None = 新会话已建
-
-    monkeypatch.setattr(login_session, "start_login_session", _start)
-    r = asyncio.run(engine_window.start_auto_headless("acc_x"))
-    assert r["ok"] is True
-    assert started["aid"] == "acc_x"
-    assert "事件监听" in r["note"]
-
-
-def test_start_auto_idempotent_when_session_exists(monkeypatch):
-    monkeypatch.setattr(config, "get_account", lambda _a: {"account_id": "acc_x"})
-    monkeypatch.setattr(config, "account_headless", lambda _a: False)
-    monkeypatch.setattr(login_session, "start_login_session", lambda _a: None)
-    r = asyncio.run(engine_window.start_auto_headless("acc_x"))
-    assert r["ok"] is True and "无需重复开启" in r["note"]
-
-
-def test_cancel_auto_stops_session(monkeypatch):
-    flags = {"acc_x": True}
-    monkeypatch.setattr(config, "set_account_auto_headless",
-                        lambda a, on: flags.__setitem__(a, on))
-
-    async def _stop(aid):
-        flags["stopped"] = aid
-        return True
-
-    monkeypatch.setattr(login_session, "stop_login_session", _stop)
-    r = asyncio.run(engine_window.cancel_auto_headless("acc_x"))
-    assert r["ok"] is True
-    assert flags["acc_x"] is False and flags["stopped"] == "acc_x"
 
 
 # ------------------------------------------------ R-6.66 登录走 explore 浏览页
