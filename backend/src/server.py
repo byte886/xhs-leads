@@ -3023,7 +3023,8 @@ async def _ensure_collect_skeleton(eng) -> None:
             )
             from src import shell_window  # noqa: PLC0415
 
-            await shell_window._ensure_debug_title(page)  # 采集调试窗口标题守护
+            # R-6.84e：不再挂「采集调试窗口」标题守护（与账号运营窗口守护互相覆盖，
+            # 标题会变成「账号名 · 运营窗口」）；采集窗标识改由标签组名与 URL 承担。
             # R-6.22：新开采集骨架窗口校准为右半屏（等宽并排不重叠）
             _w_w, _w_h, _, _w_l = engine_pool.shell_window_geometry()
             await shell_window._calibrate_window(page, _w_l, 0, _w_w, _w_h)

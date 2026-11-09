@@ -64,8 +64,12 @@ MIN_WIN_W = 640
 MIN_WIN_H = 480
 
 # 采集调试窗的恒定标题（与 injections._COLLECT_DEBUG_TITLE_JS 的 T 一致）。
-# 既用于按标题认领采集窗页（R-6.84b 单标签），也是内置扩展分组的匹配依据。
+# 只作视觉标识，不再参与采集窗页认领与分组判定（标题守护会与账号标题互覆盖）。
 COLLECT_DEBUG_TITLE = "XHS Leads · 采集调试窗口"
+
+# 采集窗页的 URL 认领依据（R-6.84e）：本实例里落在该域的页就是采集窗页；
+# 内置扩展也按同一判据归组。URL 由导航决定、title 守护改不了，比标题可靠。
+XHS_HOST = "xiaohongshu.com"
 
 def shell_window_geometry() -> tuple[int, int, int, int]:
     """双窗口并排布局（R-6.22，R-6.80 高度改为按屏幕自适应）。
@@ -542,8 +546,13 @@ class AccountEngine:
     def _launch_apply_extension(self, launch_kwargs: dict) -> None:
         """R-6.70：可选自动加载未打包扩展（默认关闭，由 config.extension_enabled 控制）。
 
-        仅当扩展目录含 manifest.json 时才追加两个 flag；目录缺失则什么都不做，
+        仅当扩展目录含 manifest.json 时才追加 flag；目录缺失则什么都不做，
         启动行为与开关关闭时完全一致。不引入 daemon/WebSocket，也不改变进程模型。
+
+        R-6.84e：Chromium 137+ 默认启用 `DisableLoadExtensionCommandLineSwitch`
+        feature，命令行 `--load-extension` 会被静默忽略（表现为 Chrome 里扩展
+        条目为 0、service worker 永不出现，而启动参数看起来完全正确）。必须显式
+        关掉这个 feature 才能让未打包扩展被加载。
         """
         ext_dir = builtin_extension_dir()
         if not ext_dir:
@@ -551,6 +560,9 @@ class AccountEngine:
             return
         launch_kwargs["args"].append(f"--load-extension={ext_dir}")
         launch_kwargs["args"].append(f"--disable-extensions-except={ext_dir}")
+        launch_kwargs["args"].append(
+            "--disable-features=DisableLoadExtensionCommandLineSwitch"
+        )
 
     async def _launch_after_start(self) -> None:
         """启动后注入 stealth（R 批 v1.4 降低风控识别）并回注持久化 Cookie。"""
@@ -748,13 +760,13 @@ class AccountEngine:
     async def _reusable_collect_page(self, ctx):
         """R-6.84b：可复用的采集窗页（同 context、未关闭），否则 None。
 
-        两级判定：先认协调器登记的采集窗引用（keeper 建窗时写入），取不到再按恒定标题
-        在 context 里认领——标题由 init script 守护（injections._COLLECT_DEBUG_TITLE_JS），
-        跨导航不变，是本进程里最稳的「这就是采集窗」信号。
+        两级判定：先认协调器登记的采集窗引用（keeper 建窗时写入），取不到再按 URL
+        在 context 里认领——**不按标题**：两份 title 守护（采集调试窗口 / 账号运营窗口）
+        会互相覆盖，标题实测会被改成「账号名 · 运营窗口」，据此认领会漏。
         跨账号（context 不同）一律不复用，避免 A 账号的采集跑进 B 账号窗口。
         """
         page = await self._registered_collect_page(ctx)
-        return page if page is not None else await self._page_by_title(ctx)
+        return page if page is not None else await self._page_by_url(ctx)
 
     async def _registered_collect_page(self, ctx):
         """协调器登记的那一页——同 context 且未关闭才算数。"""
@@ -771,11 +783,11 @@ class AccountEngine:
             return None
         return None
 
-    async def _page_by_title(self, ctx):
-        """在 context 内按恒定标题认领采集窗页（标题跨导航不变）。"""
+    async def _page_by_url(self, ctx):
+        """在 context 内按 URL 认领采集窗页：本实例里落在小红书域的页就是采集窗页。"""
         for pg in ctx.pages:
             try:
-                if (await pg.title()).startswith(COLLECT_DEBUG_TITLE):
+                if XHS_HOST in (pg.url or ""):
                     return pg
             except Exception:  # noqa: BLE001（页在导航/已关：跳过）
                 continue

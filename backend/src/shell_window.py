@@ -91,7 +91,6 @@ async def open_collect_window(
         await page.wait_for_load_state("domcontentloaded", timeout=12000)
     except Exception:  # noqa: BLE001（采集骨架导航慢：不强求，bring_to_front 兜底）
         pass
-    await _ensure_debug_title(page)
     await _calibrate_window(page, win_left, 0, win_w, win_h)
     try:
         await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
@@ -157,34 +156,6 @@ async def _ensure_shell_title(page) -> None:
         await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
                        label="shell.title_init_evaluate", skip=True)
         page._shell_title_installed = True
-    except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
-        pass
-
-
-async def _ensure_debug_title(page) -> None:
-    """采集调试窗口标题守护：Chrome 窗口标题跟随 document.title。采集页为真实
-    小红书页（SPA 路由/整页导航都会重设 title），用事件级守护（MutationObserver）
-    覆盖为「XHS Leads · 采集调试窗口」，让用户一眼看出这是调试/观察窗口。
-    title 为纯浏览器元数据：不触发网络请求、不改页面逻辑与 DOM 结构，
-    风控面极小（远小于既有 stealth 注入）。
-
-    采用 **page 级 add_init_script**（Playwright 仅对该 page 的后续导航生效，
-    不污染壳窗口/其他页面）+ 当前文档立即生效；防重标记避免重复 add 累积。
-    幂等，可反复调用（已装时仅刷新当前文档）。
-    """
-    _title_js = injections.get("collect_debug_title")
-    if getattr(page, "_debug_title_installed", False):
-        try:
-            await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
-                           label="shell.title_evaluate", skip=True)
-        except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
-            pass
-        return
-    try:
-        await page.add_init_script(_title_js)
-        await cdp_call(page.evaluate(_title_js), timeout=CDP_QUICK,
-                       label="shell.title_init_evaluate", skip=True)
-        page._debug_title_installed = True
     except Exception:  # noqa: BLE001（页面未就绪/已关闭：下次调用重试）
         pass
 
@@ -1435,9 +1406,9 @@ async def _calibrate_reused_collect_win(t2, _t2_url, coord, engine_pool) -> None
     try:
         if _t2_url and "xiaohongshu.com" not in (t2.url or ""):
             await t2.goto(_t2_url, wait_until="domcontentloaded", timeout=10000)
-        # R-6.48h：复用残留路径同样补标题守护（此前仅新建路径注入——重启保留的
-        # 采集窗 裸奔显示 login-hint 原始标题「尚未登录小红书」）
-        await _ensure_debug_title(t2)
+        # R-6.84e：不再做「采集调试窗口」标题守护（用户拍板）——两份 title 守护
+        # （这份与账号运营窗口）会互相覆盖，标题最终变成「账号名 · 运营窗口」，
+        # 按标题认领/分组全部失配。采集窗的标识改由标签组名「采集窗口」与 URL 承担。
         win_w2, win_h2, _, win_left2 = engine_pool.shell_window_geometry()
         await _calibrate_window(t2, win_left2, 0, win_w2, win_h2)
         coord.register_collect_win(t2)

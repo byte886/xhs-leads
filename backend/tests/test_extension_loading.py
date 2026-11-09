@@ -88,4 +88,6 @@ class TestLaunchApplyExtension:
         assert kwargs["args"] == [
             "--load-extension=/x/extension",
             "--disable-extensions-except=/x/extension",
+            # R-6.84e：137+ 默认禁用命令行 load-extension，必须关掉该 feature
+            "--disable-features=DisableLoadExtensionCommandLineSwitch",
         ]

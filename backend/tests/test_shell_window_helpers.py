@@ -149,16 +149,6 @@ def test_shell_title_silent_when_page_not_ready(monkeypatch):
     assert p._shell_title_installed is False  # 未标记，下次会重试
 
 
-def test_debug_title_installs_and_survives_failure(monkeypatch):
-    monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
-    ok = _PgTitle()
-    asyncio.run(sw._ensure_debug_title(ok))
-    assert ok.init_calls == 1 and ok._debug_title_installed is True
-
-    bad = _PgTitle(fail_eval=True, installed=True)
-    asyncio.run(sw._ensure_debug_title(bad))  # 刷新失败也静默
-
-
 # ------------------------------------------------------------ 窗口校准类
 
 

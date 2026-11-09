@@ -110,27 +110,20 @@ def _is_purgeable_xhs_page(url: str) -> bool:
     return "search_result" in url or "/explore/" in url or "/user/" in url
 
 
-async def _page_title_is(page, prefix: str) -> bool:
-    """页标题是否以 prefix 开头（拿不到标题＝不确定，按「不是」处理）。"""
-    try:
-        return (await page.title()).startswith(prefix)
-    except Exception:  # noqa: BLE001（页在导航/已关）
-        return False
-
-
-async def _close_purgeable_pages(pages) -> int:
+async def _close_purgeable_pages(pages, keep=None) -> int:
     """逐页关闭可清理页并计数（关闭失败/采集窗页静默跳过）。
 
     R-6.84d：**采集调试窗页不算残留**。2026-11-09 真机复现「开始采集→停止→立刻再开始」
     后右窗变黑（about:blank）：新一轮的清理把上一轮留下的 search_result / 详情页关了，
-    而采集窗里就那一页（R-6.84b 单标签），关完窗口空了。采集窗标题由 injections 恒定
-    守护，跨导航不变，据此保留即可。
+    而采集窗里就那一页（R-6.84b 单标签），关完窗口空了。
+
+    keep：协调器登记的采集窗任务页，引用判活（标题守护会与账号标题互覆盖，不作主判据）。
     """
     closed = 0
     for p in pages:
-        if not _is_purgeable_xhs_page(p.url or ""):
+        if keep is not None and p is keep:
             continue
-        if await _page_title_is(p, engine_pool.COLLECT_DEBUG_TITLE):
+        if not _is_purgeable_xhs_page(p.url or ""):
             continue
         try:
             await p.close()
@@ -138,6 +131,16 @@ async def _close_purgeable_pages(pages) -> int:
         except Exception:  # noqa: BLE001
             pass
     return closed
+
+
+def _collect_window_ref():
+    """协调器登记的采集窗任务页（shell 未就绪/未开窗返回 None）。"""
+    try:
+        from src import shell_window  # noqa: PLC0415
+
+        return shell_window.current_collect_page()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
@@ -150,7 +153,7 @@ async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
     try:
         eng = await _engine(account_id)
         ctx = await eng.context()
-        closed = await _close_purgeable_pages(list(ctx.pages))
+        closed = await _close_purgeable_pages(list(ctx.pages), _collect_window_ref())
         if closed:
             log.info("采集前清理残留 xhs 页 %d 个", closed)
         await _ensure_window_not_empty(ctx)      # R-6.84d：窗口不能停在空页（黑屏）

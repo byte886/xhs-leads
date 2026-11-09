@@ -1,18 +1,23 @@
-// 采集窗口分组：把标题为「XHS Leads · 采集调试窗口」的标签页收进原生标签组。
+// 采集窗口分组：把采集窗的任务标签收进原生标签组「采集窗口」。
 //
-// 为什么靠标题识别：采集窗的标题由 Python 侧 init script 恒定守护
-// （injections._COLLECT_DEBUG_TITLE_JS 拦截 document.title setter），是本进程里
-// 唯一稳定、可跨导航存活的标识。扩展不读页面内容、不发网络请求。
+// 为什么按 URL 识别而不是标题：标题是页面的东西，Python 侧两份 title 守护
+// （采集调试窗口 / 账号运营窗口）会互相覆盖，实测开始采集后标题变成
+// 「普通人 (@5546627342) · 运营窗口」，按标题前缀判定直接失配，标签进不了组，
+// 原组内标签一关组就解散。URL 由导航决定、守护脚本改不了，是可靠判据。
+//
+// 触发口径（用户拍板）：**只在开始采集这一刻检查一次**——有组就复用、没组就建。
+// 不做通用守护：不监听切标签、不在安装/启动时扫全量、不按定时器巡检。
+// 「开始采集」在浏览器侧唯一可见的信号，就是采集窗的任务标签开始导航（onUpdated
+// 的 loading + url），所以只挂这一个入口；其余时刻一律不主动检查。
 //
 // 生命周期：组由 Chrome 自己维护——组内标签全部关掉后组自动消失，不需要回收逻辑。
-// 「存在的窗口必须有用」由 Python 侧保证（采集窗只留一个任务标签、关多余标签）。
 
 const GROUP_TITLE = '采集窗口';
 const GROUP_COLOR = 'blue'; // Chrome 8 色之一：grey/blue/red/yellow/green/pink/purple/cyan
-const COLLECT_TITLE = 'XHS Leads · 采集调试窗口';
+const XHS_HOST = 'xiaohongshu.com';
 
 function isCollectTab(tab) {
-  return !!tab && typeof tab.title === 'string' && tab.title.startsWith(COLLECT_TITLE);
+  return !!tab && typeof tab.url === 'string' && tab.url.includes(XHS_HOST);
 }
 
 async function ensureGroup(tabIds, windowId) {
@@ -30,33 +35,22 @@ async function ensureGroup(tabIds, windowId) {
   });
 }
 
-// 单个标签被创建/更新（含标题变化、跨导航）时归组。
-chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
-  if (!info.title && !info.status) return;
-  if (!isCollectTab(tab)) return;
-  try {
-    await ensureGroup([tabId], tab.windowId);
-  } catch (e) {
-    console.warn('[collect-group] group failed:', e && e.message);
-  }
-});
-
-// 扩展被安装/浏览器启动/扩展被唤醒时补扫已有标签（已分组的不重复建组）。
-async function sweep() {
-  try {
-    const tabs = (await chrome.tabs.query({})).filter(isCollectTab);
-    if (!tabs.length) return;
-    const byWindow = new Map();
-    for (const t of tabs) {
-      if (!byWindow.has(t.windowId)) byWindow.set(t.windowId, []);
-      byWindow.get(t.windowId).push(t.id);
-    }
-    for (const [windowId, ids] of byWindow) await ensureGroup(ids, windowId);
-  } catch (e) {
-    console.warn('[collect-group] sweep failed:', e && e.message);
-  }
+// 一次检查：把窗口里的采集标签补齐进组，缺组就建组；已对齐则什么都不做。
+async function checkWindow(windowId) {
+  const tabs = (await chrome.tabs.query({ windowId })).filter(isCollectTab);
+  if (!tabs.length) return;
+  const sameWindow = (await chrome.tabGroups.query({ title: GROUP_TITLE }))
+    .find((g) => g.windowId === windowId);
+  const inside = sameWindow ? tabs.filter((t) => t.groupId === sameWindow.id) : [];
+  if (sameWindow && inside.length === tabs.length) return; // 已对齐，不动
+  await ensureGroup(tabs.map((t) => t.id), windowId);
 }
 
-chrome.runtime.onInstalled.addListener(sweep);
-chrome.runtime.onStartup.addListener(sweep);
-sweep();
+// 采集启动 = 采集窗标签开始一次新导航。只在这里检查，别处不做通用守护。
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== 'loading' || !info.url) return; // 只要新导航，忽略标题/图标刷新
+  if (!isCollectTab(tab)) return;
+  checkWindow(tab.windowId).catch((e) => {
+    console.warn('[collect-group] check failed:', e && e.message);
+  });
+});
