@@ -935,7 +935,13 @@ class AccountEngine:
 
         引擎窗口本身常驻：不在任务级反复开-关 Chrome 进程（现象 1 机制核心）。
         真正清理无关 tab 走 cleanup_tabs()（如 APP 启动清理）。
+
+        R-6.84d：**壳窗页永不关闭**。用户口径是「APP 页面永远不会消失」；这里用与
+        cleanup_tabs 同一套壳窗引用判定，任何路径误传壳窗页都跳过（引用不可用时按 URL 兜底）。
         """
+        if page is self._resolve_shell_protected_page():
+            log.info("跳过关闭壳窗页（APP 页面必须常驻）")
+            return
         try:
             ctx = page.context
             if len(ctx.pages) <= 1:

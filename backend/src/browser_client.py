@@ -110,11 +110,27 @@ def _is_purgeable_xhs_page(url: str) -> bool:
     return "search_result" in url or "/explore/" in url or "/user/" in url
 
 
+async def _page_title_is(page, prefix: str) -> bool:
+    """页标题是否以 prefix 开头（拿不到标题＝不确定，按「不是」处理）。"""
+    try:
+        return (await page.title()).startswith(prefix)
+    except Exception:  # noqa: BLE001（页在导航/已关）
+        return False
+
+
 async def _close_purgeable_pages(pages) -> int:
-    """逐页关闭可清理页并计数（关闭失败静默跳过）。"""
+    """逐页关闭可清理页并计数（关闭失败/采集窗页静默跳过）。
+
+    R-6.84d：**采集调试窗页不算残留**。2026-11-09 真机复现「开始采集→停止→立刻再开始」
+    后右窗变黑（about:blank）：新一轮的清理把上一轮留下的 search_result / 详情页关了，
+    而采集窗里就那一页（R-6.84b 单标签），关完窗口空了。采集窗标题由 injections 恒定
+    守护，跨导航不变，据此保留即可。
+    """
     closed = 0
     for p in pages:
         if not _is_purgeable_xhs_page(p.url or ""):
+            continue
+        if await _page_title_is(p, engine_pool.COLLECT_DEBUG_TITLE):
             continue
         try:
             await p.close()
@@ -137,9 +153,29 @@ async def _cleanup_stale_xhs_pages(account_id: str = "default") -> int:
         closed = await _close_purgeable_pages(list(ctx.pages))
         if closed:
             log.info("采集前清理残留 xhs 页 %d 个", closed)
+        await _ensure_window_not_empty(ctx)      # R-6.84d：窗口不能停在空页（黑屏）
         return closed
     except Exception:  # noqa: BLE001
         return 0
+
+
+async def _ensure_window_not_empty(ctx) -> bool:
+    """R-6.84d：清理后窗口一页不剩时补一个 explore 页，绝不把窗口留在 about:blank。
+
+    空窗对用户就是一个黑窗口，既不可用也不像「在跑」，与「存在的窗口总是有用的」冲突。
+    """
+    if list(ctx.pages):
+        return False
+    try:
+        await ctx.new_page()
+        page = list(ctx.pages)[-1]
+        await cdp_call(page.goto(f"{_XHS}/explore", wait_until="domcontentloaded"),
+                       timeout=CDP_NAV, label="empty.window.restore", skip=True)
+        log.info("清理后窗口已空，补开 explore 页 url=%s", page.url)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.info("补开 explore 页失败 %s", str(exc)[:80])
+        return False
 
 # ===========================================================================
 # 页面加载与提取
