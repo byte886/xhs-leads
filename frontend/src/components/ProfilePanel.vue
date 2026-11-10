@@ -8,6 +8,10 @@ import {
   apiAiOptions, apiSaveAiOptions, apiResetAiOptions,
 } from '../api'
 import type { AiProfile, AiOptions } from '../api'
+import TemplatePanel from './TemplatePanel.vue'
+
+// 第 4 Tab 内的二级子页：账号档案 / 内容模板（顶级 Tab 不增加）
+const sub = ref<'profiles' | 'templates'>('profiles')
 
 const profileFields = (): AiProfile => ({
   id: '', name: '', nickname: '', brand: '', industry: '',
@@ -166,6 +170,12 @@ onMounted(() => {
 
 <template>
   <div class="pf-page">
+    <div class="pf-subnav" role="tablist" aria-label="内容资产子页">
+      <button role="tab" :class="{ on: sub === 'profiles' }" @click="sub = 'profiles'">账号档案</button>
+      <button role="tab" :class="{ on: sub === 'templates' }" @click="sub = 'templates'">内容模板</button>
+    </div>
+
+    <div v-show="sub === 'profiles'" class="pf-sub">
     <header class="pf-head">
       <div>
         <h1>账号档案</h1>
@@ -268,6 +278,12 @@ onMounted(() => {
     <datalist id="opt-tones">
       <option v-for="v in opt.tones" :key="'t' + v" :value="v" />
     </datalist>
+    </div>
+
+    <!-- 内容模板子页：文字模板 + 图片模板 -->
+    <div v-show="sub === 'templates'" class="pf-sub">
+      <TemplatePanel />
+    </div>
 
     <!-- 选项维护弹层 -->
     <div v-if="optOpen" class="pf-mask" @click.self="optOpen = false">
@@ -320,6 +336,29 @@ onMounted(() => {
 
 <style scoped>
 .pf-page { padding: 22px 24px 28px; }
+
+/* ---- 二级子页切换：segmented control，选中白底轻阴影（不用红，与顶级 Tab 区分层级） ---- */
+.pf-subnav {
+  display: inline-flex; gap: 2px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--r-ctl); padding: 3px; margin-bottom: 18px;
+}
+.pf-subnav button {
+  border: 0; background: transparent; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--ink-3);
+  padding: 6px 18px; border-radius: 4px;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.pf-subnav button:hover { color: var(--ink); }
+.pf-subnav button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.pf-subnav button.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(43,30,24,.12); }
+.pf-sub { min-width: 0; }
+.tpl-placeholder {
+  border: 1px dashed var(--line); border-radius: var(--r-card);
+  padding: 52px 24px; text-align: center;
+}
+.tpl-placeholder b { font-size: 16px; color: var(--ink-2); display: block; margin-bottom: 10px; }
+.tpl-placeholder p { font-size: 13px; line-height: 1.8; color: var(--ink-3); margin: 0; }
 
 /* ---- 页头：标题与说明竖排，右侧只放一个动作 ---- */
 .pf-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
