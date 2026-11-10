@@ -7,7 +7,6 @@ import {
   apiGetImageConfig, apiSetImageConfig, apiClearImageConfig, apiTestImageConfig,
   apiLicenseStatus, apiLicenseActivate,
   apiMirrorWindow, apiMirrorOpen, apiMirrorClose,
-  apiLoginStatus, apiLoginBegin,
   apiGetAppConfig, apiSetAppConfig,
   apiListAccounts, apiAddAccount, apiDeleteAccount, apiRenameAccount,
   apiRefreshIdentity, apiScanLogin,
@@ -31,33 +30,9 @@ const intervalBase = computed(() => (appState.params.interval / 1000).toFixed(1)
 const intervalMax = computed(() => ((appState.params.interval + 800) / 1000).toFixed(1))
 
 // ---- 账号与登录 ----
-const loggedIn = ref(false)
-const loginText = ref('检测中…')
-
-async function loadAcct() {
-  try {
-    const lg = await apiLoginStatus()
-    loggedIn.value = !!lg.logged_in
-    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-    loginText.value = lg.kicked ? '登录已失效（被踢）' : (lg.logged_in ? '已登录' : '未登录')
-  } catch {
-    loginText.value = '检测失败'
-  }
-}
-
-async function relogin() {
-  try {
-    const r = await apiLoginBegin(false) // 主动重登：登录页带叉可关闭（登录态不变）
-    if (r.already_logged_in) {
-      toast('当前已登录，无需重新登录')
-    } else {
-      toast('正在打开小红书登录页（右上角可关闭）…')
-      await loadAcct()
-    }
-  } catch (e) {
-    toast('重新登录失败：' + (e as Error).message, 'error')
-  }
-}
+// 登录态不再在设置页展示/管理（登录统一由右侧调试窗承担，左窗不弹登录框）：
+// 账号卡片显示 @小红书号 即已登录，没有就是未登录；需要登录由采集/发布撞墙时
+// 自动在右窗开登录页。故这里只保留多账号管理。
 
 // ---- 多账号管理 ----
 const accounts = ref<AccountItem[]>([])
@@ -459,7 +434,7 @@ async function testImg() {
 // ---- 档案已拆成独立 Tab（ProfilePanel.vue），设置页不再承载档案 ----
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAcct(), loadAppCfg(), loadAccounts()])
+  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAppCfg(), loadAccounts()])
   fillAiForm()
   fillImgForm()
 })
@@ -483,21 +458,6 @@ onMounted(async () => {
       <div class="settings-body">
         <!-- 账号与登录 -->
         <section v-if="activeCat === 'account'">
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">登录状态</span>
-              <span class="acct-status" :class="{ on: loggedIn }">
-                {{ loginText }}{{ appState.login.nickname ? ' · ' + appState.login.nickname : '' }}
-              </span>
-              <button class="btn primary sm" @click="relogin">重新登录</button>
-            </div>
-            <p class="set-hint">
-              登录统一在右侧调试窗完成，左侧 APP 不受影响、也不会弹登录框。
-              点「重新登录」会在右侧调试窗打开小红书官方登录页（右上角「✕」可关闭，登录态不变）；
-              未登录 / 被踢 / 采集报需要登录时，右侧调试窗会自动打开登录页让你扫码。
-            </p>
-          </div>
-
           <!-- 多账号管理 -->
           <div class="set-row">
             <div class="row-main">
@@ -892,12 +852,6 @@ input:not([type="checkbox"]) {
 .switch input:checked + .track .thumb { left: 19px; }
 
 /* 状态元素 */
-.acct-status {
-  font-size: 13px; font-weight: 600; color: var(--danger);
-  padding: 4px 12px; border-radius: var(--r-pill); background: var(--danger-soft);
-}
-.acct-status.on { color: var(--green); background: rgba(47, 122, 85, .10); }
-
 /* 多账号列表：主标题=业务名（大、深），副标题=昵称/内部id/用途（小、灰） */
 .acct-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .acct-item {

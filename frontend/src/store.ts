@@ -87,7 +87,7 @@ export function setTab(t: Tab) {
   appState.tab = t
 }
 
-/** 刷新全局共享状态（登录 / AI Key），由 FlowBar 状态条挂载时调用 */
+/** 刷新全局共享状态（登录 / AI Key），由设置页在保存配置后调用 */
 export function refreshSysStatus(part: Partial<SysStatus>) {
   Object.assign(appState.sys, part)
 }
