@@ -116,6 +116,28 @@ def require_image() -> dict:
     return cfg
 
 
+def _parse_model_names(r: httpx.Response) -> list[str]:
+    try:
+        items = r.json().get("data") or []
+        return [str(x.get("id", "")) for x in items if isinstance(x, dict)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _models_probe_result(r: httpx.Response) -> dict:
+    if r.status_code == 200:
+        names = _parse_model_names(r)
+        return {"ok": True, "count": len(names), "models": names[:10]}
+    if r.status_code in (401, 403):
+        return {"ok": False, "error": f"鉴权失败（HTTP {r.status_code}）：检查 API Key 是否属于该供应商"}
+    return {
+        "ok": True,
+        "count": 0,
+        "models": [],
+        "note": f"该端点不支持模型列举（HTTP {r.status_code}）；配置已保存，首次生成时再做真实校验",
+    }
+
+
 async def test_connection(provider: str, api_key: str, base_url: str) -> dict:
     """测试生图配置。
 
@@ -133,30 +155,37 @@ async def test_connection(provider: str, api_key: str, base_url: str) -> dict:
             r = await c.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"连接失败：{e}"}
-    if r.status_code == 200:
-        try:
-            items = r.json().get("data") or []
-            names = [x.get("id", "") for x in items if isinstance(x, dict)]
-        except Exception:  # noqa: BLE001
-            names = []
-        return {"ok": True, "count": len(names), "models": names[:10]}
-    if r.status_code in (401, 403):
-        return {"ok": False, "error": f"鉴权失败（HTTP {r.status_code}）：检查 API Key 是否属于该供应商"}
-    return {
-        "ok": True,
-        "count": 0,
-        "models": [],
-        "note": f"该端点不支持模型列举（HTTP {r.status_code}）；配置已保存，首次生成时再做真实校验",
-    }
+    return _models_probe_result(r)
+
+
+def _content_image_url(item: object) -> str:
+    """从一条 content 元素取图片 URL；非图片元素返回空串。"""
+    if not isinstance(item, dict) or item.get("type") != "image":
+        return ""
+    return str(item.get("image") or "")
+
+
+def _choice_content(choice: object) -> list:
+    """从一个 choice 取 message.content；结构异常时返回空列表。"""
+    if not isinstance(choice, dict):
+        return []
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return []
+    return message.get("content") or []
 
 
 def _extract_image_urls(data: dict) -> list[str]:
     """从百炼响应里提取所有 type=image 的图片 URL。"""
+    output = (data or {}).get("output")
+    if not isinstance(output, dict):
+        return []
     urls = []
-    for choice in (data.get("output") or {}).get("choices") or []:
-        for item in (choice.get("message") or {}).get("content") or []:
-            if item.get("type") == "image" and item.get("image"):
-                urls.append(item["image"])
+    for choice in output.get("choices") or []:
+        for item in _choice_content(choice):
+            url = _content_image_url(item)
+            if url:
+                urls.append(url)
     return urls
 
 
