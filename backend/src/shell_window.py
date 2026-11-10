@@ -1081,12 +1081,12 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
 
 
 async def _guard_startup_status(base: str) -> None:
-    """启动时按 login_status 判定三态。（用户最新拍板，覆盖）：
-    启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面（不弹任何
-    登录框、不被登录页覆盖），只等前端发来的 login_begin 信号（App.vue 检测到
-    未登录/被踢即发一次，普通用户无感），守卫据此在**右窗**打开小红书登录页。
-    登录完全由右窗承担，左窗全程只显示 APP。已登录启动不受影响
-    （守卫待命，仅响应登录引导 pending）。"""
+    """启动时按 login_status 判定三态（用户最新拍板，覆盖）：
+    启动未登录/被踢**什么都不做**——壳窗保持 APP 界面（不弹登录框、不被登录页
+    覆盖、不自动开右窗等待页）。登录只在用户**主动操作确实需要**时才发生：
+    点「开始采集」撞墙、采集/发布失败，前端发 login_begin 信号，守卫据此在
+    **右窗**打开小红书登录页。登录完全由右窗承担，左窗全程只显示 APP。
+    已登录启动不受影响（守卫待命，仅响应登录引导 pending）。"""
     ls = await _guard_get_json(base, "/api/login_status")
     kicked = bool(ls and ls.get("kicked"))
     if ls and ls.get("logged_in") and not kicked:
@@ -1094,7 +1094,7 @@ async def _guard_startup_status(base: str) -> None:
         return
     reason = "启动检测到登录已被平台踢出" if kicked else "启动未登录"
     log.info(
-        f"{reason}——壳窗保持 APP 界面，等前端信号后在右窗打开登录页",
+        f"{reason}——壳窗保持 APP 界面，不自动开登录页，等用户主动操作再在右窗引导",
     )
 
 
@@ -1157,12 +1157,14 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
 
     语义（用户拍板）：
     - 左窗（壳窗）只显示 APP：不弹登录框、不被登录页覆盖，全程不参与登录。
-    - 启动未登录/被踢：壳窗保持 APP 界面，等前端 login_begin 信号（App.vue 检测
-      未登录即发一次，用户无感）→ 守卫在**右窗**打开登录页（右窗缺失则现开）。
-    - 运行时被踢同样走右窗（前端发同一信号）。
+    - **启动/定时不自动开登录页**：未登录时左窗照常显示 APP，不挂右窗等待页
+      （二维码会过期、页面卡死，没有意义）。
+    - 登录只在用户**主动操作确实需要**时才走右窗：点「开始采集」撞墙、采集/发布
+      失败，前端发 login_begin → 守卫在**右窗**打开登录页（右窗缺失则现开）。
+    - 运行时被踢同样等用户主动操作（不自动弹、不自动导航）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
     - 登录成功：id_token → 等待遮罩 → 通知后端 login_ok（不搬 Cookie）→ 右窗自行跳转。
-    -pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
+    - pending 等待为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
       （含 asyncio.Event），login_begin 置位 evt → 守卫 `await
       evt.wait()` 醒来导航，主循环零轮询。gate 为 None（测试/无壳直跑）退化为
       阻塞到停止，零轮询。
@@ -1174,25 +1176,11 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
     base = base_url.rstrip("/")
     await _guard_startup_status(base)
 
-    # 启动兜底：前端页面一加载就发 login_begin，这次信号可能早于守卫进入等待
-    # （evt 由 launcher 在守卫启动前注入，pending 已置位但那次 set 没人接）。
-    # 只在启动这一刻消费一次 pending，之后一律走事件——否则残留 pending 会让
-    # 守卫每轮都判「要去登录」，反复把右窗拉回登录页。
-    startup_force: bool | None = None
-    if gate and gate.get("pending"):
-        startup_force = bool(gate.get("force"))
-        evt0 = gate.get("evt")
-        if evt0 is not None:
-            evt0.clear()
-
     in_login = False
     while not stop.is_set():
         if stop.is_set():
             return
-        if startup_force is not None:
-            force, startup_force = startup_force, None
-        else:
-            force = await _guard_next_force(gate, win, base, stop)
+        force = await _guard_next_force(gate, win, base, stop)
         if force is None:
             continue  # 事件已消费但 pending 被清：不导航，回挂起
         if await _rebind_if_closed(win, base):

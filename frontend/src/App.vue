@@ -22,29 +22,19 @@ const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 const menuNote = ref<Note | null>(null)
 const menuPos = ref({ x: 0, y: 0 })
 
-// 登录形态（用户拍板·双窗职责分离）：**右窗（采集调试窗）是唯一登录落点**，
-// 左窗 APP 全程不弹登录框、不被登录页覆盖。未登录 / 被踢 / 采集异常需要登录时，
-// 前端只发一个信号 apiLoginBegin(force=true)，launcher 守卫在右窗打开小红书登录页
-// （右窗缺失时守卫按采集窗同一路径现开标准窗口）；用户扫码完成登录后右窗自行跳转，
-// 左窗界面不中断。
-// 去重：30s 状态检查只触发一次（loginAsked），避免把正在右窗浏览的用户反复拉回
-// 登录页；登录成功或被踢后重置。用户真实动作（点采集/发布失败、采集撞墙）走
-// ensureRightLogin(true)，允许重新拉起。
-let loginAsked = false
+// 登录形态（用户拍板·双窗职责分离）：
+// - **右窗（采集调试窗）是唯一登录落点**，左窗 APP 全程不弹登录框、不被登录页覆盖。
+// - **启动/定时不自动挂等待页**：未登录时左窗照常显示 APP，不主动开右窗
+//   （否则二维码会过期、页面卡死，用户还得手动刷新，没有意义）。
+// - 只在用户**主动操作确实需要登录**时才发信号 apiLoginBegin(force=true)：
+//   点「开始采集」撞墙、采集/发布失败提示登录。launcher 守卫据此在右窗打开
+//   小红书登录页（右窗缺失时按采集窗同一路径现开标准窗口）；扫码完成后右窗
+//   自行跳转，左窗界面不中断。
 let offEvents: (() => void) | null = null
 
-function ensureRightLogin(force = false) {
-  if (!force && loginAsked) return
-  loginAsked = true
-  apiLoginBegin(true).catch(() => { loginAsked = false /* 后端未就绪：下次信号再触发 */ })
-}
-
-function checkLogin() {
-  apiLoginStatus(8000).then((lg) => {
-    appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-    // 未登录或被踢 → 右窗打开登录页（采集中不抢占：让当前采集收尾，失败路径再触发）
-    if ((!lg.logged_in || lg.kicked) && !appState.collecting) ensureRightLogin()
-  }).catch(() => { /* 后端未就绪静默 */ })
+function ensureRightLogin() {
+  // 仅由用户主动动作触发，不存在轮询风暴，无需去重；catch 防后端未就绪时的未处理拒绝。
+  apiLoginBegin(true).catch(() => {})
 }
 
 function openMenu(payload: { note: Note; x: number; y: number }) {
@@ -91,7 +81,7 @@ async function collectClients(note: Note) {
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
       toast('采集失败：' + msg.slice(0, 120), 'error')
-      if (isLoginAbnormal(msg)) ensureRightLogin(true)
+      if (isLoginAbnormal(msg)) ensureRightLogin()
       return
     }
     const data = await resp.json()
@@ -116,8 +106,10 @@ function fmtTime(s: number) {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
 }
 
-// 启动检查（登录 UI 改版）：等待后端/引擎就绪后再判定，避免 fetch 挂起/误判。
-// 最多轮询 10 轮 × (8s 超时 + 2s 间隔) ≈ 引擎冷启动窗口；全部失败视为未登录（无引擎无法工作，弹窗引导）。
+// 启动检查：等待后端/引擎就绪后再判定登录态，避免 fetch 挂起/误判。
+// 最多轮询 10 轮 × (8s 超时 + 2s 间隔) ≈ 引擎冷启动窗口；全部失败视为未登录。
+// 这里**只更新状态、不自动开登录页**——未登录时左窗照常显示 APP，等用户主动
+// 采集/发布撞墙时才在右窗引导登录。
 const SLEEP = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function ensureLoginChecked() {
@@ -128,29 +120,24 @@ async function ensureLoginChecked() {
   const loggedIn = !!(lg && lg.logged_in)
   const kicked = !!(lg && lg.kicked)
   appState.login = { logged_in: loggedIn, nickname: (lg && lg.nickname) || '', kicked }
-  if ((!loggedIn || kicked) && !appState.collecting) {
-    ensureRightLogin()
-  }
 }
 
-// 启动时检测登录态：未登录/被踢 → 右窗打开登录页（左窗 APP 不弹框、不遮挡）。
-// 30s 状态检查里 loginAsked 置位，已触发过就不再重复把右窗拉回登录页。
+// 启动只做登录态判定（左窗 APP 不弹框、不遮挡、不自动开右窗等待页）。
 onMounted(async () => {
   await ensureLoginChecked()
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
-  // 与用户手动浏览叠加会加重平台风控判定）。只在两种真实信号到达时才响应：
-  //   ① collect 事件 need_login（采集撞墙即结束 = 确实需要登录）→ 右窗打开登录页
-  //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）→ 解除已触发标记
+  // 只在两种真实信号到达时才响应：
+  //   ① collect 事件 need_login（用户主动采集撞墙 = 确实需要登录）→ 右窗打开登录页
+  //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）→ 同步左窗状态
   offEvents = onAppEvent((ev) => {
     if (ev.kind === 'collect' && ev.data.need_login) {
       appState.login = { logged_in: false, nickname: '', kicked: false }
-      ensureRightLogin(true)
+      ensureRightLogin()
     }
     if (ev.kind === 'login' && ev.data.logged_in) {
       appState.login = { logged_in: true, nickname: '', kicked: false }
-      loginAsked = false
     }
   })
   onUnmounted(() => { if (offEvents) { offEvents(); offEvents = null } })
@@ -181,7 +168,7 @@ onMounted(async () => {
 
     <!-- 采集 Tab：左侧面板 + 采集主区 -->
     <div v-show="appState.tab === 'collect'" class="workbench">
-      <CollectPanel @open-login="ensureRightLogin(true)" />
+      <CollectPanel @open-login="ensureRightLogin" />
       <main class="work">
         <WorkArea @menu="openMenu" @clone="cloneOne" @clients="collectClients" />
       </main>
@@ -189,7 +176,7 @@ onMounted(async () => {
 
     <!-- 创作 Tab：克隆编辑器 + AI 工具条 + 发布前质检（v-show 保持编辑状态） -->
     <div v-show="appState.tab === 'create'" class="publish-wrap">
-      <PublishPage ref="publishRef" @open-login="ensureRightLogin(true)" />
+      <PublishPage ref="publishRef" @open-login="ensureRightLogin" />
     </div>
 
     <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->
