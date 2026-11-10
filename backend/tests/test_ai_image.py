@@ -99,3 +99,56 @@ def test_download_writes_file(monkeypatch, tmp_path):
     path = asyncio.run(ai_image._download("http://a/1.png", "ai_x_0.png"))  # noqa: SLF001
     assert path == "/app/images/ai_x_0.png"
     assert (tmp_path / "images" / "ai_x_0.png").read_bytes() == b"PNGDATA"
+
+
+def test_page_image_prompt_cover_vs_content():
+    """封面提示词强调实拍/留白，内容页带主题，且都禁止模型出文字。"""
+    profile = {"industry": "翡翠", "products": "糯种手镯"}
+    cover = server._page_image_prompt({"type": "cover", "heading": "封面"}, profile, 0)
+    inner = server._page_image_prompt({"type": "content", "heading": "挑水头"}, profile, 1)
+    assert "封面" in cover and "不要出现任何文字" in cover
+    assert "挑水头" in inner and "内页" in inner
+
+
+def test_one_click_route(monkeypatch):
+    """一键串联：生文 1 次 + 逐页生图 4 次，返回 outline 与 4 张图。"""
+    outline = {"title": "t", "body": "b", "tags": "#x", "pages": [
+        {"type": "cover", "heading": "c", "copy": ""},
+        {"type": "content", "heading": "p1", "copy": ""},
+        {"type": "content", "heading": "p2", "copy": ""},
+        {"type": "content", "heading": "p3", "copy": ""},
+    ]}
+
+    async def fake_outline(profile_id, structure, word_count, note):
+        return outline
+
+    calls = []
+
+    async def fake_gen(prompt, size=None, n=1):
+        calls.append(prompt)
+        return [f"/app/images/ai_{len(calls)}.png"]
+
+    monkeypatch.setattr(server, "run_outline", fake_outline)
+    monkeypatch.setattr(ai_image, "generate_image", fake_gen)
+    monkeypatch.setattr(server, "ai_image", ai_image)
+    r = TestClient(server.app).post("/api/ai_generate_note", json={
+        "profile_id": "p1", "structure": "避坑清单", "word_count": 400, "note": {},
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["outline"] == outline and len(body["images"]) == 4 and len(calls) == 4
+
+
+def test_one_click_route_error(monkeypatch):
+    """生图抛 ValueError → 路由转 400。"""
+    async def fake_outline(*a):
+        return {"pages": [{"type": "cover"}]}
+
+    async def fake_gen(*a, **k):
+        raise ValueError("生图未配置")
+
+    monkeypatch.setattr(server, "run_outline", fake_outline)
+    monkeypatch.setattr(ai_image, "generate_image", fake_gen)
+    monkeypatch.setattr(server, "ai_image", ai_image)
+    r = TestClient(server.app).post("/api/ai_generate_note", json={"note": {}})
+    assert r.status_code == 400 and "生图未配置" in r.text

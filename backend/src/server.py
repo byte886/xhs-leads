@@ -3122,6 +3122,9 @@ _OUTLINE_SPEC = """输出严格 JSON（不要代码块、不要解释），结�
 要求：pages 恰好 4 页（1 封面 + 3 内容页）；内容只能来自档案和原笔记，禁止编造价格、地址、体验。"""
 
 
+_WC_SPEC = {200: "200 字以内，简短直接", 400: "400 字左右", 600: "600 字以内，可充分展开"}
+
+
 def _parse_json_block(text: str) -> dict:
     """容错解析模型输出：去掉 ``` 围栏，截取首个 { 到末个 }。"""
     s = (text or "").strip()
@@ -3135,19 +3138,16 @@ def _parse_json_block(text: str) -> dict:
     return json.loads(s)
 
 
-@app.post("/api/ai_outline")
-async def ai_outline(req: OutlineReq):
-    """一句话 → 可编辑大纲（标题/正文/标签/分页文案）。人在大纲阶段先改，再花钱生图。"""
-    _check_license_or_raise("llm")
+async def run_outline(profile_id: str, structure: str, word_count: int, note: dict) -> dict:
+    """生文核心：返回大纲 dict（title/body/tags/pages），供 ai_outline 路由与一键串联复用。"""
     if not llm_service.enabled():
-        raise HTTPException(400, "未配置 AI 模型：请先在「设置 · AI」配置生文模型")
-    profile = profiles_store.get_profile(req.profile_id) or profiles_store.default_profile()
-    title = (req.note.get("title") or "")[:500]
-    desc = (req.note.get("desc") or "")[:2000]
-    keyword = (req.note.get("keyword") or "")[:200]
-    structure = (req.structure or "避坑清单")[:40]
-    _WC_SPEC = {200: "200 字以内，简短直接", 400: "400 字左右", 600: "600 字以内，可充分展开"}
-    target = req.word_count if req.word_count in _WC_SPEC else 400
+        raise ValueError("未配置 AI 模型：请先在「设置 · AI」配置生文模型")
+    profile = profiles_store.get_profile(profile_id) or profiles_store.default_profile()
+    title = (note.get("title") or "")[:500]
+    desc = (note.get("desc") or "")[:2000]
+    keyword = (note.get("keyword") or "")[:200]
+    structure = (structure or "避坑清单")[:40]
+    target = word_count if word_count in _WC_SPEC else 400
     system = "\n".join([
         "你是小红书图文创作专家，只输出可直接发布的文案，拒绝“宝子们/家人们/谁懂啊”式通用AI味。",
         profiles_store.profile_prompt_block(profile),
@@ -3158,14 +3158,67 @@ async def ai_outline(req: OutlineReq):
         f"目标正文字数：{_WC_SPEC[target]}；正文实际字数请贴近该目标，不要明显超出。\n\n"
         "请按该结构规划一篇全新的小红书图文笔记。\n" + _OUTLINE_SPEC
     )
+    raw = await llm_service.chat(system, prompt, max_tokens=2400, temperature=0.8)
+    return _parse_json_block(raw)
+
+
+@app.post("/api/ai_outline")
+async def ai_outline(req: OutlineReq):
+    """一句话 → 可编辑大纲（标题/正文/标签/分页文案）。人在大纲阶段先改，再花钱生图。"""
+    _check_license_or_raise("llm")
     try:
-        raw = await llm_service.chat(system, prompt, max_tokens=2400, temperature=0.8)
-        data = _parse_json_block(raw)
+        data = await run_outline(req.profile_id, req.structure, req.word_count, req.note)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"大纲解析失败：{e}") from e
+    profile = profiles_store.get_profile(req.profile_id) or profiles_store.default_profile()
     return {"ok": True, "outline": data, "profile_id": (profile or {}).get("id", "")}
+
+
+def _page_image_prompt(page: dict, profile: dict, index: int) -> str:
+    """把单页文案转成生图视觉提示词：不让模型出文字（中文小字易糊），文字后期 HTML 叠加。"""
+    industry = profile.get("industry") or "珠宝"
+    products = profile.get("products") or ""
+    heading = page.get("heading", "")
+    if page.get("type") == "cover" or index == 0:
+        return (
+            f"小红书封面，{industry}门店高级感实拍风格，主体：{products or industry}，"
+            "3:4竖构图，柔和自然光，浅景深，背景干净，顶部与底部留白便于后期加标题，"
+            "画面不要出现任何文字、字母或水印"
+        )
+    return (
+        f"小红书内页配图，{industry}主题：{heading}，相关元素：{products or industry}，"
+        "3:4竖构图，色调统一、干净通透，一屏一个视觉重点，"
+        "画面不要出现任何文字、字母或水印"
+    )
+
+
+class OneClickReq(BaseModel):
+    profile_id: str = ""
+    structure: str = ""
+    word_count: int = 400
+    note: dict = {}
+
+
+@app.post("/api/ai_generate_note")
+async def ai_generate_note(req: OneClickReq):
+    """一键生成：生文（标题/正文/标签/分页）→ 逐页生图（1 封面 + 3 内容图，3:4）。"""
+    _check_license_or_raise("llm")
+    try:
+        outline = await run_outline(req.profile_id, req.structure, req.word_count, req.note)
+        profile = (
+            profiles_store.get_profile(req.profile_id)
+            or profiles_store.default_profile()
+            or {}
+        )
+        images = []
+        for i, page in enumerate((outline.get("pages") or [])[:4]):
+            prompt = _page_image_prompt(page, profile, i)
+            images.extend(await ai_image.generate_image(prompt, n=1))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "outline": outline, "images": images}
 
 
 # ================= 静态前端 =================
