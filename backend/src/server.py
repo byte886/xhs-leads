@@ -3194,6 +3194,15 @@ def _page_image_prompt(page: dict, profile: dict, index: int) -> str:
     )
 
 
+async def _images_for_pages(pages: list[dict], profile: dict) -> list[str]:
+    """逐页构造提示词并生图（封面+内容页，3:4），供一键串联与按大纲配图复用。"""
+    images = []
+    for i, page in enumerate((pages or [])[:4]):
+        prompt = _page_image_prompt(page, profile, i)
+        images.extend(await ai_image.generate_image(prompt, n=1))
+    return images
+
+
 class OneClickReq(BaseModel):
     profile_id: str = ""
     structure: str = ""
@@ -3212,13 +3221,33 @@ async def ai_generate_note(req: OneClickReq):
             or profiles_store.default_profile()
             or {}
         )
-        images = []
-        for i, page in enumerate((outline.get("pages") or [])[:4]):
-            prompt = _page_image_prompt(page, profile, i)
-            images.extend(await ai_image.generate_image(prompt, n=1))
+        images = await _images_for_pages(outline.get("pages"), profile)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True, "outline": outline, "images": images}
+
+
+class OutlineImageReq(BaseModel):
+    profile_id: str = ""
+    pages: list[dict] = []
+
+
+@app.post("/api/ai_image_from_outline")
+async def image_from_outline(req: OutlineImageReq):
+    """按已编辑大纲逐页生图（人改完大纲再配图），返回与 pages 对齐的 3:4 图片路径。"""
+    _check_license_or_raise("llm")
+    if not (req.pages or []):
+        raise HTTPException(400, "缺少分页内容")
+    profile = (
+        profiles_store.get_profile(req.profile_id)
+        or profiles_store.default_profile()
+        or {}
+    )
+    try:
+        images = await _images_for_pages(req.pages, profile)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "images": images}
 
 
 # ================= 静态前端 =================

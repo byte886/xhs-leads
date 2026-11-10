@@ -152,3 +152,32 @@ def test_one_click_route_error(monkeypatch):
     monkeypatch.setattr(server, "ai_image", ai_image)
     r = TestClient(server.app).post("/api/ai_generate_note", json={"note": {}})
     assert r.status_code == 400 and "生图未配置" in r.text
+
+
+def test_image_from_outline_route(monkeypatch):
+    """按大纲配图：逐页调生图，返回与 pages 对齐的图片路径。"""
+    pages = [
+        {"type": "cover", "heading": "c", "copy": ""},
+        {"type": "content", "heading": "p1", "copy": ""},
+    ]
+    calls = []
+
+    async def fake_gen(prompt, size=None, n=1):
+        calls.append(prompt)
+        return [f"/app/images/ai_{len(calls)}.png"]
+
+    monkeypatch.setattr(ai_image, "generate_image", fake_gen)
+    monkeypatch.setattr(server, "ai_image", ai_image)
+    r = TestClient(server.app).post("/api/ai_image_from_outline", json={
+        "profile_id": "p1", "pages": pages,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["images"]) == 2 and len(calls) == 2
+
+
+def test_image_from_outline_empty(monkeypatch):
+    """空 pages → 400。"""
+    monkeypatch.setattr(server, "ai_image", ai_image)
+    r = TestClient(server.app).post("/api/ai_image_from_outline", json={"pages": []})
+    assert r.status_code == 400

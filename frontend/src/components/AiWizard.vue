@@ -7,7 +7,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
-import { apiAiOutline, apiListProfiles } from '../api'
+import { apiAiImageFromOutline, apiAiOutline, apiListProfiles } from '../api'
 import type { AiProfile, AiOutline } from '../api'
 
 const props = defineProps<{
@@ -54,7 +54,9 @@ const WORD_COUNTS = [
 const wordCount = ref('medium')
 const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 
-// 第 3 步状态：封面（真实图）+ 3 内页版式
+// 第 3 步状态：AI 生图（封面+3内页）+ 原封面备选 + 3 内页版式
+const generatedImages = ref<string[]>([])
+const generating = ref(false)
 const coverImage = ref('')
 const contentLayouts = reactive(['', '', ''])
 const autoLayout = ref(true)
@@ -68,6 +70,7 @@ function reset() {
   direction.value = ''
   wordCount.value = 'medium'
   coverImage.value = ''
+  generatedImages.value = []
   contentLayouts[0] = ''
   contentLayouts[1] = ''
   contentLayouts[2] = ''
@@ -156,9 +159,37 @@ function pickCover(url: string) {
   coverImage.value = coverImage.value === url ? '' : url
 }
 
+/** 按当前（可能已编辑）大纲逐页 AI 生图：1 封面 + 3 内页，3:4 */
+async function generateImages() {
+  if (!outline.value.pages.length) {
+    toast('大纲没有分页，无法生图', 'error')
+    return
+  }
+  generating.value = true
+  errMsg.value = ''
+  try {
+    const r = await apiAiImageFromOutline({
+      profile_id: profileId.value,
+      pages: outline.value.pages,
+    })
+    generatedImages.value = r.images || []
+    if (!generatedImages.value.length) toast('未返回图片，请重试', 'error')
+  } catch (e) {
+    errMsg.value = (e as Error).message
+  } finally {
+    generating.value = false
+  }
+}
+
+function removeGenerated(i: number) {
+  generatedImages.value.splice(i, 1)
+}
+
 function apply() {
-  // 界面确认阶段：内页渲染链路待接入，先回封面；渲染落地后 3 张内页在此补齐
-  const imgs = coverImage.value ? [coverImage.value] : []
+  // 优先用 AI 生成的封面+内页；未生图则回退到点选的原笔记封面
+  const imgs = generatedImages.value.length
+    ? [...generatedImages.value]
+    : (coverImage.value ? [coverImage.value] : [])
   emit('apply', {
     title: outline.value.title.slice(0, 20),
     body: outline.value.body,
@@ -166,7 +197,7 @@ function apply() {
     images: imgs,
   })
   emit('close')
-  toast('已填入发布页；内页图在模板渲染接入后自动生成')
+  toast(imgs.length ? `已填入发布页（${imgs.length} 张图）` : '已填入发布页，可在发布页补图')
 }
 
 const totalChars = computed(() => (outline.value.body || '').length)
@@ -312,10 +343,27 @@ const totalChars = computed(() => (outline.value.body || '').length)
 
           <div class="warn">
             平台强制 AI 标识、严查模板化同质化与虚假实拍：封面不套通用模板，内页 3 张用不同版式。
-            渲染链路在界面确认后接入，当前先定封面图与版式。
           </div>
 
-          <!-- 封面：真实素材 -->
+          <!-- AI 生图：按当前大纲逐页生成 3:4 图 -->
+          <div class="grp gen-grp">
+            <div class="grp-head">
+              <b>AI 生图（封面 + 内页）</b>
+              <span class="hint">基于改好的大纲逐页生成 3:4 图；图内不含文字，文字在发布页/后期叠加</span>
+            </div>
+            <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
+              {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
+            </button>
+            <div v-if="generatedImages.length" class="gen-grid">
+              <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
+                <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
+                <img :src="coverProxy(img)" alt="" />
+                <button class="gen-x" @click="removeGenerated(i)">×</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 封面：真实素材（备选） -->
           <div class="cover-slot">
             <div class="cv-head">
               <b>封面 3:4</b>
@@ -541,4 +589,22 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 }
 .foot-note { font-size: 11.5px; color: #999; }
 .foot-btns { display: flex; gap: 8px; }
+
+/* AI 生图结果 */
+.gen-grp .btn { margin-bottom: 4px; }
+.gen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.gen-cell { position: relative; min-width: 0; }
+.gen-cell img {
+  width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block;
+  border-radius: 8px; border: 1px solid #eee;
+}
+.gen-tag {
+  display: inline-block; font-size: 11px; font-weight: 700; color: #b05a1f;
+  background: #fff1e6; padding: 2px 8px; border-radius: 999px; margin-bottom: 6px;
+}
+.gen-x {
+  position: absolute; top: 26px; right: 6px; width: 22px; height: 22px; border: 0;
+  border-radius: 999px; background: rgba(20, 16, 12, .55); color: #fff;
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
 </style>

@@ -522,3 +522,29 @@ export async function apiAiOutline(payload: { profile_id: string; structure: str
     body: JSON.stringify(payload),
   }))
 }
+
+// ---- 一键生成（生文 + 逐页生图，1 封面 + 3 内容图） ----
+export async function apiAiGenerateNote(payload: {
+  profile_id: string
+  structure: string
+  word_count?: number
+  note: Record<string, string>
+}): Promise<{ ok: boolean; outline: AiOutline; images: string[] }> {
+  return j(await fetch(`${BASE}/api/ai_generate_note`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }))
+}
+
+// ---- 按已编辑大纲逐页生图（人改完大纲再配图） ----
+export async function apiAiImageFromOutline(payload: {
+  profile_id: string
+  pages: OutlinePage[]
+}): Promise<{ ok: boolean; images: string[] }> {
+  return j(await fetch(`${BASE}/api/ai_image_from_outline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }))
+}
