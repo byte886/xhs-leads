@@ -455,6 +455,53 @@ export async function apiResetAiOptions(): Promise<{ ok: boolean; industries: st
   return j(await fetch(`${BASE}/api/ai_options/reset`, { method: 'POST' }))
 }
 
+// ---- 内容模板（文字模板 + 图片模板） ----
+export interface TextTemplate {
+  id: string
+  name: string
+  desc: string
+  prompt: string
+  scene: string
+}
+export interface ImageSkin {
+  bg: string
+  primary: string
+  font: 'serif' | 'sans' | 'round'
+  radius: number
+  align: 'left' | 'center'
+  number: boolean
+  divider: boolean
+}
+export interface ImageTemplate {
+  id: string
+  name: string
+  skeleton: string
+  skin: ImageSkin
+}
+
+export async function apiContentTemplates(): Promise<{ ok: boolean; text: TextTemplate[]; image: ImageTemplate[] }> {
+  return j(await fetch(`${BASE}/api/content_templates`))
+}
+export async function apiSaveTextTemplate(t: TextTemplate): Promise<{ ok: boolean; item: TextTemplate }> {
+  return j(await fetch(`${BASE}/api/content_templates/text`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t),
+  }))
+}
+export async function apiSaveImageTemplate(t: ImageTemplate): Promise<{ ok: boolean; item: ImageTemplate }> {
+  return j(await fetch(`${BASE}/api/content_templates/image`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t),
+  }))
+}
+export async function apiDeleteTemplate(kind: 'text' | 'image', id: string): Promise<{ ok: boolean }> {
+  return j(await fetch(`${BASE}/api/content_templates/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE' }))
+}
+export async function apiResetTemplates(): Promise<{ ok: boolean; text: TextTemplate[]; image: ImageTemplate[] }> {
+  return j(await fetch(`${BASE}/api/content_templates/reset`, { method: 'POST' }))
+}
+export async function apiResetTemplateGroup(kind: 'text' | 'image'): Promise<{ ok: boolean; text: TextTemplate[]; image: ImageTemplate[] }> {
+  return j(await fetch(`${BASE}/api/content_templates/reset/${kind}`, { method: 'POST' }))
+}
+
 // ---- AI 大纲（一句话 → 标题/正文/标签/分页文案） ----
 export interface OutlinePage {
   type: 'cover' | 'content' | string

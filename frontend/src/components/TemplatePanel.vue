@@ -1,40 +1,16 @@
 <script setup lang="ts">
 // TemplatePanel：内容模板管理（第 4 Tab「档案」→ 子页「内容模板」）
 // 两类模板：文字模板（内容结构，给 AI 写作要求）/ 图片模板（视觉版式，选骨架+调皮肤，实时 3:4 预览）
-// 本版只做前端界面与本地状态，后端存储与渲染确认后再接。
-import { computed, reactive, ref } from 'vue'
+// 数据来自后端 content_templates 接口并落盘；本组件负责加载与增删改，默认值由后端在首次启动时回落。
+import { computed, onMounted, reactive, ref } from 'vue'
 import { toast } from '../store'
+import {
+  apiContentTemplates, apiDeleteTemplate, apiResetTemplateGroup,
+  apiSaveImageTemplate, apiSaveTextTemplate,
+} from '../api'
+import type { ImageTemplate, TextTemplate } from '../api'
 
-// ---------- 类型 ----------
-interface TextTemplate {
-  id: string
-  name: string
-  desc: string
-  prompt: string
-  scene: string
-}
 type FontStyle = 'serif' | 'sans' | 'round'
-interface ImageSkin {
-  bg: string
-  primary: string
-  font: FontStyle
-  radius: number
-  align: 'left' | 'center'
-  number: boolean
-  divider: boolean
-}
-interface ImageTemplate {
-  id: string
-  name: string
-  skeleton: string
-  skin: ImageSkin
-}
-
-let seq = 0
-function genId(prefix: string) {
-  seq += 1
-  return `${prefix}-${Date.now().toString(36)}-${seq}`
-}
 
 // ---------- 骨架（与 AiWizard 的 LAYOUTS 对齐） ----------
 const SKELETONS = [
@@ -46,37 +22,7 @@ const SKELETONS = [
   { id: 'quote', name: '金句大字', desc: '居中大字 + 留白' },
 ]
 
-// ---------- 默认文字模板（5） ----------
-const DEFAULT_TEXT: TextTemplate[] = [
-  { id: 'dt-pitfall', name: '避坑清单', scene: '建立信任 / 新手', desc: '先列 3 个常见坑，再给判断方法',
-    prompt: '以店主第一人称，开头点出新手最容易踩的 3 个坑；每个坑先讲错误做法、再讲为什么错、最后给正确判断方法。语气朴实不夸大，不使用“宝子们/家人们”。结尾用档案里的真实卖点和到店方式自然收束，不硬推销。' },
-  { id: 'dt-compare', name: '对比测评', scene: '测评 / 决策', desc: '两档实物对比，用参数价差说话',
-    prompt: '选两档实物做横向对比，从参数、价差、上手感、适合人群逐项对照，用具体事实和数字说话，不贬低同行。最后给出不同预算分别该怎么选的明确建议。' },
-  { id: 'dt-single', name: '单品深讲', scene: '高客单 / 种草', desc: '一件从头讲到尾，适合高客单',
-    prompt: '围绕一件产品从头讲到尾：外观、材质/种水、适合谁、佩戴场景、价格与服务。多用真实细节，不堆砌形容词；所有信息只能来自档案，不得虚构价格、地址或体验。' },
-  { id: 'dt-store', name: '门店实拍', scene: '真实感 / 到店', desc: '真实货架与上手细节，弱化模板感',
-    prompt: '以真实门店、货架、上手细节为主，文字只做简短引导，像随手记录。介绍在店里能看到什么、能体验什么，弱化推销感，自然邀请到店看货。' },
-  { id: 'dt-new', name: '上新到货', scene: '成交 / 上新', desc: '新货 + 数量 + 到店看货',
-    prompt: '讲清新到什么货、数量、价位区间和到店方式，信息简洁直接，突出真实与稀缺；不使用“保值升值、开光、招财”等词，不制造焦虑。' },
-]
-
-// ---------- 默认图片模板（6，各配一套皮肤） ----------
-const DEFAULT_IMAGE: ImageTemplate[] = [
-  { id: 'di-num', name: '大数字·暖白', skeleton: 'num',
-    skin: { bg: '#f7f2ec', primary: '#e22a43', font: 'sans', radius: 8, align: 'left', number: true, divider: false } },
-  { id: 'di-list', name: '清单·米杏', skeleton: 'list',
-    skin: { bg: '#efe6da', primary: '#2f7a55', font: 'sans', radius: 8, align: 'left', number: false, divider: true } },
-  { id: 'di-card', name: '卡片·浅咖', skeleton: 'card',
-    skin: { bg: '#e7dccb', primary: '#a8743a', font: 'round', radius: 16, align: 'left', number: false, divider: false } },
-  { id: 'di-compare', name: '对比·暖白', skeleton: 'compare',
-    skin: { bg: '#f7f2ec', primary: '#2c3e50', font: 'sans', radius: 8, align: 'left', number: false, divider: false } },
-  { id: 'di-split', name: '上图下文·米杏', skeleton: 'split',
-    skin: { bg: '#efe6da', primary: '#5a4636', font: 'serif', radius: 8, align: 'left', number: false, divider: false } },
-  { id: 'di-quote', name: '金句·深棕', skeleton: 'quote',
-    skin: { bg: '#3a2e26', primary: '#f0e6d6', font: 'serif', radius: 8, align: 'center', number: false, divider: false } },
-]
-
-// 皮肤预设色板
+// 皮肤预设色板（编辑器选色用；默认模板清单由后端提供）
 const BG_PRESETS = ['#f7f2ec', '#efe6da', '#e7dccb', '#2f3a35', '#3a2e26']
 const PRIMARY_PRESETS = ['#e22a43', '#2f7a55', '#a8743a', '#5a4636', '#2c3e50', '#f0e6d6']
 const FONT_FAMILY: Record<FontStyle, string> = {
@@ -93,9 +39,27 @@ function isLight(hex: string): boolean {
 
 // 顶级分段：文字模板 / 图片模板
 const view = ref<'text' | 'image'>('text')
+const loading = ref(false)
 
-// ---------- 文字模板状态 ----------
-const textList = ref<TextTemplate[]>([...DEFAULT_TEXT])
+// ---------- 数据（来自后端，首次启动后端回落默认） ----------
+const textList = ref<TextTemplate[]>([])
+const imageList = ref<ImageTemplate[]>([])
+
+async function loadAll() {
+  loading.value = true
+  try {
+    const d = await apiContentTemplates()
+    textList.value = d.text
+    imageList.value = d.image
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '加载模板失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(loadAll)
+
+// ---------- 文字模板 ----------
 const textOpen = ref(false)
 const textForm = reactive<TextTemplate>({ id: '', name: '', desc: '', prompt: '', scene: '' })
 function newText() {
@@ -106,35 +70,46 @@ function editText(t: TextTemplate) {
   Object.assign(textForm, t)
   textOpen.value = true
 }
-function saveText() {
+async function saveText() {
   if (!textForm.name.trim()) { toast('模板名称必填', 'error'); return }
   if (!textForm.prompt.trim()) { toast('请填写给 AI 的写作要求', 'error'); return }
-  if (textForm.id) {
-    const i = textList.value.findIndex(t => t.id === textForm.id)
-    if (i >= 0) textList.value[i] = { ...textForm }
-  } else {
-    textList.value.push({ ...textForm, id: genId('t') })
+  try {
+    const { item } = await apiSaveTextTemplate({ ...textForm })
+    const i = textList.value.findIndex(t => t.id === item.id)
+    if (i >= 0) textList.value[i] = item
+    else textList.value.unshift(item)
+    textOpen.value = false
+    toast('文字模板已保存')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '保存失败', 'error')
   }
-  textOpen.value = false
-  toast('文字模板已保存')
 }
-function removeText(id: string) {
-  textList.value = textList.value.filter(t => t.id !== id)
-  toast('已删除')
+async function removeText(id: string) {
+  try {
+    await apiDeleteTemplate('text', id)
+    textList.value = textList.value.filter(t => t.id !== id)
+    toast('已删除')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '删除失败', 'error')
+  }
 }
-function resetText() {
-  textList.value = [...DEFAULT_TEXT]
-  toast('已恢复默认文字模板')
+async function resetText() {
+  try {
+    const d = await apiResetTemplateGroup('text')
+    textList.value = d.text
+    toast('已恢复默认文字模板')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '恢复失败', 'error')
+  }
 }
 
 // ---------- 图片模板状态 ----------
-const imageList = ref<ImageTemplate[]>([...DEFAULT_IMAGE])
 const imgOpen = ref(false)
 const imgForm = reactive<ImageTemplate>({
   id: '', name: '', skeleton: 'num',
   skin: { bg: '#f7f2ec', primary: '#e22a43', font: 'sans', radius: 8, align: 'left', number: true, divider: false },
 })
-function blankSkin(): ImageSkin {
+function blankSkin() {
   return { bg: '#f7f2ec', primary: '#e22a43', font: 'sans', radius: 8, align: 'left', number: true, divider: false }
 }
 function newImage() {
@@ -145,24 +120,36 @@ function editImage(t: ImageTemplate) {
   Object.assign(imgForm, { id: t.id, name: t.name, skeleton: t.skeleton, skin: { ...t.skin } })
   imgOpen.value = true
 }
-function saveImage() {
+async function saveImage() {
   if (!imgForm.name.trim()) { toast('模板名称必填', 'error'); return }
-  if (imgForm.id) {
-    const i = imageList.value.findIndex(t => t.id === imgForm.id)
-    if (i >= 0) imageList.value[i] = { ...imgForm, skin: { ...imgForm.skin } }
-  } else {
-    imageList.value.push({ ...imgForm, skin: { ...imgForm.skin }, id: genId('i') })
+  try {
+    const { item } = await apiSaveImageTemplate({ ...imgForm, skin: { ...imgForm.skin } })
+    const i = imageList.value.findIndex(t => t.id === item.id)
+    if (i >= 0) imageList.value[i] = item
+    else imageList.value.unshift(item)
+    imgOpen.value = false
+    toast('图片模板已保存')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '保存失败', 'error')
   }
-  imgOpen.value = false
-  toast('图片模板已保存')
 }
-function removeImage(id: string) {
-  imageList.value = imageList.value.filter(t => t.id !== id)
-  toast('已删除')
+async function removeImage(id: string) {
+  try {
+    await apiDeleteTemplate('image', id)
+    imageList.value = imageList.value.filter(t => t.id !== id)
+    toast('已删除')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '删除失败', 'error')
+  }
 }
-function resetImage() {
-  imageList.value = [...DEFAULT_IMAGE]
-  toast('已恢复默认图片模板')
+async function resetImage() {
+  try {
+    const d = await apiResetTemplateGroup('image')
+    imageList.value = d.image
+    toast('已恢复默认图片模板')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '恢复失败', 'error')
+  }
 }
 
 const skeletonName = (id: string) => SKELETONS.find(s => s.id === id)?.name || id
@@ -205,7 +192,13 @@ function miniStyle(t: ImageTemplate) {
         </div>
       </div>
 
-      <div class="text-grid">
+      <div v-if="loading" class="tpl-skel">
+        <div v-for="n in 4" :key="n" class="skel-card"></div>
+      </div>
+      <div v-else-if="!textList.length" class="tpl-empty">
+        <p>还没有文字模板，点右上角「新建」加一个，或恢复默认。</p>
+      </div>
+      <div v-else class="text-grid">
         <div v-for="t in textList" :key="t.id" class="text-card">
           <div class="tc-top">
             <b>{{ t.name }}</b>
@@ -231,7 +224,13 @@ function miniStyle(t: ImageTemplate) {
         </div>
       </div>
 
-      <div class="img-grid">
+      <div v-if="loading" class="tpl-skel skel-6">
+        <div v-for="n in 6" :key="n" class="skel-card"></div>
+      </div>
+      <div v-else-if="!imageList.length" class="tpl-empty">
+        <p>还没有图片模板，点右上角「新建」加一个，或恢复默认。</p>
+      </div>
+      <div v-else class="img-grid">
         <div v-for="t in imageList" :key="t.id" class="img-card">
           <div class="mini" :style="miniStyle(t)">
             <b class="mini-title">示例标题</b>
@@ -420,6 +419,19 @@ function miniStyle(t: ImageTemplate) {
 .tpl-subnav button:hover { color: var(--ink); }
 .tpl-subnav button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .tpl-subnav button.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(43,30,24,.12); }
+
+.tpl-skel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tpl-skel.skel-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.skel-card {
+  height: 150px; border-radius: var(--r-card);
+  background: linear-gradient(100deg, var(--panel-2) 40%, rgba(255,255,255,.7) 50%, var(--panel-2) 60%);
+  background-size: 200% 100%; animation: tpl-shimmer 1.3s ease-in-out infinite;
+}
+.tpl-skel.skel-6 .skel-card { height: 230px; }
+@keyframes tpl-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+.tpl-empty { border: 1px dashed var(--line); border-radius: var(--r-card); padding: 40px 20px; text-align: center; }
+.tpl-empty p { margin: 0; font-size: 13px; color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { .skel-card { animation: none; } }
 
 .tpl-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .tpl-count { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }

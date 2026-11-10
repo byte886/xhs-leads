@@ -2926,6 +2926,7 @@ async def ai_generate(req: AIGenReq):
 from src import ai_image  # noqa: E402
 from src import options_store  # noqa: E402
 from src import profiles_store  # noqa: E402
+from src import templates_store  # noqa: E402
 
 
 class ImageConfigReq(BaseModel):
@@ -3010,6 +3011,74 @@ def save_ai_options(req: AiOptionsReq):
 @app.post("/api/ai_options/reset")
 def reset_ai_options():
     return {"ok": True, **options_store.reset()}
+
+
+# ================= 内容模板（文字模板 + 图片模板） =================
+class TextTemplateReq(BaseModel):
+    id: str = ""
+    name: str = ""
+    desc: str = ""
+    prompt: str = ""
+    scene: str = ""
+
+
+class ImageTemplateReq(BaseModel):
+    id: str = ""
+    name: str = ""
+    skeleton: str = ""
+    skin: dict | None = None
+
+
+@app.get("/api/content_templates")
+def get_content_templates():
+    """两类模板全量；首次启动后端回落默认（5 文字 + 6 图片）。"""
+    return {"ok": True, **templates_store.load()}
+
+
+@app.post("/api/content_templates/text")
+def save_text_template(req: TextTemplateReq):
+    try:
+        row = templates_store.save_text(req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "item": row}
+
+
+@app.post("/api/content_templates/image")
+def save_image_template(req: ImageTemplateReq):
+    payload = req.model_dump()
+    payload["skin"] = req.skin or {}
+    try:
+        row = templates_store.save_image(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "item": row}
+
+
+@app.delete("/api/content_templates/{kind}/{template_id}")
+def delete_content_template(kind: str, template_id: str):
+    if kind == "text":
+        ok = templates_store.delete_text(template_id)
+    elif kind == "image":
+        ok = templates_store.delete_image(template_id)
+    else:
+        raise HTTPException(400, "模板类型只能是 text 或 image")
+    if not ok:
+        raise HTTPException(404, "模板不存在")
+    return {"ok": True}
+
+
+@app.post("/api/content_templates/reset")
+def reset_content_templates():
+    return {"ok": True, **templates_store.reset()}
+
+
+@app.post("/api/content_templates/reset/{kind}")
+def reset_one_group(kind: str):
+    try:
+        return {"ok": True, **templates_store.reset_group(kind)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 class OutlineReq(BaseModel):
