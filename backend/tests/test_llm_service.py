@@ -367,3 +367,39 @@ def httpx_connect_error():
 
 
 _ = _FakePost  # 供未来扩展引用（避免未使用告警）
+
+
+# ---- 目标字数三档：/api/ai_outline 注入 word_count ----
+def test_ai_outline_word_count_injected(llm_cfg, monkeypatch):
+    """word_count=200 → user prompt 注入「200 字以内」。"""
+    llm_service.save_config("sk-k", "https://api.openai.com/v1", "gpt-4o-mini")
+    monkeypatch.setattr(server, "llm_service", llm_service)
+    captured = {}
+
+    async def fake_chat(system, user, **kw):
+        captured["user"] = user
+        return '{"title":"t","body":"b","tags":"#x","pages":[]}'
+
+    monkeypatch.setattr(llm_service, "chat", fake_chat)
+    c = TestClient(server.app)
+    r = c.post("/api/ai_outline", json={"profile_id": "", "structure": "避坑清单", "word_count": 200, "note": {}})
+    assert r.status_code == 200
+    assert "200 字以内" in captured["user"]
+
+
+def test_ai_outline_word_count_fallback(llm_cfg, monkeypatch):
+    """非法 word_count → 回落 400（「400 字左右」），不出现原值。"""
+    llm_service.save_config("sk-k", "https://api.openai.com/v1", "gpt-4o-mini")
+    monkeypatch.setattr(server, "llm_service", llm_service)
+    captured = {}
+
+    async def fake_chat(system, user, **kw):
+        captured["user"] = user
+        return '{"title":"t","body":"b","tags":"#x","pages":[]}'
+
+    monkeypatch.setattr(llm_service, "chat", fake_chat)
+    c = TestClient(server.app)
+    r = c.post("/api/ai_outline", json={"profile_id": "", "structure": "避坑清单", "word_count": 999, "note": {}})
+    assert r.status_code == 200
+    assert "400 字左右" in captured["user"]
+    assert "999" not in captured["user"]

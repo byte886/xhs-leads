@@ -515,7 +515,7 @@ export interface AiOutline {
   pages: OutlinePage[]
 }
 
-export async function apiAiOutline(payload: { profile_id: string; structure: string; note: Record<string, string> }): Promise<{ ok: boolean; outline: AiOutline; profile_id: string }> {
+export async function apiAiOutline(payload: { profile_id: string; structure: string; word_count?: number; note: Record<string, string> }): Promise<{ ok: boolean; outline: AiOutline; profile_id: string }> {
   return j(await fetch(`${BASE}/api/ai_outline`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

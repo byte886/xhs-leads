@@ -45,6 +45,13 @@ const profiles = ref<AiProfile[]>([])
 const profileId = ref('')
 const structure = ref('pitfall')
 const direction = ref('')
+/** 目标字数三档（对齐视频工具「目标字数」，防止 AI 写超；图文按次选，不放档案） */
+const WORD_COUNTS = [
+  { id: 'short', label: '短', desc: '200 字内', target: 200 },
+  { id: 'medium', label: '中', desc: '400 字左右', target: 400 },
+  { id: 'long', label: '长', desc: '600 字内', target: 600 },
+]
+const wordCount = ref('medium')
 const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 
 // 第 3 步状态：封面（真实图）+ 3 内页版式
@@ -59,6 +66,7 @@ function reset() {
   errMsg.value = ''
   outline.value = { title: '', body: '', tags: '', pages: [] }
   direction.value = ''
+  wordCount.value = 'medium'
   coverImage.value = ''
   contentLayouts[0] = ''
   contentLayouts[1] = ''
@@ -96,6 +104,7 @@ async function genOutline() {
     const r = await apiAiOutline({
       profile_id: profileId.value,
       structure: STRUCTURES.find(s => s.id === structure.value)?.name || '避坑清单',
+      word_count: WORD_COUNTS.find(w => w.id === wordCount.value)?.target || 400,
       note: {
         title: props.source.title || '',
         desc: props.source.desc || '',
@@ -224,6 +233,22 @@ const totalChars = computed(() => (outline.value.body || '').length)
               >
                 <b>{{ s.name }}</b>
                 <em>{{ s.desc }}</em>
+              </button>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="grp-head"><b>目标字数</b><span class="hint">控制正文长度、防止写太长；默认中</span></div>
+            <div class="wc-grid">
+              <button
+                v-for="w in WORD_COUNTS"
+                :key="w.id"
+                class="pick-card wc"
+                :class="{ on: wordCount === w.id }"
+                @click="wordCount = w.id"
+              >
+                <b>{{ w.label }}</b>
+                <em>{{ w.desc }}</em>
               </button>
             </div>
           </div>
@@ -431,6 +456,8 @@ const totalChars = computed(() => (outline.value.body || '').length)
 }
 .pick-card em { font-style: normal; font-size: 11.5px; color: #777; line-height: 1.5; }
 .struct-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.wc-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; max-width: 560px; }
+.wc-grid .wc { align-items: center; text-align: center; }
 .struct em { margin-top: 2px; }
 .wz-input {
   width: 100%; box-sizing: border-box; border: 1px solid #e5e5e5; border-radius: 8px;

@@ -3084,12 +3084,13 @@ def reset_one_group(kind: str):
 class OutlineReq(BaseModel):
     profile_id: str = ""
     structure: str = ""      # 内容结构名（如「避坑清单」「对比测评」）
+    word_count: int = 400    # 目标正文字数（200/400/600，向导第一步三档，默认400）
     note: dict = {}          # {title, desc, keyword} 原笔记信息
 
 
 _OUTLINE_SPEC = """输出严格 JSON（不要代码块、不要解释），结构：
 {"title": "标题（≤20字，含1个emoji）",
- "body": "正文（300-800字，双换行分段，每段1-2个emoji开头，前3行放核心）",
+ "body": "正文（双换行分段，每段1-2个emoji开头，前3行放核心，字数遵守下面的目标字数）",
  "tags": "#标签1 #标签2 #标签3（3-8个，精准在前泛话题在后）",
  "pages": [{"type":"cover","heading":"封面主标题≤9字","copy":"封面副标题"},
            {"type":"content","heading":"内页小标题","copy":"2-3行内容页文案"},
@@ -3122,13 +3123,16 @@ async def ai_outline(req: OutlineReq):
     desc = (req.note.get("desc") or "")[:2000]
     keyword = (req.note.get("keyword") or "")[:200]
     structure = (req.structure or "避坑清单")[:40]
+    _WC_SPEC = {200: "200 字以内，简短直接", 400: "400 字左右", 600: "600 字以内，可充分展开"}
+    target = req.word_count if req.word_count in _WC_SPEC else 400
     system = "\n".join([
         "你是小红书图文创作专家，只输出可直接发布的文案，拒绝“宝子们/家人们/谁懂啊”式通用AI味。",
         profiles_store.profile_prompt_block(profile),
     ]).strip()
     prompt = (
         f"参考的原笔记（只借主题与角度，不要照抄）：\n标题：{title}\n正文：{desc}\n"
-        f"品类关键词：{keyword}\n内容结构：{structure}\n\n"
+        f"品类关键词：{keyword}\n内容结构：{structure}\n"
+        f"目标正文字数：{_WC_SPEC[target]}；正文实际字数请贴近该目标，不要明显超出。\n\n"
         "请按该结构规划一篇全新的小红书图文笔记。\n" + _OUTLINE_SPEC
     )
     try:
