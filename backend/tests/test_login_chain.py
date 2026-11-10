@@ -45,14 +45,8 @@ def test_login_status_not_logged_in(client, monkeypatch):
 
 # ------------------------------------------------------- login_begin gate
 
-def test_login_begin_force_sets_gate(client, monkeypatch):
-    async def collapse():
-        return 0
-    fake_eng = type("Eng", (), {"collapse_debug_windows": collapse})()
-
-    async def fake_get(*a, **k):
-        return fake_eng
-    monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
+def test_login_begin_force_sets_gate(client):
+    """login_begin 只置登录门（不再触碰引擎：登录页由守卫在右窗打开）。"""
     r = client.post("/api/auth/login_begin", json={"force": True}).json()
     assert r["ok"] is True and r["force"] is True
     assert server._LOGIN_GATE["pending"] is True and server._LOGIN_GATE["force"] is True

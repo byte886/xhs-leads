@@ -11,9 +11,8 @@ import PublishPage from './components/PublishPage.vue'
 import ClientsPanel from './components/ClientsPanel.vue'
 import ProfilePanel from './components/ProfilePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import ForceLogin from './components/ForceLogin.vue'
 import StatusBar from './components/StatusBar.vue'
-import { apiLoginStatus, apiCleanupImages, apiNotes } from './api'
+import { apiLoginStatus, apiLoginBegin, apiCleanupImages, apiNotes } from './api'
 import { isLoginAbnormal } from './lib/auth'
 
 // v1.5 工作流 4-Tab：采集 / 创作 / 客户 / 设置（创作、客户、设置用 v-show 保持状态）
@@ -23,19 +22,28 @@ const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 const menuNote = ref<Note | null>(null)
 const menuPos = ref({ x: 0, y: 0 })
 
-// 登录 UI 改版（用户拍板）：未登录 / 启动被踢 / 采集中被踢与异常 → 统一弹 APP 内部
-// **强制登录对话框**（ForceLogin，不可关闭），点「去登录」才切小红书登录页。
-// 主动重登（设置页「重新登录」）由 SettingsPanel 直接触发（force=false，可关闭）。
-// 信号时弹框（collectClients / CollectPanel / PublishPage 各失败分支统一 isLoginAbnormal）；
-// 启动/刷新时的 checkLogin / ensureLoginChecked 一次性判定保留。
-const forceOpen = ref(false)
+// 登录形态（用户拍板·双窗职责分离）：**右窗（采集调试窗）是唯一登录落点**，
+// 左窗 APP 全程不弹登录框、不被登录页覆盖。未登录 / 被踢 / 采集异常需要登录时，
+// 前端只发一个信号 apiLoginBegin(force=true)，launcher 守卫在右窗打开小红书登录页
+// （右窗缺失时守卫按采集窗同一路径现开标准窗口）；用户扫码完成登录后右窗自行跳转，
+// 左窗界面不中断。
+// 去重：30s 状态检查只触发一次（loginAsked），避免把正在右窗浏览的用户反复拉回
+// 登录页；登录成功或被踢后重置。用户真实动作（点采集/发布失败、采集撞墙）走
+// ensureRightLogin(true)，允许重新拉起。
+let loginAsked = false
 let offEvents: (() => void) | null = null
+
+function ensureRightLogin(force = false) {
+  if (!force && loginAsked) return
+  loginAsked = true
+  apiLoginBegin(true).catch(() => { loginAsked = false /* 后端未就绪：下次信号再触发 */ })
+}
 
 function checkLogin() {
   apiLoginStatus(8000).then((lg) => {
     appState.login = { logged_in: !!lg.logged_in, nickname: lg.nickname || '', kicked: !!lg.kicked }
-    // 未登录或被踢 → 强制登录对话框（采集中不抢占：让当前采集收尾，失败路径再弹）
-    if ((!lg.logged_in || lg.kicked) && !appState.collecting) forceOpen.value = true
+    // 未登录或被踢 → 右窗打开登录页（采集中不抢占：让当前采集收尾，失败路径再触发）
+    if ((!lg.logged_in || lg.kicked) && !appState.collecting) ensureRightLogin()
   }).catch(() => { /* 后端未就绪静默 */ })
 }
 
@@ -83,7 +91,7 @@ async function collectClients(note: Note) {
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
       toast('采集失败：' + msg.slice(0, 120), 'error')
-      if (isLoginAbnormal(msg)) forceOpen.value = true
+      if (isLoginAbnormal(msg)) ensureRightLogin(true)
       return
     }
     const data = await resp.json()
@@ -121,30 +129,28 @@ async function ensureLoginChecked() {
   const kicked = !!(lg && lg.kicked)
   appState.login = { logged_in: loggedIn, nickname: (lg && lg.nickname) || '', kicked }
   if ((!loggedIn || kicked) && !appState.collecting) {
-    forceOpen.value = true
+    ensureRightLogin()
   }
 }
 
-// 启动/刷新时自动检测登录态（登录 UI 改版：未登录/被踢 → APP 内部强制登录对话框；
-// 不依赖 launcher 直接导航登录页——launcher 仅负责 pending 后导航登录页）。
-// 且无交互失败）时，主窗口 APP 必须出现登录提示框，不能只靠调试窗口暴露登录页。
-// 30s 间隔 + 弹框期间跳过：不产生「每几秒弹一次」风暴（ForceLogin 打开时不再查询）。
+// 启动时检测登录态：未登录/被踢 → 右窗打开登录页（左窗 APP 不弹框、不遮挡）。
+// 30s 状态检查里 loginAsked 置位，已触发过就不再重复把右窗拉回登录页。
 onMounted(async () => {
   await ensureLoginChecked()
   // 搜索结果用完即失效：启动时不加载历史 notes（每次进入保持空白，仅当次采集后展示）
   // 启动时清理无引用本地图片（与后端 startup 双保险，防旧图堆积；fire-and-forget 不阻塞）
   apiCleanupImages().catch(() => {})
   // 与用户手动浏览叠加会加重平台风控判定）。只在两种真实信号到达时才响应：
-  //   ① collect 事件 need_login（采集撞墙即结束 = 确实需要登录）
-  //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）
+  //   ① collect 事件 need_login（采集撞墙即结束 = 确实需要登录）→ 右窗打开登录页
+  //   ② login 事件 logged_in（扫码成功 = 登录态已恢复）→ 解除已触发标记
   offEvents = onAppEvent((ev) => {
     if (ev.kind === 'collect' && ev.data.need_login) {
       appState.login = { logged_in: false, nickname: '', kicked: false }
-      forceOpen.value = true
+      ensureRightLogin(true)
     }
     if (ev.kind === 'login' && ev.data.logged_in) {
       appState.login = { logged_in: true, nickname: '', kicked: false }
-      forceOpen.value = false
+      loginAsked = false
     }
   })
   onUnmounted(() => { if (offEvents) { offEvents(); offEvents = null } })
@@ -175,7 +181,7 @@ onMounted(async () => {
 
     <!-- 采集 Tab：左侧面板 + 采集主区 -->
     <div v-show="appState.tab === 'collect'" class="workbench">
-      <CollectPanel @open-login="forceOpen = true" />
+      <CollectPanel @open-login="ensureRightLogin(true)" />
       <main class="work">
         <WorkArea @menu="openMenu" @clone="cloneOne" @clients="collectClients" />
       </main>
@@ -183,7 +189,7 @@ onMounted(async () => {
 
     <!-- 创作 Tab：克隆编辑器 + AI 工具条 + 发布前质检（v-show 保持编辑状态） -->
     <div v-show="appState.tab === 'create'" class="publish-wrap">
-      <PublishPage ref="publishRef" @open-login="forceOpen = true" />
+      <PublishPage ref="publishRef" @open-login="ensureRightLogin(true)" />
     </div>
 
     <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->
@@ -209,8 +215,7 @@ onMounted(async () => {
 
     <CardMenu :note="menuNote" :x="menuPos.x" :y="menuPos.y" @clone="openPublish" @close="closeMenu" />
 
-    <!-- APP 内部强制登录对话框（未登录 / 启动被踢 / 采集中被踢与异常；不可关闭） -->
-    <ForceLogin :open="forceOpen" @done="forceOpen = false" />
+    <!-- 登录不在本窗呈现：登录页只在右窗（采集调试窗）打开，左窗 APP 全程不被遮挡 -->
 
     <!-- 全局点击关闭菜单 -->
     <div v-if="menuNote" style="position:fixed;inset:0;z-index:55" @click="closeMenu"></div>

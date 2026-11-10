@@ -546,23 +546,6 @@ async def login_begin(req: LoginBeginReq | None = None):
     return {"ok": True, "already_logged_in": False, "force": force}
 
 
-@app.post("/api/auth/collapse_debug_windows")
-async def collapse_debug_windows():
-    """ForceLogin 弹出时前端调用——立即收起采集调试窗（关闭右窗），壳窗保留。"""
-    try:
-        from src import engine_pool  # noqa: PLC0415
-
-        # peek 不拉起引擎：无引擎时没有可收起的调试窗，直接 closed=0；
-        # 用 get 会在无引擎时真实创建并 launch 浏览器，测试/无引擎环境下无限挂起。
-        eng = engine_pool.pool.peek("default")
-        if eng is None:
-            return {"ok": True, "closed": 0}
-        n = await eng.collapse_debug_windows()
-        return {"ok": True, "closed": n}
-    except Exception:  # noqa: BLE001
-        return {"ok": True, "closed": 0}
-
-
 @app.post("/api/auth/login_cancel")
 async def login_cancel():
     """取消待处理登录请求（主动重登用户点「✕」回 APP 时由守卫调用；强制登录无取消路径）。"""

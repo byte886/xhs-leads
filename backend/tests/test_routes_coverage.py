@@ -214,12 +214,6 @@ def test_import_cookies_endpoint_removed(client):
     assert r.status_code == 404
 
 
-def test_collapse_debug_windows_no_engine(client):
-    # 无引擎实例应返回 closed=0 而非 500
-    r = client.post("/api/auth/collapse_debug_windows").json()
-    assert r["ok"] is True and r["closed"] == 0
-
-
 def test_index_returns_html(client):
     r = client.get("/")
     assert r.status_code == 200 or r.status_code == 404  # WEB_DIR 可能无 index.html

@@ -1082,9 +1082,10 @@ async def _guard_monitor_loop(win: "ShellWindow", base: str, stop: "threading.Ev
 
 async def _guard_startup_status(base: str) -> None:
     """启动时按 login_status 判定三态。（用户最新拍板，覆盖）：
-    启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面，前端
-    ForceLogin 登录提示框自动弹出（App.vue onMounted 检测），用户点「去登录」
-    才经 login_begin(pending)→守卫导航小红书登录页。已登录启动不受影响
+    启动未登录/被踢**不再自动强制导航登录页**——壳窗保持 APP 界面（不弹任何
+    登录框、不被登录页覆盖），只等前端发来的 login_begin 信号（App.vue 检测到
+    未登录/被踢即发一次，普通用户无感），守卫据此在**右窗**打开小红书登录页。
+    登录完全由右窗承担，左窗全程只显示 APP。已登录启动不受影响
     （守卫待命，仅响应登录引导 pending）。"""
     ls = await _guard_get_json(base, "/api/login_status")
     kicked = bool(ls and ls.get("kicked"))
@@ -1093,8 +1094,7 @@ async def _guard_startup_status(base: str) -> None:
         return
     reason = "启动检测到登录已被平台踢出" if kicked else "启动未登录"
     log.info(
-        f"{reason}——壳窗保持 APP 界面，"
-        "等待前端登录提示框「去登录」触发导航（不再自动跳转登录页）",
+        f"{reason}——壳窗保持 APP 界面，等前端信号后在右窗打开登录页",
     )
 
 
@@ -1120,7 +1120,9 @@ async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
     """登录落点：右侧调试窗（采集窗）。左窗只显示 APP，全程不参与登录。
 
     这是双窗口职责分离的入口——登录页只出现在右窗，壳窗永不被导航。
-    右窗缺失时现场开一个（登录必须有头有窗，headless 会被平台风控拦死）。
+    右窗缺失时按采集窗同一路径现开一个（标准窗口、右半屏、带地址栏）：
+    登录必须有头有窗，headless 会被平台风控拦死；用 ctx.new_page() 拿到的
+    页可能在壳窗里当标签出现，等于把登录页塞回左窗，不能接受。
     """
     coord = get_coordinator()
     p = coord.collect_win()
@@ -1131,10 +1133,10 @@ async def _guard_login_canvas(win: "ShellWindow") -> "ShellWindow":
 
         eng = await engine_pool.pool.get("default")
         ctx = await eng.context()
-        p = await ctx.new_page()
-        coord.register_collect_win(p)
-        log.info("右侧调试窗缺失，已新开一个作为登录落点")
-        return ShellWindow(p, win.base_url)
+        page = await open_collect_window(ctx, win.page)
+        coord.register_collect_win(page)
+        log.info("右侧调试窗缺失，已新开标准窗口作为登录落点")
+        return ShellWindow(page, win.base_url)
     except Exception as e:  # noqa: BLE001（极端场景：引擎未就绪，退回壳窗保底可用）
         log.warning(f"新开登录窗失败，回退壳窗: {e!r}")
         return win
@@ -1154,15 +1156,16 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
     """登录守卫。
 
     语义（用户拍板）：
-    - 启动未登录/被踢：起壳窗保持 APP 界面，前端 ForceLogin 提示框弹出，
-      用户点「去登录」才导航登录页（不再自动导航）；已登录启动守卫待命。
-    - 运行时被踢不直接导航（前端弹强制登录框，用户点击触发）。
+    - 左窗（壳窗）只显示 APP：不弹登录框、不被登录页覆盖，全程不参与登录。
+    - 启动未登录/被踢：壳窗保持 APP 界面，等前端 login_begin 信号（App.vue 检测
+      未登录即发一次，用户无感）→ 守卫在**右窗**打开登录页（右窗缺失则现开）。
+    - 运行时被踢同样走右窗（前端发同一信号）。
     - 主动重登可关闭（✕ 回 APP）；强制登录不可关闭（force_login_js 锁死 + URL 拉回）。
-    - 登录成功：id_token → 等待遮罩 → 通知后端 login_ok（不搬 Cookie）→ 回 APP。
+    - 登录成功：id_token → 等待遮罩 → 通知后端 login_ok（不搬 Cookie）→ 右窗自行跳转。
     -pending 等待改为**事件驱动**——launcher 注入同进程 `_LOGIN_GATE`
-      （含 asyncio.Event），用户点「去登录」→ login_begin 置位 evt → 守卫 `await
+      （含 asyncio.Event），login_begin 置位 evt → 守卫 `await
       evt.wait()` 醒来导航，主循环零轮询。gate 为 None（测试/无壳直跑）退化为
-      1.5s 低频轮询，语义等价。
+      阻塞到停止，零轮询。
     CZ_SKIP_LOGIN_GUARD=1 可跳过（自动化路径）。循环块拆至上方助手，语义逐字保留。
     """
     if os.environ.get("CZ_SKIP_LOGIN_GUARD"):
@@ -1171,11 +1174,25 @@ async def login_guard(win: ShellWindow, base_url: str, stop: "threading.Event", 
     base = base_url.rstrip("/")
     await _guard_startup_status(base)
 
+    # 启动兜底：前端页面一加载就发 login_begin，这次信号可能早于守卫进入等待
+    # （evt 由 launcher 在守卫启动前注入，pending 已置位但那次 set 没人接）。
+    # 只在启动这一刻消费一次 pending，之后一律走事件——否则残留 pending 会让
+    # 守卫每轮都判「要去登录」，反复把右窗拉回登录页。
+    startup_force: bool | None = None
+    if gate and gate.get("pending"):
+        startup_force = bool(gate.get("force"))
+        evt0 = gate.get("evt")
+        if evt0 is not None:
+            evt0.clear()
+
     in_login = False
     while not stop.is_set():
         if stop.is_set():
             return
-        force = await _guard_next_force(gate, win, base, stop)
+        if startup_force is not None:
+            force, startup_force = startup_force, None
+        else:
+            force = await _guard_next_force(gate, win, base, stop)
         if force is None:
             continue  # 事件已消费但 pending 被清：不导航，回挂起
         if await _rebind_if_closed(win, base):

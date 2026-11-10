@@ -1036,14 +1036,6 @@ class AccountEngine:
             closed += await self._close_if_unrelated(p, shell_pg, keep_url)
         return closed
 
-    async def collapse_debug_windows(self) -> int:
-        """登录引导时收起采集调试窗——关闭非壳窗口页面，壳窗（APP/登录页）保留。
-
-        触发时机：ForceLogin 弹出（前端调用）/ 点「去登录」（login_begin 后端调用）。
-        登录完成后用户再次点采集，new_page 按登录态恢复调试窗（登录有效恢复右半屏）。
-        """
-        return await self.cleanup_tabs()
-
     # ---------------- Cookie 辅助（按账号落盘） ----------------
 
     async def read_cookies(self, timeout: float = 10.0) -> list[dict]:

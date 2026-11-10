@@ -42,7 +42,6 @@ describe('api 端点契约（表驱动）', () => {
   afterEach(() => { vi.unstubAllGlobals() })
   const cases: Array<[string, string, string, () => Promise<unknown> | unknown]> = [
     ['apiLoginCancel', '/api/auth/login_cancel', 'POST', () => api.apiLoginCancel()],
-    ['apiCollapseDebugWindows', '/api/auth/collapse_debug_windows', 'POST', () => api.apiCollapseDebugWindows()],
     ['apiLicenseStatus', '/api/license_status', 'GET', () => api.apiLicenseStatus()],
     ['apiNotes', '/api/notes?keyword=', 'GET', () => api.apiNotes('翡翠')],
     ['apiAuthors', '/api/authors', 'GET', () => api.apiAuthors()],
