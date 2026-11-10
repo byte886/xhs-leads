@@ -1,14 +1,17 @@
 <script setup lang="ts">
 /**
  * AI 一键生成图文 · 三步向导
- * ① 设定（选档案 + 选结构） → ② 大纲（可编辑，先改再花钱） → ③ 配图（封面真实图 + 内页模板版式）
- * 设计依据：RedInk 的 input→outline→generating→result 线性流转 + 门店视频工具的三步向导；
- * 内页走自建 HTML 模板、自动错开版式，封面不套通用模板（平台 2026 严查模板化/虚假实拍）。
+ * ① 设定（选档案 + 选内容结构 + 目标字数） → ② 大纲（可编辑，先改再花钱） → ③ 配图（二选一：整篇 AI 生图 / 封面实拍 + 内页模板）
+ *
+ * 数据来源：档案与模板都取自「档案」Tab（账号档案 / 内容模板），向导只做消费，不自带一套
+ * 硬编码结构——否则用户在模板管理里建了模板却永远用不上。
+ * 配图在第 3 步收敛为**一条主路径 + 一个备选**：同时摆 AI 生图、真实封面、内页模板三套会
+ * 让用户不知道最终采用哪套，且一屏放不下（用户 2026-11 反馈「布局冲突就重新设计」）。
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
-import { apiAiImageFromOutline, apiAiOutline, apiListProfiles } from '../api'
-import type { AiProfile, AiOutline } from '../api'
+import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles } from '../api'
+import type { AiProfile, AiOutline, ImageTemplate, TextTemplate } from '../api'
 
 const props = defineProps<{
   open: boolean
@@ -16,34 +19,15 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'apply', v: { title: string; body: string; tags: string; images: string[] }): void }>()
 
-/** 内容结构：决定页数与叙事骨架（对齐行业里的「18 种种草结构」，先收敛到 5 个常用） */
-const STRUCTURES = [
-  { id: 'pitfall', name: '避坑清单', desc: '先列 3 个常见坑，再给判断方法，最容易建立信任' },
-  { id: 'compare', name: '对比测评', desc: '两档实物对比，用参数、价差、上手感说话' },
-  { id: 'single', name: '单品深讲', desc: '一只/一件从头讲到尾，适合高客单' },
-  { id: 'store', name: '门店实拍', desc: '真实货架与上手细节，弱化模板感' },
-  { id: 'new', name: '上新到货', desc: '新货 + 数量 + 到店看货，偏成交' },
-]
-
-/**
- * 内页自建版式（HTML 模板渲染，确认后接入）。
- * 每个版式标注适用结构；同一篇 3 张内页默认错开不同版式，规避「模板脸」同质化。
- */
-const LAYOUTS = [
-  { id: 'num', name: '大数字标题', desc: '顶部大序号 + 小标题', for: ['pitfall', 'new', 'single'] },
-  { id: 'list', name: '清单条目', desc: '三条短句竖排', for: ['pitfall', 'new', 'store'] },
-  { id: 'card', name: '卡片叠层', desc: '圆角卡片 + 重点加粗', for: ['pitfall', 'compare', 'single'] },
-  { id: 'compare', name: '左右对比', desc: '两栏参数对照', for: ['compare'] },
-  { id: 'split', name: '上图下文', desc: '图片居顶 + 文字块', for: ['store', 'single', 'compare'] },
-  { id: 'quote', name: '金句大字', desc: '居中大字 + 留白', for: ['pitfall', 'single', 'new'] },
-]
-
 const step = ref(1)
 const busy = ref(false)
 const errMsg = ref('')
 const profiles = ref<AiProfile[]>([])
 const profileId = ref('')
-const structure = ref('pitfall')
+/** 内容结构 = 档案 Tab 里自建的文字模板（不再有前端硬编码的那套） */
+const textTemplates = ref<TextTemplate[]>([])
+const imageTemplates = ref<ImageTemplate[]>([])
+const structure = ref('')
 const direction = ref('')
 /** 目标字数三档（对齐视频工具「目标字数」，防止 AI 写超；图文按次选，不放档案） */
 const WORD_COUNTS = [
@@ -54,7 +38,12 @@ const WORD_COUNTS = [
 const wordCount = ref('medium')
 const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 
-// 第 3 步状态：AI 生图（封面+3内页）+ 原封面备选 + 3 内页版式
+/**
+ * 第 3 步配图方式（互斥二选一，一次只显示一套，避免三套方案同屏打架）：
+ *  - ai：整篇 AI 生图（封面 + 内页），图内不含文字
+ *  - template：封面用真实素材，内页套档案里的图片模板版式
+ */
+const imageMode = ref<'ai' | 'template'>('ai')
 const generatedImages = ref<string[]>([])
 const generating = ref(false)
 const coverImage = ref('')
@@ -62,6 +51,8 @@ const contentLayouts = reactive(['', '', ''])
 const autoLayout = ref(true)
 
 const activeProfile = computed(() => profiles.value.find(p => p.id === profileId.value))
+/** 当前选中的文字模板（决定大纲骨架与写法） */
+const activeTemplate = computed(() => textTemplates.value.find(t => t.id === structure.value))
 
 function reset() {
   step.value = 1
@@ -69,6 +60,7 @@ function reset() {
   outline.value = { title: '', body: '', tags: '', pages: [] }
   direction.value = ''
   wordCount.value = 'medium'
+  imageMode.value = 'ai'
   coverImage.value = ''
   generatedImages.value = []
   contentLayouts[0] = ''
@@ -76,24 +68,35 @@ function reset() {
   contentLayouts[2] = ''
 }
 
-async function loadProfiles() {
+/** 打开时一次拉齐：账号档案 + 内容模板（文字/图片）——都来自「档案」Tab */
+async function loadAll() {
   try {
     profiles.value = (await apiListProfiles()).items
     if (!profileId.value && profiles.value.length) profileId.value = profiles.value[0].id
   } catch {
     profiles.value = []
   }
+  try {
+    const t = await apiContentTemplates()
+    textTemplates.value = t.text || []
+    imageTemplates.value = t.image || []
+  } catch {
+    textTemplates.value = []
+    imageTemplates.value = []
+  }
+  if (!structure.value && textTemplates.value.length) structure.value = textTemplates.value[0].id
 }
 
 watch(() => props.open, async (v) => {
   if (!v) return
   reset()
-  await loadProfiles()
+  await loadAll()
 })
 
-function toSettings() {
+/** 去「档案」Tab 新建 / 编辑档案与模板（档案是内容资产，已从设置页独立成 Tab） */
+function toProfiles() {
   emit('close')
-  setTab('settings')
+  setTab('profiles')
 }
 
 async function genOutline() {
@@ -104,14 +107,16 @@ async function genOutline() {
   busy.value = true
   errMsg.value = ''
   try {
+    // 结构名取所选文字模板；模板里的 prompt（「怎么写」）并入生成要求，避免模板白建
+    const extra = [activeTemplate.value?.prompt, direction.value].filter(Boolean).join('；')
     const r = await apiAiOutline({
       profile_id: profileId.value,
-      structure: STRUCTURES.find(s => s.id === structure.value)?.name || '避坑清单',
+      structure: activeTemplate.value?.name || '避坑清单',
       word_count: WORD_COUNTS.find(w => w.id === wordCount.value)?.target || 400,
       note: {
         title: props.source.title || '',
         desc: props.source.desc || '',
-        keyword: [props.source.keyword, direction.value].filter(Boolean).join(' '),
+        keyword: [props.source.keyword, extra].filter(Boolean).join(' '),
       },
     })
     outline.value = {
@@ -128,16 +133,37 @@ async function genOutline() {
   }
 }
 
-/** 当前结构可用的内页版式 */
+/** 内页可用的图片模板：全部来自「档案 › 内容模板 › 图片模板」 */
 function layoutsFor() {
-  return LAYOUTS.filter(l => l.for.includes(structure.value))
+  return imageTemplates.value
 }
 
-/** 自动错开：3 张内页尽量分到不同版式（不足时循环兜底） */
+/** 骨架中文名（与后端 templates_store.SKELETONS 的 6 种对应） */
+const SKELETON_NAMES: Record<string, string> = {
+  num: '大数字', list: '清单', card: '卡片', compare: '对比', split: '分屏', quote: '金句',
+}
+
+function skeletonName(s: string) {
+  return SKELETON_NAMES[s] || s
+}
+
+/** 第 i 张内页当前所选模板的骨架，用于抽象版式预览的差异 */
+function layoutSkeleton(i: number) {
+  const t = imageTemplates.value.find(x => x.id === contentLayouts[i])
+  return t?.skeleton || 'num'
+}
+
+/** 自动错开：3 张内页尽量分到不同骨架（骨架不足时循环兜底），规避「模板脸」 */
 function assignLayouts() {
-  const ok = layoutsFor()
-  if (!ok.length) return
-  for (let i = 0; i < 3; i++) contentLayouts[i] = ok[Math.min(i, ok.length - 1)].id
+  const all = imageTemplates.value
+  if (!all.length) return
+  const used = new Set<string>()
+  for (let i = 0; i < 3; i++) {
+    let pick = all.find(t => !used.has(t.skeleton))
+    if (!pick) pick = all[i % all.length]
+    used.add(pick.skeleton)
+    contentLayouts[i] = pick.id
+  }
 }
 
 /** 进第 3 步：封面默认取原笔记首图，内页自动排版式 */
@@ -148,7 +174,6 @@ function prefillStep3() {
 }
 
 watch(step, (v) => { if (v === 3) prefillStep3() })
-watch(structure, () => { if (step.value === 3 && autoLayout.value) assignLayouts() })
 
 function onAutoToggle() {
   if (autoLayout.value) assignLayouts()
@@ -186,8 +211,8 @@ function removeGenerated(i: number) {
 }
 
 function apply() {
-  // 优先用 AI 生成的封面+内页；未生图则回退到点选的原笔记封面
-  const imgs = generatedImages.value.length
+  // 按当前配图方式取图：AI 模式用生成的 4 张；模板模式用点选的封面（内页版式待渲染）
+  const imgs = imageMode.value === 'ai'
     ? [...generatedImages.value]
     : (coverImage.value ? [coverImage.value] : [])
   emit('apply', {
@@ -197,7 +222,13 @@ function apply() {
     images: imgs,
   })
   emit('close')
-  toast(imgs.length ? `已填入发布页（${imgs.length} 张图）` : '已填入发布页，可在发布页补图')
+  if (!imgs.length) {
+    toast('已填入发布页，可在发布页补图')
+  } else if (imageMode.value === 'ai') {
+    toast(`已填入发布页（${imgs.length} 张图）`)
+  } else {
+    toast('已填入发布页（封面 1 张；内页按模板版式，渲染成图待接入）')
+  }
 }
 
 const totalChars = computed(() => (outline.value.body || '').length)
@@ -231,11 +262,11 @@ const totalChars = computed(() => (outline.value.body || '').length)
           <div class="grp">
             <div class="grp-head">
               <b>选择账号档案</b>
-              <a href="#" @click.prevent="toSettings">去设置里新建 / 编辑 →</a>
+              <a href="#" @click.prevent="toProfiles">去档案里新建 / 编辑 →</a>
             </div>
             <div v-if="!profiles.length" class="empty">
               还没有账号档案。档案提供行业、卖点、口吻、避雷词，是生成不跑偏的前提。
-              <button class="btn primary sm" @click="toSettings">去创建档案</button>
+              <button class="btn primary sm" @click="toProfiles">去创建档案</button>
             </div>
             <div v-else class="prof-pick">
               <button
@@ -253,17 +284,25 @@ const totalChars = computed(() => (outline.value.body || '').length)
           </div>
 
           <div class="grp">
-            <div class="grp-head"><b>内容结构</b><span class="hint">决定页数与叙事骨架，和视频工具「选模板」同一个位置</span></div>
-            <div class="struct-grid">
+            <div class="grp-head">
+              <b>内容结构</b>
+              <a href="#" @click.prevent="toProfiles">管理文字模板 →</a>
+            </div>
+            <div v-if="!textTemplates.length" class="empty">
+              还没有文字模板。文字模板定义「怎么写」（如避坑先抛问题再给判断），是生成骨架的来源。
+              <button class="btn primary sm" @click="toProfiles">去新建文字模板</button>
+            </div>
+            <div v-else class="struct-grid">
               <button
-                v-for="s in STRUCTURES"
-                :key="s.id"
+                v-for="t in textTemplates"
+                :key="t.id"
                 class="pick-card struct"
-                :class="{ on: structure === s.id }"
-                @click="structure = s.id"
+                :class="{ on: structure === t.id }"
+                @click="structure = t.id"
               >
-                <b>{{ s.name }}</b>
-                <em>{{ s.desc }}</em>
+                <b>{{ t.name }}</b>
+                <span v-if="t.scene" class="badge">{{ t.scene }}</span>
+                <em>{{ t.desc || t.prompt }}</em>
               </button>
             </div>
           </div>
@@ -319,7 +358,7 @@ const totalChars = computed(() => (outline.value.body || '').length)
           </div>
 
           <div class="grp">
-            <div class="grp-head"><b>分页规划</b><span class="hint">封面 1 张 + 内页 3 张（3:4，1080×1440）</span></div>
+            <div class="grp-head"><b>分页规划</b><span class="hint">封面 1 张 + 内页 3 张（统一 3:4，1242×1656）</span></div>
             <div class="page-list">
               <div v-for="(pg, i) in outline.pages" :key="i" class="page-item">
                 <span class="pg-tag">{{ pg.type === 'cover' ? '封面' : '内页 ' + i }}</span>
@@ -334,27 +373,37 @@ const totalChars = computed(() => (outline.value.body || '').length)
           <div v-if="errMsg" class="wz-err">{{ errMsg }}</div>
         </section>
 
-        <!-- ③ 配图：封面真实图 + 内页模板版式 -->
+        <!-- ③ 配图：二选一（同屏只显示一套，避免三套方案打架、一屏放不下） -->
         <section v-else>
           <div class="grp-head lead">
-            <b>封面与内页排版</b>
-            <span class="hint">封面用真实素材，内页走自建模板、自动错开版式</span>
+            <b>选择配图方式</b>
+            <span class="hint">二选一；只显示当前方式</span>
           </div>
 
-          <div class="warn">
-            平台强制 AI 标识、严查模板化同质化与虚假实拍：封面不套通用模板，内页 3 张用不同版式。
+          <div class="mode-grid">
+            <button class="pick-card mode" :class="{ on: imageMode === 'ai' }" @click="imageMode = 'ai'">
+              <b>AI 整篇生图</b>
+              <em>按改好的大纲逐页出图（封面 + 3 内页）。图内不含文字，文字在发布页叠加。</em>
+            </button>
+            <button class="pick-card mode" :class="{ on: imageMode === 'template' }" @click="imageMode = 'template'">
+              <b>封面实拍 + 内页模板</b>
+              <em>封面用真实素材避免模板脸，内页套档案里自建的图片模板版式。</em>
+            </button>
           </div>
 
-          <!-- AI 生图：按当前大纲逐页生成 3:4 图 -->
-          <div class="grp gen-grp">
+          <!-- 方式 A：AI 整篇生图 -->
+          <div v-if="imageMode === 'ai'" class="grp gen-grp">
             <div class="grp-head">
-              <b>AI 生图（封面 + 内页）</b>
-              <span class="hint">基于改好的大纲逐页生成 3:4 图；图内不含文字，文字在发布页/后期叠加</span>
+              <b>封面 + 内页</b>
+              <span class="hint">逐页生成 3:4 图；图内不含文字</span>
             </div>
             <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
               {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
             </button>
-            <div v-if="generatedImages.length" class="gen-grid">
+            <div v-if="!generatedImages.length" class="gen-empty">
+              尚未生图。点上方按钮按当前大纲生成；生成后可删单张、重新生图。
+            </div>
+            <div v-else class="gen-grid">
               <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
                 <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
                 <img :src="coverProxy(img)" alt="" />
@@ -363,66 +412,78 @@ const totalChars = computed(() => (outline.value.body || '').length)
             </div>
           </div>
 
-          <!-- 封面：真实素材（备选） -->
-          <div class="cover-slot">
-            <div class="cv-head">
-              <b>封面 3:4</b>
-              <span class="real-tag">真实素材</span>
-              <span class="hint">不套通用模板，避免模板脸</span>
+          <!-- 方式 B：封面实拍 + 内页模板 -->
+          <template v-else>
+            <div class="warn">
+              封面不套通用模板（平台严查模板化与虚假实拍）；内页 3 张用不同骨架，规避「模板脸」。
             </div>
-            <div class="cv-box">
-              <div class="cv-thumb">
-                <img v-if="coverImage" :src="coverProxy(coverImage)" alt="" />
-                <div v-else class="slot-empty">
-                  请从下方原笔记图点选<br />或上传门店 / 产品实拍
+
+            <div class="cover-slot">
+              <div class="cv-head">
+                <b>封面 3:4</b>
+                <span class="real-tag">真实素材</span>
+                <span class="hint">从下方原笔记图点选，或上传门店 / 产品实拍</span>
+              </div>
+              <div class="cv-box">
+                <div class="cv-thumb">
+                  <img v-if="coverImage" :src="coverProxy(coverImage)" alt="" />
+                  <div v-else class="slot-empty">
+                    请从下方原笔记图点选<br />或上传门店 / 产品实拍
+                  </div>
+                </div>
+                <div v-if="outline.pages[0]" class="cv-meta">
+                  <p class="sc-h">{{ outline.pages[0].heading }}</p>
+                  <p class="sc-c">{{ outline.pages[0].copy }}</p>
+                  <p class="cv-spec">建议 1242×1656（3:4），顶部留 15% 安全区；文字压在画面上，单图文字占比 ≤40%</p>
                 </div>
               </div>
-              <div v-if="outline.pages[0]" class="cv-meta">
-                <p class="sc-h">{{ outline.pages[0].heading }}</p>
-                <p class="sc-c">{{ outline.pages[0].copy }}</p>
-              </div>
             </div>
-          </div>
 
-          <!-- 内页：模板版式 -->
-          <div class="grp ip">
-            <div class="grp-head">
-              <b>内页模板（3 张）</b>
-              <label class="auto-line">
-                <input type="checkbox" v-model="autoLayout" @change="onAutoToggle" />
-                自动错开版式
-              </label>
-            </div>
-            <div class="ip-grid">
-              <div v-for="i in 3" :key="i" class="ip-slot">
-                <div class="ip-head"><b>内页 {{ i }}</b></div>
-                <div class="ip-preview" :class="contentLayouts[i - 1]">
-                  <span class="pv-line w1" /><span class="pv-line w2" /><span class="pv-line w3" />
+            <div class="grp ip">
+              <div class="grp-head">
+                <b>内页模板（3 张）</b>
+                <label v-if="imageTemplates.length" class="auto-line">
+                  <input type="checkbox" v-model="autoLayout" @change="onAutoToggle" />
+                  自动错开骨架
+                </label>
+                <a v-else href="#" @click.prevent="toProfiles">去新建图片模板 →</a>
+              </div>
+              <div v-if="!imageTemplates.length" class="empty">
+                还没有图片模板。图片模板决定内页长什么样（骨架 + 配色），请先到「档案 › 内容模板」新建。
+                <button class="btn primary sm" @click="toProfiles">去新建图片模板</button>
+              </div>
+              <div v-else class="ip-grid">
+                <div v-for="i in 3" :key="i" class="ip-slot">
+                  <div class="ip-head"><b>内页 {{ i }}</b></div>
+                  <div class="ip-preview" :class="layoutSkeleton(i - 1)">
+                    <span class="pv-line w1" /><span class="pv-line w2" /><span class="pv-line w3" />
+                  </div>
+                  <select v-model="contentLayouts[i - 1]" class="wz-input layout-select">
+                    <option v-for="l in layoutsFor()" :key="l.id" :value="l.id">
+                      {{ l.name }} · {{ skeletonName(l.skeleton) }}
+                    </option>
+                  </select>
+                  <p v-if="outline.pages[i]" class="sc-h">{{ outline.pages[i].heading }}</p>
+                  <p v-if="outline.pages[i]" class="sc-c">{{ outline.pages[i].copy }}</p>
                 </div>
-                <select v-model="contentLayouts[i - 1]" class="wz-input layout-select">
-                  <option v-for="l in layoutsFor()" :key="l.id" :value="l.id">{{ l.name }} · {{ l.desc }}</option>
-                </select>
-                <p v-if="outline.pages[i]" class="sc-h">{{ outline.pages[i].heading }}</p>
-                <p v-if="outline.pages[i]" class="sc-c">{{ outline.pages[i].copy }}</p>
               </div>
             </div>
-          </div>
 
-          <!-- 原笔记图：封面选图 -->
-          <div v-if="source.images.length" class="grp">
-            <div class="grp-head"><b>原笔记图片（点选封面）</b><span class="hint">再点一次取消</span></div>
-            <div class="src-imgs">
-              <button
-                v-for="(u, k) in source.images.slice(0, 9)"
-                :key="k"
-                class="thumb"
-                :class="{ on: coverImage === u }"
-                @click="pickCover(u)"
-              >
-                <img :src="coverProxy(u)" alt="" />
-              </button>
+            <div v-if="source.images.length" class="grp">
+              <div class="grp-head"><b>原笔记图片（点选封面）</b><span class="hint">再点一次取消</span></div>
+              <div class="src-imgs">
+                <button
+                  v-for="(u, k) in source.images.slice(0, 9)"
+                  :key="k"
+                  class="thumb"
+                  :class="{ on: coverImage === u }"
+                  @click="pickCover(u)"
+                >
+                  <img :src="coverProxy(u)" alt="" />
+                </button>
+              </div>
             </div>
-          </div>
+          </template>
         </section>
       </main>
 
@@ -449,8 +510,8 @@ const totalChars = computed(() => (outline.value.body || '').length)
   display: flex; align-items: stretch; justify-content: center;
 }
 .wizard {
-  width: 100%; max-width: 960px; background: #fff;
-  display: flex; flex-direction: column;
+  width: 100%; max-width: 960px; max-height: 100%; background: #fff;
+  display: flex; flex-direction: column; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, .18);
 }
 .wz-head {
@@ -481,9 +542,18 @@ const totalChars = computed(() => (outline.value.body || '').length)
 .stp.cur i { background: #b05a1f; color: #fff; }
 .stp.done i { background: #eaf7ef; color: #1a7f4c; }
 .line { flex: 1; height: 1px; background: #eee; }
-.wz-body { flex: 1; overflow-y: auto; padding: 6px 26px 18px; }
+.wz-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 26px 18px; }
 .grp {
   border: 1px solid #ececec; border-radius: 14px; padding: 16px; margin-bottom: 14px;
+}
+
+/* 第 3 步：配图方式二选一 */
+.mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.mode { position: relative; }
+.mode.on { border-color: #b05a1f; background: #fffaf4; box-shadow: 0 2px 8px rgba(176, 90, 31, .1); }
+.gen-empty {
+  margin-top: 10px; padding: 18px 12px; border: 1px dashed #e5e5e5; border-radius: 10px;
+  font-size: 12px; color: #9a9a9a; text-align: center; line-height: 1.7;
 }
 .grp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .grp-head b { font-size: 14px; color: #222; }
@@ -517,7 +587,12 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 .fld > span { font-size: 12px; color: #666; display: flex; justify-content: space-between; }
 .cnt { font-style: normal; color: #9a9a9a; font-size: 11px; }
 .cnt.over { color: #c0392b; font-weight: 700; }
-.empty { font-size: 12.5px; color: #888; line-height: 1.7; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+/* 本组件内的空态是「卡片内提示」，必须覆盖全局 .empty 的 60vh 整页空态高度 */
+.empty {
+  font-size: 12.5px; color: #888; line-height: 1.7;
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  height: auto; justify-content: flex-start; text-align: left;
+}
 .src-note { margin-top: 12px; border-top: 1px dashed #eee; padding-top: 10px; }
 .src-note span { font-size: 11.5px; color: #b05a1f; font-weight: 700; }
 .src-note p { margin: 4px 0 0; font-size: 12px; color: #777; line-height: 1.7; }
@@ -552,6 +627,10 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 }
 .cv-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .cv-meta { flex: 1; min-width: 0; }
+.cv-spec {
+  margin: 12px 0 0; font-size: 11.5px; color: #9a9a9a; line-height: 1.7;
+  border-top: 1px dashed #eee; padding-top: 10px;
+}
 
 /* 内页模板 */
 .auto-line { font-size: 12px; color: #666; display: flex; align-items: center; gap: 5px; }
@@ -559,8 +638,9 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 .ip-slot { display: flex; flex-direction: column; gap: 8px; }
 .ip-head b { font-size: 12.5px; color: #333; }
 .ip-preview {
-  aspect-ratio: 3 / 4; border: 1px solid #eee; border-radius: 8px; background: #fafafb;
+  height: 150px; border: 1px solid #eee; border-radius: 8px; background: #fafafb;
   padding: 12px; display: flex; flex-direction: column; gap: 7px; justify-content: center;
+  overflow: hidden;
 }
 .pv-line { height: 6px; border-radius: 3px; background: #e3d5c6; display: block; }
 .pv-line.w1 { width: 55%; }

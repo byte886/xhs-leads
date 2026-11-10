@@ -394,7 +394,7 @@ async function aiRun(action: string) {
 
 <template>
   <div>
-    <div style="background:var(--panel);border-bottom:1px solid var(--line);padding:12px 26px;font-size:13px;color:var(--ink-2)">
+    <div style="max-width:720px;margin:0 auto;padding:14px 26px 0;font-size:13px;color:var(--ink-3)">
       发布编辑页 ·
       <a
         href="#"
@@ -402,7 +402,7 @@ async function aiRun(action: string) {
         @click.prevent="toast('已复制原作品链接')"
       >复制原作品链接</a>
     </div>
-    <div class="publish" style="margin-top:22px">
+    <div class="publish" style="margin-top:10px">
       <h2>发布笔记</h2>
       <div v-if="loading" style="text-align:center;padding:30px;color:var(--ink-2)">正在拉取笔记内容…</div>
       <template v-else>
