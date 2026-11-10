@@ -97,80 +97,205 @@ function toProfiles() {
 }
 
 /**
- * 演示占位图：本阶段 UI 先行，生图链路按「已接通」对待。
- * 接口有真图就用真图（generateImages 优先取返回），没接通时用占位把流程走完——
- * 界面上不出现「未配置 / 待接入」这类断点，避免流程走到一半走不下去。
+ * 内页真渲染：1242×1656（3:4），按所选图片模板的骨架 + 皮肤 + 大纲正文出图。
+ * 预览与「填入发布页」用的是同一张，所见即所得——不画抽象色块。
  */
-const DEMO_TONS: Array<[string, string]> = [
-  ['#8a5a3f', '封面'], ['#3d6b52', '内页 1'], ['#3f5f86', '内页 2'], ['#6d4d7a', '内页 3'],
-]
+const INNER_W = 1242
+const INNER_H = 1656
+const SANS_STACK = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif'
+const SERIF_STACK = '"Songti SC","STSong","SimSun",serif'
 
-function demoImage(bg: string, label: string) {
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='800'>`
-    + `<rect width='600' height='800' fill='${bg}'/>`
-    + `<g fill='rgba(255,255,255,.5)'>`
-    + `<rect x='56' y='110' width='170' height='16' rx='8'/>`
-    + `<rect x='56' y='146' width='300' height='11' rx='5'/>`
-    + `<rect x='56' y='174' width='236' height='11' rx='5'/>`
-    + `</g>`
-    + `<text x='300' y='440' font-size='32' fill='rgba(255,255,255,.92)' `
-    + `text-anchor='middle' font-family='serif'>${label}</text>`
-    + `</svg>`
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
-}
-
-/** 整篇 AI 生图的演示版：封面 + 3 内页 */
-function demoImages() {
-  return DEMO_TONS.map(([bg, lb]) => demoImage(bg, lb))
-}
-
-/**
- * 演示大纲：生文链路未接通时把第 2 步填满。
- * 内容显式标明是演示稿，避免被当成可直接发布的成品。
- */
-function demoOutline(): AiOutline {
-  const kw = props.source.keyword || props.source.title || '这款'
-  const tpl = activeTemplate.value?.name || '避坑清单'
-  return {
-    title: `${kw}怎么挑？先避开 3 个坑`,
-    body: `先说结论：${kw}别只看照片。\n\n`
-      + `一、看实拍，不看精修图。\n光线、角度、后期都能改色改种水，要自然光下的实拍视频。\n\n`
-      + `二、问清尺寸与圈口。\n差一号手感就完全不同，改圈还要另算工费。\n\n`
-      + `三、把售后写进聊天记录。\n能不能退、能不能改、多久能改，白纸黑字最省心。\n\n`
-      + `（演示文案：按「${tpl}」结构生成，发布前请逐段替换为真实信息。）`,
-    tags: props.source.keyword
-      ? `#${kw} #选购指南 #避坑`
-      : '#好物推荐 #选购指南 #避坑',
-    pages: [
-      { type: 'cover', heading: '别再交学费', copy: `${kw} 3 个坑` },
-      { type: 'content', heading: '看实拍', copy: '自然光视频，别信精修图' },
-      { type: 'content', heading: '问圈口', copy: '差一号手感就不同' },
-      { type: 'content', heading: '写售后', copy: '退改条件留聊天记录' },
-    ],
+/** 按像素宽度折行（中文逐字，遇 \n 强制断行） */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const out: string[] = []
+  let line = ''
+  for (const ch of Array.from(text || '')) {
+    if (ch === '\n') { if (line) out.push(line); line = ''; continue }
+    const next = line + ch
+    if (ctx.measureText(next).width > maxW && line) { out.push(line); line = ch } else line = next
   }
+  if (line) out.push(line)
+  return out
 }
 
-/** 模板模式的内页演示图：取所选图片模板的皮肤配色，按骨架画抽象版式 */
-function templatePreview(idx: number) {
-  const t = imageTemplates.value.find(x => x.id === contentLayouts[idx])
-  const bg = t?.skin?.bg || '#ffffff'
-  const fg = t?.skin?.primary || '#b05a1f'
-  const title = t?.name || `内页 ${idx + 1}`
-  // 缩略图只有几十像素宽，版式元素必须够粗才看得出来，否则一片白
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='800'>`
-    + `<rect width='600' height='800' fill='${bg}'/>`
-    + `<rect x='0' y='0' width='600' height='120' fill='${fg}'/>`
-    + `<g fill='${fg}' opacity='.35'>`
-    + `<rect x='52' y='200' width='496' height='150' rx='10'/>`
-    + `<rect x='52' y='380' width='360' height='56' rx='8'/>`
-    + `<rect x='52' y='462' width='420' height='56' rx='8'/>`
-    + `<rect x='52' y='544' width='300' height='56' rx='8'/>`
-    + `</g>`
-    + `<text x='300' y='740' font-size='40' fill='${fg}' `
-    + `text-anchor='middle' font-family='serif'>${title}</text>`
-    + `</svg>`
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
+/** 圆角矩形路径（不依赖 ctx.roundRect，老 Chromium 也能用） */
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2))
+  ctx.beginPath()
+  ctx.moveTo(x + rr, y)
+  ctx.arcTo(x + w, y, x + w, y + h, rr)
+  ctx.arcTo(x + w, y + h, x, y + h, rr)
+  ctx.arcTo(x, y + h, x, y, rr)
+  ctx.arcTo(x, y, x + w, y, rr)
+  ctx.closePath()
 }
+
+/** 把一页大纲按模板骨架画成 3:4 真图，返回 dataURL */
+function renderInnerPage(idx: number): string {
+  const tpl = imageTemplates.value.find((x) => x.id === contentLayouts[idx])
+  const page = outline.value.pages[idx + 1]
+  const heading = (page?.heading || '这一页讲什么').trim()
+  const copy = (page?.copy || '').trim()
+  const skin = tpl?.skin
+  const bg = skin?.bg || '#f7f2ec'
+  const primary = skin?.primary || '#e22a43'
+  const skeleton = tpl?.skeleton || 'card'
+  const radius = skin?.radius ?? 8
+  const centered = skin?.align === 'center'
+  const font = skin?.font === 'serif' ? SERIF_STACK : SANS_STACK
+
+  const cv = document.createElement('canvas')
+  cv.width = INNER_W
+  cv.height = INNER_H
+  const ctx = cv.getContext('2d')
+  if (!ctx) return ''
+
+  ctx.fillStyle = bg
+  ctx.fillRect(0, 0, INNER_W, INNER_H)
+
+  const pad = 108
+  const innerW = INNER_W - pad * 2
+  const x = centered ? INNER_W / 2 : pad
+  ctx.textAlign = centered ? 'center' : 'left'
+  ctx.textBaseline = 'alphabetic'
+
+  const paint = (lines: string[], startY: number, size: number, gap: number) => {
+    lines.forEach((l, i) => ctx.fillText(l, x, startY + i * (size + gap)))
+    return startY + (lines.length - 1) * (size + gap)
+  }
+  const headingLines = (size: number) => {
+    ctx.fillStyle = primary
+    ctx.font = `700 ${size}px ${font}`
+    return wrapText(ctx, heading, innerW).slice(0, 2)
+  }
+  const copyLines = (size: number, alpha: number, max: number) => {
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = primary
+    ctx.font = `400 ${size}px ${font}`
+    const ls = wrapText(ctx, copy, innerW).slice(0, max)
+    ctx.globalAlpha = 1
+    return ls
+  }
+
+  // 页眉编号：三张内页带一致的序号，看起来是一套
+  if (skin?.number !== false) {
+    ctx.globalAlpha = 0.55
+    ctx.fillStyle = primary
+    ctx.font = `600 36px ${font}`
+    ctx.fillText(`${String(idx + 1).padStart(2, '0')} / 03`, x, pad)
+    ctx.globalAlpha = 1
+  }
+
+  if (skeleton === 'num') {
+    // 大数字：巨型序号当主视觉，标题与正文压在下面，别让下半页空着
+    ctx.globalAlpha = 0.9
+    ctx.fillStyle = primary
+    ctx.font = `700 330px ${font}`
+    ctx.fillText(String(idx + 1).padStart(2, '0'), x, 560)
+    ctx.globalAlpha = 1
+    paint(headingLines(104), 740, 104, 26)
+    paint(copyLines(54, 0.74, 5), 940, 54, 84)
+  } else if (skeleton === 'list') {
+    // 清单：标题在上，正文按句拆成带圆点的条目
+    paint(headingLines(84), 300, 84, 24)
+    const rows = (copy || '条目一。条目二。条目三。').split(/[。；;]/).filter(Boolean).slice(0, 4)
+    ctx.font = `400 48px ${font}`
+    rows.forEach((row, i) => {
+      const y = 480 + i * 150
+      ctx.globalAlpha = 0.85
+      ctx.fillStyle = primary
+      ctx.beginPath()
+      ctx.arc(centered ? pad : pad + 12, y - 16, 12, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.globalAlpha = 0.78
+      const ls = wrapText(ctx, row.trim(), centered ? innerW - 48 : innerW - 56).slice(0, 2)
+      ls.forEach((l, k) => ctx.fillText(l, centered ? INNER_W / 2 : pad + 56, y + k * 70))
+      ctx.globalAlpha = 1
+    })
+  } else if (skeleton === 'card') {
+    // 卡片：正文装进一张圆角块
+    paint(headingLines(84), 280, 84, 24)
+    const boxY = 420
+    const boxH = INNER_H - boxY - pad - 60
+    ctx.globalAlpha = 0.16
+    ctx.fillStyle = primary
+    roundRectPath(ctx, pad, boxY, innerW, boxH, radius * 3)
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.textAlign = 'left'
+    ctx.fillStyle = primary
+    ctx.font = `400 54px ${font}`
+    const body = wrapText(ctx, copy, innerW - 96).slice(0, 8)
+    body.forEach((l, i) => ctx.fillText(l, pad + 48, boxY + 96 + i * 84))
+    ctx.textAlign = centered ? 'center' : 'left'
+  } else if (skeleton === 'compare') {
+    // 对比：左右两栏，左标题右正文，中间一条竖线
+    const colW = (innerW - 60) / 2
+    ctx.globalAlpha = 0.14
+    ctx.fillStyle = primary
+    roundRectPath(ctx, pad, 300, colW, INNER_H - 300 - pad - 60, radius * 3)
+    ctx.fill()
+    roundRectPath(ctx, pad + colW + 60, 300, colW, INNER_H - 300 - pad - 60, radius * 3)
+    ctx.fill()
+    ctx.globalAlpha = 1
+    ctx.textAlign = 'left'
+    ctx.fillStyle = primary
+    ctx.font = `700 68px ${font}`
+    wrapText(ctx, heading, colW - 64).slice(0, 3)
+      .forEach((l, i) => ctx.fillText(l, pad + 32, 400 + i * 96))
+    ctx.font = `400 46px ${font}`
+    ctx.globalAlpha = 0.8
+    wrapText(ctx, copy, colW - 64).slice(0, 8)
+      .forEach((l, i) => ctx.fillText(l, pad + colW + 92, 400 + i * 76))
+    ctx.globalAlpha = 1
+    ctx.textAlign = centered ? 'center' : 'left'
+  } else if (skeleton === 'split') {
+    // 分屏：上 40% 色块压标题（反白），下半留正文
+    ctx.fillStyle = primary
+    ctx.fillRect(0, 0, INNER_W, Math.round(INNER_H * 0.4))
+    ctx.fillStyle = bg
+    ctx.font = `700 104px ${font}`
+    wrapText(ctx, heading, innerW).slice(0, 2)
+      .forEach((l, i) => ctx.fillText(l, x, 250 + i * 130))
+    ctx.fillStyle = primary
+    paint(copyLines(54, 0.8, 6), Math.round(INNER_H * 0.4) + 160, 54, 30)
+  } else {
+    // quote 金句：正文当大字居中，上下引号
+    ctx.fillStyle = primary
+    ctx.globalAlpha = 0.25
+    ctx.font = `700 220px ${font}`
+    ctx.fillText('\u201c', x, 460)
+    ctx.globalAlpha = 1
+    ctx.font = `700 88px ${font}`
+    const body = wrapText(ctx, copy || heading, innerW - 40).slice(0, 6)
+    body.forEach((l, i) => ctx.fillText(l, x, 620 + i * 130))
+    ctx.globalAlpha = 0.6
+    ctx.font = `600 44px ${font}`
+    wrapText(ctx, heading, innerW).slice(0, 2).forEach((l, i) => ctx.fillText(l, x, 1160 + i * 66))
+    ctx.globalAlpha = 1
+  }
+
+  // 页脚：模板名 + 分隔线，让整套图有署名感
+  if (skin?.divider !== false) {
+    ctx.globalAlpha = 0.22
+    ctx.strokeStyle = primary
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(pad, INNER_H - 150)
+    ctx.lineTo(INNER_W - pad, INNER_H - 150)
+    ctx.stroke()
+    ctx.globalAlpha = 0.55
+    ctx.fillStyle = primary
+    ctx.font = `500 32px ${font}`
+    ctx.fillText(tpl?.name || '内容模板', x, INNER_H - pad)
+    ctx.globalAlpha = 1
+  }
+
+  return cv.toDataURL('image/png')
+}
+
+/** 3 张内页预览：内容/模板/大纲一变就整体重算，避免重复渲染 */
+const innerPreviews = computed(() => contentLayouts.map((_, i) => renderInnerPage(i)))
 
 async function genOutline() {
   if (!profileId.value) {
@@ -198,11 +323,9 @@ async function genOutline() {
       pages: (r.outline?.pages || []).slice(0, 4),
     }
     step.value = 2
-  } catch {
-    // 本阶段 UI 先行：生文链路不可用时用演示大纲把流程走完，卡在第 1 步没有意义
-    outline.value = demoOutline()
-    step.value = 2
-    toast('生文接口未响应，已用演示大纲占位（可逐字改）')
+  } catch (e) {
+    // 生文失败如实告诉用户，不拿演示稿冒充成功
+    toast(`生文失败：${(e as Error).message || '接口无响应'}`, 'error')
   } finally {
     busy.value = false
   }
@@ -259,8 +382,7 @@ function pickCover(url: string) {
 
 /**
  * 按当前（可能已编辑）大纲逐页 AI 生图：1 封面 + 3 内页，3:4。
- * 本阶段按「已接通」对待：接口返回真图就用，返回空或失败则用演示占位图，
- * 保证 UI 流程（选图 → 删图 → 填入发布页）始终能走完。
+ * 直接调真实生图接口，返回什么就显示什么；为空或失败如实报错。
  */
 async function generateImages() {
   if (!outline.value.pages.length) {
@@ -273,10 +395,14 @@ async function generateImages() {
       profile_id: profileId.value,
       pages: outline.value.pages,
     })
-    generatedImages.value = (r.images || []).length ? r.images : demoImages()
-  } catch {
-    // 生图链路尚未接通：用占位图把流程走完，不打断用户
-    generatedImages.value = demoImages()
+    const imgs = r.images || []
+    if (!imgs.length) {
+      toast('生图接口没有返回图片，请检查生图模型配置', 'error')
+      return
+    }
+    generatedImages.value = imgs
+  } catch (e) {
+    toast(`生图失败：${(e as Error).message || '接口无响应'}`, 'error')
   } finally {
     generating.value = false
   }
@@ -294,7 +420,7 @@ function apply() {
     imgs = [...generatedImages.value]
   } else {
     const inner = imageTemplates.value.length
-      ? contentLayouts.map((_, i) => templatePreview(i))
+      ? [...innerPreviews.value]
       : []
     imgs = [coverImage.value, ...inner].filter(Boolean) as string[]
     // 封面必须由用户从真实素材里点选，不能拿模板凑，缺了就明说
@@ -551,7 +677,7 @@ const totalChars = computed(() => (outline.value.body || '').length)
                 <div v-for="i in 3" :key="i" class="ip-slot">
                   <div class="ip-head"><b>内页 {{ i }}</b></div>
                   <div class="ip-preview">
-                    <img :src="templatePreview(i - 1)" alt="" />
+                    <img :src="innerPreviews[i - 1]" alt="" />
                   </div>
                   <select v-model="contentLayouts[i - 1]" class="wz-input layout-select">
                     <option v-for="l in layoutsFor()" :key="l.id" :value="l.id">
@@ -721,7 +847,7 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 .ip-slot { display: flex; flex-direction: column; gap: 8px; }
 .ip-head b { font-size: 12.5px; color: #333; }
 .ip-preview {
-  height: 150px; border: 1px solid #eee; border-radius: 8px; background: #fafafb;
+  height: 180px; border: 1px solid #eee; border-radius: 8px; background: #fafafb;
   overflow: hidden; display: flex; justify-content: center;
 }
 /* 3:4 缩略图按高度撑满、宽度自适应，完整显示版式而不是裁成横条 */
