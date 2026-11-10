@@ -552,7 +552,11 @@ async def collapse_debug_windows():
     try:
         from src import engine_pool  # noqa: PLC0415
 
-        eng = await engine_pool.pool.get("default")
+        # peek 不拉起引擎：无引擎时没有可收起的调试窗，直接 closed=0；
+        # 用 get 会在无引擎时真实创建并 launch 浏览器，测试/无引擎环境下无限挂起。
+        eng = engine_pool.pool.peek("default")
+        if eng is None:
+            return {"ok": True, "closed": 0}
         n = await eng.collapse_debug_windows()
         return {"ok": True, "closed": n}
     except Exception:  # noqa: BLE001
@@ -2916,6 +2920,156 @@ async def ai_generate(req: AIGenReq):
         return {"ok": True, "action": req.action, "result": result}
     except ValueError as e:  # 未配置 Key / 请求失败 → 400
         raise HTTPException(400, str(e)) from e
+
+
+# ================= AI 生图配置（与生文分离；只列能出图的模型） =================
+from src import ai_image  # noqa: E402
+from src import options_store  # noqa: E402
+from src import profiles_store  # noqa: E402
+
+
+class ImageConfigReq(BaseModel):
+    provider: str = ""
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+@app.get("/api/ai_image_config")
+def get_image_config():
+    """生图配置（key 掩码）+ 供应商清单（内含各自可出图模型）。"""
+    return ai_image.public_config()
+
+
+@app.post("/api/ai_image_config")
+def set_image_config(req: ImageConfigReq):
+    if not req.model:
+        raise HTTPException(400, "请选择生图模型")
+    return ai_image.save_config(req.provider, req.api_key, req.base_url, req.model)
+
+
+@app.post("/api/ai_image_config/clear")
+def clear_image_config():
+    return ai_image.clear_config()
+
+
+@app.post("/api/ai_image_test")
+async def test_image(req: ImageConfigReq):
+    return await ai_image.test_connection(req.provider, req.api_key, req.base_url)
+
+
+# ================= 账号档案（图文生成的事实底座） =================
+class ProfileReq(BaseModel):
+    id: str = ""
+    name: str = ""
+    nickname: str = ""
+    brand: str = ""
+    industry: str = ""
+    audience: str = ""
+    selling_points: str = ""
+    products: str = ""
+    address: str = ""
+    tone: str = ""
+    avoid_words: str = ""
+
+
+@app.get("/api/profiles")
+def get_profiles():
+    return {"ok": True, "items": profiles_store.list_profiles()}
+
+
+@app.post("/api/profiles")
+def save_profile(req: ProfileReq):
+    row = profiles_store.save_profile(req.model_dump())
+    return {"ok": True, "item": row}
+
+
+@app.delete("/api/profiles/{profile_id}")
+def delete_profile(profile_id: str):
+    if not profiles_store.delete_profile(profile_id):
+        raise HTTPException(404, "档案不存在")
+    return {"ok": True}
+
+
+class AiOptionsReq(BaseModel):
+    industries: list[str] | None = None
+    tones: list[str] | None = None
+
+
+@app.get("/api/ai_options")
+def get_ai_options():
+    """行业 / 口吻的下拉候选（含默认集，供「恢复默认」按钮用）。"""
+    return {"ok": True, **options_store.load(), "defaults": options_store.defaults()}
+
+
+@app.post("/api/ai_options")
+def save_ai_options(req: AiOptionsReq):
+    return {"ok": True, **options_store.save(req.model_dump(exclude_none=True))}
+
+
+@app.post("/api/ai_options/reset")
+def reset_ai_options():
+    return {"ok": True, **options_store.reset()}
+
+
+class OutlineReq(BaseModel):
+    profile_id: str = ""
+    structure: str = ""      # 内容结构名（如「避坑清单」「对比测评」）
+    note: dict = {}          # {title, desc, keyword} 原笔记信息
+
+
+_OUTLINE_SPEC = """输出严格 JSON（不要代码块、不要解释），结构：
+{"title": "标题（≤20字，含1个emoji）",
+ "body": "正文（300-800字，双换行分段，每段1-2个emoji开头，前3行放核心）",
+ "tags": "#标签1 #标签2 #标签3（3-8个，精准在前泛话题在后）",
+ "pages": [{"type":"cover","heading":"封面主标题≤9字","copy":"封面副标题"},
+           {"type":"content","heading":"内页小标题","copy":"2-3行内容页文案"},
+           {"type":"content","heading":"...","copy":"..."},
+           {"type":"content","heading":"...","copy":"..."}]}
+要求：pages 恰好 4 页（1 封面 + 3 内容页）；内容只能来自档案和原笔记，禁止编造价格、地址、体验。"""
+
+
+def _parse_json_block(text: str) -> dict:
+    """容错解析模型输出：去掉 ``` 围栏，截取首个 { 到末个 }。"""
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:]
+    i, j = s.find("{"), s.rfind("}")
+    if i >= 0 and j > i:
+        s = s[i:j + 1]
+    return json.loads(s)
+
+
+@app.post("/api/ai_outline")
+async def ai_outline(req: OutlineReq):
+    """一句话 → 可编辑大纲（标题/正文/标签/分页文案）。人在大纲阶段先改，再花钱生图。"""
+    _check_license_or_raise("llm")
+    if not llm_service.enabled():
+        raise HTTPException(400, "未配置 AI 模型：请先在「设置 · AI」配置生文模型")
+    profile = profiles_store.get_profile(req.profile_id) or profiles_store.default_profile()
+    title = (req.note.get("title") or "")[:500]
+    desc = (req.note.get("desc") or "")[:2000]
+    keyword = (req.note.get("keyword") or "")[:200]
+    structure = (req.structure or "避坑清单")[:40]
+    system = "\n".join([
+        "你是小红书图文创作专家，只输出可直接发布的文案，拒绝“宝子们/家人们/谁懂啊”式通用AI味。",
+        profiles_store.profile_prompt_block(profile),
+    ]).strip()
+    prompt = (
+        f"参考的原笔记（只借主题与角度，不要照抄）：\n标题：{title}\n正文：{desc}\n"
+        f"品类关键词：{keyword}\n内容结构：{structure}\n\n"
+        "请按该结构规划一篇全新的小红书图文笔记。\n" + _OUTLINE_SPEC
+    )
+    try:
+        raw = await llm_service.chat(system, prompt, max_tokens=2400, temperature=0.8)
+        data = _parse_json_block(raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"大纲解析失败：{e}") from e
+    return {"ok": True, "outline": data, "profile_id": (profile or {}).get("id", "")}
 
 
 # ================= 静态前端 =================

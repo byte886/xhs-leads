@@ -4,6 +4,7 @@ import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
+  apiGetImageConfig, apiSetImageConfig, apiClearImageConfig, apiTestImageConfig,
   apiLicenseStatus, apiLicenseActivate,
   apiMirrorWindow, apiMirrorOpen, apiMirrorClose,
   apiLoginStatus, apiLoginBegin,
@@ -12,12 +13,13 @@ import {
   apiRefreshIdentity, apiScanLogin,
 } from '../api'
 import type { AccountItem } from '../types'
+import type { ImageConfig, ImageProvider } from '../api'
 
 // ---- 左侧分类导航 ----
 const cats = [
   { id: 'account', label: '账号与登录' },
   { id: 'collect', label: '采集设置' },
-  { id: 'ai', label: 'AI 能力' },
+  { id: 'ai', label: 'AI' },
   { id: 'window', label: '窗口与调试' },
   { id: 'about', label: '关于与授权' },
 ]
@@ -309,10 +311,20 @@ async function activateLicense() {
   }
 }
 
-// ---- AI Key ----
+// ---- AI · 生文（DeepSeek / OpenAI 兼容；与生图配置完全分离） ----
+const TEXT_PROVIDERS = [
+  { id: 'deepseek', label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', models: ['deepseek-flash', 'deepseek-v4-pro'] },
+  { id: 'openai_compat', label: 'OpenAI 兼容（自定义 / 中转站）', base_url: '', models: [] },
+]
 const aiCfg = ref<{ configured: boolean; openai_base_url: string; default_model: string; llm_api_key_masked: string }>()
-const aiForm = reactive({ api_key: '', openai_base_url: '', default_model: '' })
+const aiForm = reactive({
+  provider: 'deepseek',
+  api_key: '',
+  openai_base_url: 'https://api.deepseek.com/v1',
+  default_model: 'deepseek-flash',
+})
 const aiSaving = ref(false)
+const textModels = computed(() => TEXT_PROVIDERS.find(p => p.id === aiForm.provider)?.models || [])
 
 async function loadAi() {
   try {
@@ -324,8 +336,15 @@ async function loadAi() {
 }
 function fillAiForm() {
   aiForm.api_key = ''
-  aiForm.openai_base_url = aiCfg.value?.openai_base_url || ''
-  aiForm.default_model = aiCfg.value?.default_model || ''
+  aiForm.openai_base_url = aiCfg.value?.openai_base_url || 'https://api.deepseek.com/v1'
+  aiForm.default_model = aiCfg.value?.default_model || 'deepseek-flash'
+  aiForm.provider = (aiForm.openai_base_url.includes('deepseek') || !aiForm.openai_base_url) ? 'deepseek' : 'openai_compat'
+}
+function onTextProvider() {
+  const p = TEXT_PROVIDERS.find(x => x.id === aiForm.provider)
+  if (!p) return
+  if (p.base_url) aiForm.openai_base_url = p.base_url
+  if (p.models.length) aiForm.default_model = p.models[0]
 }
 async function saveAi() {
   if (!aiForm.openai_base_url || !aiForm.default_model) {
@@ -334,10 +353,10 @@ async function saveAi() {
   }
   aiSaving.value = true
   try {
-    await apiSetLLMConfig({ ...aiForm })
+    await apiSetLLMConfig({ api_key: aiForm.api_key, openai_base_url: aiForm.openai_base_url, default_model: aiForm.default_model })
     await loadAi()
     fillAiForm()
-    toast('AI 配置已保存')
+    toast('生文配置已保存')
   } catch (e) {
     toast(`保存失败：${(e as Error).message}`, 'error')
   } finally {
@@ -350,7 +369,7 @@ async function clearAi() {
     await apiClearLLMConfig()
     await loadAi()
     fillAiForm()
-    toast('AI 配置已清除（可随时重新配置）')
+    toast('生文配置已清除')
   } catch (e) {
     toast(`清除失败：${(e as Error).message}`, 'error')
   } finally {
@@ -359,7 +378,7 @@ async function clearAi() {
 }
 async function testAi() {
   try {
-    const r = await apiTestLLM({ ...aiForm })
+    const r = await apiTestLLM({ api_key: aiForm.api_key, openai_base_url: aiForm.openai_base_url, default_model: aiForm.default_model })
     if (r.ok) {
       const extra = r.model_available === false ? '（模型不在清单，可忽略）' : ''
       toast(`连接成功：可用模型 ${r.count ?? 0} 个${extra}`)
@@ -371,44 +390,78 @@ async function testAi() {
   }
 }
 
-// ---- 账号人设 ----
-const persona = reactive({ industry: '', tone: '', topics: '' })
-const personaLoaded = ref(false)
-const personaSaving = ref(false)
+// ---- AI · 生图（独立 Key；下拉只列能出图的模型） ----
+const imgCfg = ref<ImageConfig>()
+const imgForm = reactive({ provider: 'dashscope', api_key: '', base_url: '', model: 'wan2.7-image' })
+const imgSaving = ref(false)
+const imgProviders = computed<ImageProvider[]>(() => imgCfg.value?.providers || [])
+const imgModels = computed(() => imgProviders.value.find(p => p.id === imgForm.provider)?.models || [])
 
-async function loadPersona() {
+async function loadImg() {
   try {
-    const r = await fetch('/api/persona')
-    const d = await r.json()
-    persona.industry = d.industry || ''
-    persona.tone = d.tone || ''
-    persona.topics = d.topics || ''
+    imgCfg.value = await apiGetImageConfig()
   } catch {
-    /* 未就绪：保持空 */
+    imgCfg.value = undefined
   }
-  personaLoaded.value = true
 }
-async function savePersona() {
-  personaSaving.value = true
+function fillImgForm() {
+  imgForm.api_key = ''
+  if (imgCfg.value?.configured) {
+    imgForm.provider = imgCfg.value.provider || 'dashscope'
+    imgForm.base_url = imgCfg.value.base_url || ''
+    imgForm.model = imgCfg.value.model || ''
+  }
+}
+function onImgProvider() {
+  const p = imgProviders.value.find(x => x.id === imgForm.provider)
+  if (!p) return
+  if (p.base_url) imgForm.base_url = p.base_url
+  imgForm.model = p.models[0] || ''
+}
+async function saveImg() {
+  if (!imgForm.model) {
+    toast('请选择生图模型', 'error')
+    return
+  }
+  imgSaving.value = true
   try {
-    const r = await fetch('/api/persona', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(persona),
-    })
-    const d = await r.json()
-    if (d.ok) toast('人设已保存（AI 生成保持该口吻）')
-    else toast('保存失败', 'error')
-  } catch {
-    toast('保存失败：网络错误', 'error')
+    imgCfg.value = await apiSetImageConfig({ ...imgForm })
+    fillImgForm()
+    toast('生图配置已保存')
+  } catch (e) {
+    toast(`保存失败：${(e as Error).message}`, 'error')
   } finally {
-    personaSaving.value = false
+    imgSaving.value = false
   }
 }
+async function clearImg() {
+  imgSaving.value = true
+  try {
+    imgCfg.value = await apiClearImageConfig()
+    fillImgForm()
+    toast('生图配置已清除')
+  } catch (e) {
+    toast(`清除失败：${(e as Error).message}`, 'error')
+  } finally {
+    imgSaving.value = false
+  }
+}
+async function testImg() {
+  try {
+    const r = await apiTestImageConfig({ ...imgForm })
+    if (r.ok) toast(r.note || `连接成功：可列举模型 ${r.count ?? 0} 个`)
+    else toast(`测试失败：${r.error || '未知原因'}`, 'error')
+  } catch (e) {
+    toast(`测试失败：${(e as Error).message}`, 'error')
+  }
+}
+
+// ---- 档案已拆成独立 Tab（ProfilePanel.vue），设置页不再承载档案 ----
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadPersona(), loadLicense(), loadAcct(), loadAppCfg(), loadAccounts()])
+  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAcct(), loadAppCfg(), loadAccounts()])
   fillAiForm()
+  fillImgForm()
 })
 </script>
 
@@ -587,58 +640,120 @@ onMounted(async () => {
           </div>
         </section>
 
-        <!-- AI 能力 -->
+        <!-- AI：生文 / 生图 两条独立链路（供应商 + Key 各自独立） -->
         <section v-if="activeCat === 'ai'">
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">API Key</span>
-              <span class="limit">{{ aiCfg?.llm_api_key_masked ? '已配置 ' + aiCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
+          <div class="ai-status">
+            <div class="ai-st" :class="{ on: aiCfg?.configured }">
+              <i class="dot" />生文<b>{{ aiCfg?.configured ? '已配置' : '未配置' }}</b>
+              <em>{{ aiCfg?.default_model || '—' }}</em>
             </div>
-            <input v-model="aiForm.api_key" type="password" placeholder="sk-..." class="full-input" />
+            <div class="ai-st" :class="{ on: imgCfg?.configured }">
+              <i class="dot" />生图<b>{{ imgCfg?.configured ? '已配置' : '未配置' }}</b>
+              <em>{{ imgCfg?.model || '—' }}</em>
+            </div>
+            <span class="ai-st-tip">两条链路独立配置、互不影响。生文未配置时生成按钮灰态。</span>
           </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">Base URL（OpenAI 兼容端点）</span>
+
+          <!-- 生文 -->
+          <div class="ai-block">
+            <div class="blk-head">
+              <div>
+                <h3>生文</h3>
+                <p>标题 / 正文 / 标签 / 分页文案（OpenAI 兼容 chat/completions）</p>
+              </div>
+              <span class="blk-badge" :class="{ on: aiCfg?.configured }">{{ aiCfg?.configured ? '✓ 可用' : '未配置' }}</span>
             </div>
-            <input v-model="aiForm.openai_base_url" placeholder="https://api.openai.com/v1" class="full-input" />
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">供应商</span>
+                <select v-model="aiForm.provider" class="full-input" @change="onTextProvider">
+                  <option v-for="p in TEXT_PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">API Key</span>
+                <span class="limit">{{ aiCfg?.llm_api_key_masked ? '已配置 ' + aiCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
+              </div>
+              <input v-model="aiForm.api_key" type="password" placeholder="sk-..." class="full-input" />
+            </div>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">Base URL</span>
+              </div>
+              <input v-model="aiForm.openai_base_url" placeholder="https://api.deepseek.com/v1" class="full-input" />
+            </div>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">模型</span>
+                <span class="limit">可手填，下拉为已验证候选</span>
+              </div>
+              <input v-model="aiForm.default_model" class="full-input" list="text-model-list" placeholder="deepseek-flash / deepseek-v4-pro" />
+              <datalist id="text-model-list">
+                <option v-for="m in textModels" :key="m" :value="m" />
+              </datalist>
+              <div class="set-actions">
+                <button class="btn" @click="testAi">测试连接</button>
+                <button class="btn primary" :disabled="aiSaving" @click="saveAi">{{ aiSaving ? '保存中…' : '保存配置' }}</button>
+                <button v-if="aiCfg?.configured" class="btn danger" :disabled="aiSaving" @click="clearAi">清除</button>
+              </div>
+            </div>
           </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">模型名称</span>
+
+          <!-- 生图 -->
+          <div class="ai-block">
+            <div class="blk-head">
+              <div>
+                <h3>生图</h3>
+                <p>封面 / 内容页配图。下拉只列已验证能出图的模型</p>
+              </div>
+              <span class="blk-badge" :class="{ on: imgCfg?.configured }">{{ imgCfg?.configured ? '✓ 可用' : '未配置' }}</span>
             </div>
-            <input v-model="aiForm.default_model" placeholder="gpt-4o-mini / deepseek-chat / claude-…" class="full-input" />
-            <div class="set-actions">
-              <button class="btn" @click="testAi">测试连接</button>
-              <button class="btn primary" :disabled="aiSaving" @click="saveAi">{{ aiSaving ? '保存中…' : '保存配置' }}</button>
-              <button v-if="aiCfg?.configured" class="btn danger" :disabled="aiSaving" @click="clearAi">清除配置</button>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">供应商</span>
+              </div>
+              <select v-model="imgForm.provider" class="full-input" @change="onImgProvider">
+                <option v-for="p in imgProviders" :key="p.id" :value="p.id">{{ p.label }}</option>
+              </select>
+              <p class="set-hint">{{ imgProviders.find(p => p.id === imgForm.provider)?.note || '' }}</p>
             </div>
-            <div class="gate-msg" :class="{ ok: aiCfg?.configured }">
-              {{ aiCfg?.configured ? '✅ 已配置 AI 模型 —— 文稿生成 / 发布前质检可用' : '⚠ 当前未配置 AI 模型 —— AI 功能处于灰态' }}
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">API Key</span>
+                <span class="limit">{{ imgCfg?.api_key_masked ? '已配置 ' + imgCfg.api_key_masked + '（留空保留）' : '必填' }}</span>
+              </div>
+              <input v-model="imgForm.api_key" type="password" placeholder="生图供应商的 Key（与生文可不同）" class="full-input" />
             </div>
-          </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">行业 / 主营品类</span>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">Base URL</span>
+              </div>
+              <input v-model="imgForm.base_url" placeholder="https://dashscope.aliyuncs.com/api/v1" class="full-input" />
             </div>
-            <input v-model="persona.industry" placeholder="如：珠宝翡翠、护肤、餐饮…" class="full-input" />
-          </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">人设口吻</span>
-            </div>
-            <input v-model="persona.tone" placeholder="如：干货型 / 分享型 / 探店型…" class="full-input" />
-          </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">常发主题</span>
-            </div>
-            <input v-model="persona.topics" placeholder="逗号分隔，如：避坑指南、性价比测评…" class="full-input" />
-            <p class="set-hint">AI 生成标题/正文/标签时保持人设一致，避免"宝子们/家人们/谁懂啊"式通用 AI 味。</p>
-            <div class="set-actions">
-              <button class="btn primary" :disabled="personaSaving || !personaLoaded" @click="savePersona">{{ personaSaving ? '保存中…' : '保存人设' }}</button>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">模型</span>
+                <span class="limit">仅可出图的模型</span>
+              </div>
+              <select v-if="imgModels.length" v-model="imgForm.model" class="full-input">
+                <option v-for="m in imgModels" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <input v-else v-model="imgForm.model" class="full-input" placeholder="中转站的生图模型名" />
+              <p class="set-hint">
+                DeepSeek 的 flash / pro 只输出文字，不会出现在这里——这是能力差异，不是配置问题。
+                生图与生文可以不是同一家供应商。
+              </p>
+              <div class="set-actions">
+                <button class="btn" @click="testImg">测试连接</button>
+                <button class="btn primary" :disabled="imgSaving" @click="saveImg">{{ imgSaving ? '保存中…' : '保存配置' }}</button>
+                <button v-if="imgCfg?.configured" class="btn danger" :disabled="imgSaving" @click="clearImg">清除</button>
+              </div>
             </div>
           </div>
         </section>
+
 
         <!-- 窗口与调试 -->
         <section v-if="activeCat === 'window'">
@@ -703,39 +818,47 @@ onMounted(async () => {
 
 <style scoped>
 /* 两栏布局：左侧分类导航 + 右侧逐项列表 */
-.settings-layout { display: flex; gap: 16px; align-items: flex-start; }
+.settings-layout { display: flex; gap: 18px; align-items: flex-start; }
 .settings-nav {
-  width: 148px; flex-shrink: 0;
-  display: flex; flex-direction: column; gap: 4px;
+  width: 152px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 2px;
   position: sticky; top: 0;
 }
 .nav-item {
-  text-align: left; padding: 10px 14px; border-radius: 10px;
-  border: 1px solid transparent; background: transparent;
-  font-size: 13px; color: #555; cursor: pointer; user-select: none;
-  transition: all .15s;
+  text-align: left; padding: 9px 12px; border-radius: var(--r-ctl);
+  border: 0; background: transparent;
+  font-size: 13px; color: var(--ink-3); cursor: pointer; user-select: none;
+  transition: color .15s, background .15s;
 }
-.nav-item:hover { background: #f5f5f7; color: #222; }
+.nav-item:hover { color: var(--ink); background: var(--panel-2); }
+/* 选中用底色 + 内描边表达，不用左侧彩条（>1px 竖条是反模式） */
 .nav-item.cur {
-  background: #fff; color: #ff2442; font-weight: 700;
-  border-color: #ffe2e8; box-shadow: 0 1px 4px rgba(0,0,0,.04);
-  border-left: 3px solid #ff2442;
+  background: var(--panel); color: var(--red); font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(226, 42, 67, .2);
 }
 .settings-body { flex: 1; min-width: 0; }
 
 /* 每项一行 */
+/* 字段行：在一张卡的内部逐行排，不各占一张卡（密度靠行高与一条分隔线） */
 .set-row {
-  background: var(--bg-card, #fff);
-  border: 1px solid var(--line, #ececec);
-  border-radius: 12px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 12px 0 13px;
+  margin: 0;
 }
-.row-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.row-label { font-size: 13px; font-weight: 700; color: #333; min-width: 150px; }
-.set-hint { font-size: 12px; color: var(--ink-3, #999); line-height: 1.6; margin: 8px 0 0; }
-.cur-val { font-size: 12px; color: #b08a4d; font-weight: 600; }
-.unit { font-size: 12px; color: #888; }
+.set-row:last-of-type { border-bottom: 0; padding-bottom: 0; }
+.row-main { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.row-label { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: var(--ink); }
+/* 行内说明推到最右，控件仍紧跟标签（不把两者一起推开） */
+.row-main .limit { margin-left: auto; }
+.set-hint { font-size: 12px; color: var(--ink-3); line-height: 1.65; margin: 8px 0 0; }
+.cur-val { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.unit { font-size: 12px; color: var(--ink-3); }
+/* 控件不拉满整行：下拉一类的短值不该有 600px 宽 */
+.set-row select.full-input { max-width: 340px; }
+.set-row input.full-input { max-width: 640px; }
 .num-input { width: 110px; }
 .full-input { width: 100%; box-sizing: border-box; margin-top: 8px; }
 textarea {
@@ -744,11 +867,11 @@ textarea {
   padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace;
 }
 input:not([type="checkbox"]) {
-  border: 1px solid var(--line, #e5e5e5);
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   font-size: 13px;
-  background: #fff;
+  background: var(--panel);
 }
 
 /* 开关 */
@@ -756,7 +879,7 @@ input:not([type="checkbox"]) {
 .switch input { display: none; }
 .switch .track {
   width: 38px; height: 22px; border-radius: 999px;
-  background: #d9d9de; position: relative; transition: background .18s;
+  background: rgba(43, 30, 24, .16); position: relative; transition: background .18s;
   display: inline-block;
 }
 .switch .thumb {
@@ -764,22 +887,22 @@ input:not([type="checkbox"]) {
   border-radius: 50%; background: #fff; transition: left .18s;
   box-shadow: 0 1px 3px rgba(0,0,0,.2);
 }
-.switch input:checked + .track { background: #ff2442; }
+.switch input:checked + .track { background: var(--red); }
 .switch input:checked + .track .thumb { left: 19px; }
 
 /* 状态元素 */
 .acct-status {
-  font-size: 13px; font-weight: 600; color: #c0392b;
-  padding: 4px 12px; border-radius: 999px; background: #fdf0ef;
+  font-size: 13px; font-weight: 600; color: var(--danger);
+  padding: 4px 12px; border-radius: var(--r-pill); background: var(--danger-soft);
 }
-.acct-status.on { color: #1a7f4c; background: #eaf7ef; }
+.acct-status.on { color: var(--green); background: rgba(47, 122, 85, .10); }
 
 /* 多账号列表：主标题=业务名（大、深），副标题=昵称/内部id/用途（小、灰） */
 .acct-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .acct-item {
   display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--line, #ececec); border-radius: 10px;
-  padding: 10px 12px; background: #fafafa;
+  border: 1px solid var(--line); border-radius: var(--r-card);
+  padding: 10px 12px; background: var(--panel-2);
 }
 .acct-row {
   display: flex; align-items: flex-start; justify-content: space-between;
@@ -829,7 +952,8 @@ input:not([type="checkbox"]) {
 .acct-id-input { flex: 1 1 160px; margin-top: 0 !important; font-family: ui-monospace, Menlo, monospace; }
 .set-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .import-result { font-size: 12px; color: #1a7f4c; margin: auto 0 0 4px; }
-.limit { color: #b08a4d; font-weight: 500; font-size: 12px; }
+/* 行内辅助说明：中性灰，不做第二强调色 */
+.limit { color: var(--ink-3); font-weight: 500; font-size: 12px; }
 .lic-tag { padding: 2px 10px; border-radius: 999px; background: #e8f5e9; color: #2e7d32; font-weight: 600; font-size: 12px; }
 .lic-tag.on { background: #e3f2fd; color: #1565c0; }
 .lic-ok { color: #2e7d32; font-weight: 600; font-size: 12px; }
@@ -842,6 +966,38 @@ input:not([type="checkbox"]) {
 .gate-msg.ok { background: #F2FBF5; border-color: #BFE8D0; color: #1a7f4c; }
 .dbg-note { font-size: 12px; color: #1a7f4c; margin: 8px 0 0; }
 .dbg-fail { font-size: 12px; color: #c0392b; margin: 8px 0 0; }
+
+/* ---- AI 分区：生文 / 生图 两条独立链路（供应商 + Key 各自独立）---- */
+.ai-status {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 12px 14px; margin-bottom: 12px;
+}
+.ai-st {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; color: var(--ink-3); background: var(--panel-2);
+  border-radius: var(--r-pill); padding: 5px 12px;
+}
+.ai-st .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(43, 30, 24, .28); display: inline-block; flex-shrink: 0; }
+.ai-st b { font-weight: 700; color: var(--ink-2); }
+.ai-st em { font-style: normal; color: var(--ink-3); font-size: 11.5px; font-family: ui-monospace, Menlo, monospace; }
+.ai-st.on { background: rgba(47, 122, 85, .09); color: var(--green); }
+.ai-st.on .dot { background: var(--green); }
+.ai-st.on b { color: var(--green); }
+.ai-st-tip { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+
+.ai-block {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 17px 18px; margin-bottom: 12px;
+}
+.blk-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.blk-head h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+.blk-head p { margin: 5px 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+.blk-badge {
+  flex-shrink: 0; font-size: 11.5px; font-weight: 700; color: var(--ink-3);
+  background: var(--panel-2); border-radius: var(--r-pill); padding: 4px 10px;
+}
+.blk-badge.on { color: var(--green); background: rgba(47, 122, 85, .09); }
 
 @media (max-width: 720px) {
   .settings-layout { flex-direction: column; }

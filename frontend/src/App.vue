@@ -9,6 +9,7 @@ import WorkArea from './components/WorkArea.vue'
 import CardMenu from './components/CardMenu.vue'
 import PublishPage from './components/PublishPage.vue'
 import ClientsPanel from './components/ClientsPanel.vue'
+import ProfilePanel from './components/ProfilePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ForceLogin from './components/ForceLogin.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -192,7 +193,14 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 设置 Tab：账号与登录 / AI Key / 账号人设 -->
+    <!-- 档案 Tab：账号档案（生成的事实底座，内容资产而非软件配置） -->
+    <div v-show="appState.tab === 'profiles'" class="work">
+      <div style="max-width:1100px;margin:0 auto;padding:20px 26px 22px">
+        <ProfilePanel />
+      </div>
+    </div>
+
+    <!-- 设置 Tab：账号与登录 / AI 供应商 / 窗口与授权 -->
     <div v-show="appState.tab === 'settings'" class="work">
       <div style="max-width:1100px;margin:0 auto;padding:36px 26px 22px">
         <SettingsPanel />

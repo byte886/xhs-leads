@@ -1,13 +1,30 @@
 :root {
-  --red: #FF2442;
-  --red-soft: #FFF0F2;
-  --ink: #1A1A1A;
-  --ink-2: #5A5A5A;
-  --line: #E6E6E6;
-  --bg: #F7F7F8;
-  --panel: #FFFFFF;
-  --green: #12B76A;
-  --amber: #F79009;
+  /* ---- 中性阶：暖石（与焦红 accent 同色相，非纯灰）---- */
+  --bg: #faf7f4;          /* 页面底：向 accent 微染，不用纯白 */
+  --panel: #ffffff;       /* 卡片/面板 */
+  --panel-2: #f5f1ec;     /* 内嵌：输入底、表头、代码块 */
+  --line: rgba(43, 30, 24, .09);  /* 发丝线，不用硬 #ccc */
+
+  /* ---- 墨三级（每级都要 ≥4.5:1 on --panel）---- */
+  --ink: #1c1410;         /* 标题、大数字 */
+  --ink-2: #4a3d34;       /* 正文、表格单元 */
+  --ink-3: #857065;       /* 标签、caption */
+
+  /* ---- 品牌 accent：唯一 ---- */
+  --red: #e22a43;         /* 小红书红压深一档：白字压上去过 AA（原 #FF2442 只有 3.6:1） */
+  --red-soft: rgba(226, 42, 67, .09);
+  --ring: rgba(226, 42, 67, .28);
+
+  /* ---- 语义色：是功能不是身份，必须与 accent 分开 ---- */
+  --green: #2f7a55;
+  --amber: #b77a16;
+  --danger: #a8341f;      /* 删除/危险：砖红，与「选中红」明确区分 */
+  --danger-soft: rgba(168, 52, 31, .09);
+
+  /* ---- 圆角三档：版面 / 控件 / 状态胶囊（只有状态才是全圆）---- */
+  --r-card: 6px;
+  --r-ctl: 6px;
+  --r-pill: 999px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
@@ -31,9 +48,9 @@ body {
 button { font-family: inherit; cursor: pointer; border: none; background: none; font-size: 13px; }
 input, select, textarea {
   font-family: inherit; font-size: 14px; border: 1px solid var(--line);
-  border-radius: 6px; padding: 7px 10px; background: #fff; color: var(--ink);
+  border-radius: var(--r-ctl); padding: 7px 10px; background: var(--panel); color: var(--ink);
 }
-input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66, .25); border-color: var(--red); }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); border-color: var(--red); }
 
 /* 流程提示条 */
 .flow {
@@ -192,10 +209,26 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .video-bar { background: #FFF7EC; border: 1px solid #F3D9B8; border-radius: 8px; padding: 9px 12px; font-size: 12px; color: var(--ink-2); margin-bottom: 14px; display: flex; gap: 8px; align-items: flex-start; line-height: 1.5; }
 .pub-btns { display: flex; gap: 10px; padding-top: 6px; }
 .pub-btns button { padding: 11px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; }
-.btn-back, .btn-draft { border: 1px solid var(--line); background: #fff; }
+.btn-back, .btn-draft { border: 1px solid var(--line); background: var(--panel); }
 .btn-pub { background: var(--red); color: #fff; margin-left: auto; }
-.btn.danger { border: 1px solid #E51F3A; color: #E51F3A; background: #fff; }
-.btn.danger:hover { background: #FFF1F3; }
+
+/* ---- 基础按钮体系：此前全局没有 .btn，主操作只是裸文字，看不出可点 ----
+   三档：默认（墨边底线）/ primary（唯一 accent 填充）/ danger（砖红，避开品牌红） */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  font-size: 13px; font-weight: 500; color: var(--ink-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  transition: border-color .15s, background .15s, color .15s;
+}
+.btn:hover { border-color: rgba(43, 30, 24, .2); color: var(--ink); }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #cc2439; border-color: #cc2439; color: #fff; }
+.btn.danger { border-color: rgba(168, 52, 31, .35); color: var(--danger); background: var(--panel); }
+.btn.danger:hover { background: var(--danger-soft); border-color: rgba(168, 52, 31, .5); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
 
 /* O1 AI 文稿工具条（Key 门控：未配置灰态） */
 .ai-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 14px; flex-wrap: wrap; }
@@ -206,6 +239,29 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(255, 36, 66,
 .ai-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ai-btn.ghost { color: var(--ink-2); }
 .ai-btn.primary { background: var(--red); color: #fff; border-color: var(--red); }
+
+/* AI 一键生成面板：主按钮 + 折叠的单步工具（层级：一键为主，单步为辅） */
+.ai-panel {
+  border: 1px solid #f0e2d2; background: linear-gradient(180deg, #fffaf4 0%, #fff 100%);
+  border-radius: 12px; padding: 12px 14px; margin: 4px 0 16px;
+}
+.ai-main { display: flex; align-items: center; gap: 12px; }
+.ai-copy { flex: 1; min-width: 0; }
+.ai-copy b { font-size: 13.5px; color: #222; }
+.ai-copy p { margin: 3px 0 0; font-size: 11.5px; color: #999; line-height: 1.5; }
+.ai-primary {
+  flex-shrink: 0; background: var(--red); color: #fff; border: 0; border-radius: 8px;
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.ai-primary:disabled { background: #e6e6e8; color: #a5a5a5; cursor: not-allowed; }
+.ai-sub { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.ai-toggle {
+  border: 0; background: transparent; color: #b05a1f; font-size: 12px;
+  padding: 0; cursor: pointer;
+}
+.ai-warn { font-size: 11.5px; color: #b45409; }
+.ai-link { margin-left: auto; font-size: 12px; color: #999; text-decoration: none; }
+.ai-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #f0e2d2; }
 
 /* 弹层 */
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 80; display: flex; align-items: center; justify-content: center; }

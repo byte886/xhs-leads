@@ -27,8 +27,9 @@ function saveParams(p: SearchParams) {
   try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(p)) } catch { /* 隐私模式等写失败静默 */ }
 }
 
-/** 工作流 4-Tab（v1.5 对齐同类产品模式）：采集 → 创作 → 客户 → 设置 */
-export type Tab = 'collect' | 'create' | 'clients' | 'settings'
+/** 工作流 5-Tab：采集 → 创作 → 客户 → 档案 → 设置
+ *  档案独立成 Tab：它是内容资产（谁在说话、卖什么、什么价），不是软件配置。 */
+export type Tab = 'collect' | 'create' | 'clients' | 'profiles' | 'settings'
 
 /** 全局共享观察状态（顶部状态条：登录 / AI Key） */
 export interface SysStatus {

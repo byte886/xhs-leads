@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { appState, coverProxy, setStage, setTab, toast } from '../store'
 import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiGetLLMConfig, apiAiGenerate, apiLogs, apiPublishStatsSync } from '../api'
+import AiWizard from './AiWizard.vue'
 import type { DraftItem } from '../api'
 import type { LogItem, Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -352,6 +353,25 @@ function gotoAiSettings() {
   setTab('settings')
 }
 
+// ---- AI 一键生成图文（三步向导：设定 → 大纲 → 配图） ----
+const aiToolsOpen = ref(true)
+const wizardOpen = ref(false)
+
+function openWizard() {
+  if (!aiCfg.value?.configured) {
+    toast('未配置生文模型：请先到「设置 · AI」配置', 'error')
+    return
+  }
+  wizardOpen.value = true
+}
+
+function onWizardApply(v: { title: string; body: string; tags: string; images: string[] }) {
+  title.value = (v.title || '').slice(0, 50)
+  body.value = (v.body || '').slice(0, 1000)
+  tags.value = v.tags || ''
+  if (v.images?.length) images.value = dedupe(v.images)
+}
+
 async function aiRun(action: string) {
   if (!aiCfg.value?.configured) {
     toast('未配置 AI 模型：请先到「设置」Tab 配置 API Key / Base URL / 模型', 'error')
@@ -386,14 +406,27 @@ async function aiRun(action: string) {
       <h2>发布笔记</h2>
       <div v-if="loading" style="text-align:center;padding:30px;color:var(--ink-2)">正在拉取笔记内容…</div>
       <template v-else>
-        <div class="ai-bar">
-          <span class="ai-tag" :class="{ off: !aiCfg?.configured }">AI</span>
-          <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('title_summarize')">{{ aiBusy === 'title_summarize' ? '…' : 'AI 提炼标题' }}</button>
-          <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('title_rewrite')">{{ aiBusy === 'title_rewrite' ? '…' : 'AI 改写标题' }}</button>
-          <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('body_create')">{{ aiBusy === 'body_create' ? '…' : 'AI 创作正文' }}</button>
-          <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('body_rewrite')">{{ aiBusy === 'body_rewrite' ? '…' : 'AI 改写正文' }}</button>
-          <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('tags')">{{ aiBusy === 'tags' ? '…' : 'AI 提取标签' }}</button>
-          <button class="ai-btn ghost" @click="gotoAiSettings">AI 设置{{ aiCfg?.configured ? '' : '（未配置）' }} → 设置</button>
+        <div class="ai-panel">
+          <div class="ai-main">
+            <span class="ai-tag" :class="{ off: !aiCfg?.configured }">AI</span>
+            <div class="ai-copy">
+              <b>一键生成图文</b>
+              <p>按账号档案 + 内容结构，一次出标题 / 正文 / 标签 / 配图；大纲中间可改</p>
+            </div>
+            <button class="ai-primary" :disabled="!aiCfg?.configured" @click="openWizard">生成</button>
+          </div>
+          <div class="ai-sub">
+            <button class="ai-toggle" @click="aiToolsOpen = !aiToolsOpen">单步改写 {{ aiToolsOpen ? '▾' : '▸' }}</button>
+            <span v-if="!aiCfg?.configured" class="ai-warn">生文未配置，生成按钮不可用</span>
+            <a href="#" class="ai-link" @click.prevent="gotoAiSettings">AI 设置 →</a>
+          </div>
+          <div v-if="aiToolsOpen" class="ai-actions">
+            <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('title_summarize')">{{ aiBusy === 'title_summarize' ? '…' : '提炼标题' }}</button>
+            <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('title_rewrite')">{{ aiBusy === 'title_rewrite' ? '…' : '改写标题' }}</button>
+            <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('body_create')">{{ aiBusy === 'body_create' ? '…' : '创作正文' }}</button>
+            <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('body_rewrite')">{{ aiBusy === 'body_rewrite' ? '…' : '改写正文' }}</button>
+            <button class="ai-btn" :disabled="!aiCfg?.configured || !!aiBusy" @click="aiRun('tags')">{{ aiBusy === 'tags' ? '…' : '提取标签' }}</button>
+          </div>
         </div>
         <div class="pub-field">
           <label>标题 <span class="limit">{{ tCount }}/50</span></label>
@@ -554,5 +587,11 @@ async function aiRun(action: string) {
       <img :src="previewUrl" alt="" @click.stop="previewUrl = ''" />
       <div class="lb-hint">点击任意处关闭</div>
     </div>
+    <AiWizard
+      :open="wizardOpen"
+      :source="{ title, desc: body, keyword: aiKeyword, images }"
+      @close="wizardOpen = false"
+      @apply="onWizardApply"
+    />
   </div>
 </template>

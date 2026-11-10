@@ -350,3 +350,128 @@ export async function apiAiGenerate(action: string, note: Record<string, string>
     body: JSON.stringify({ action, note }),
   }))
 }
+
+// ---- AI 生图配置（与生文分离；下拉只含可出图模型） ----
+export interface ImageProvider {
+  id: string
+  label: string
+  base_url: string
+  models: string[]
+  note: string
+}
+
+export interface ImageConfig {
+  configured: boolean
+  provider: string
+  base_url: string
+  model: string
+  api_key_masked: string
+  updated_at: string
+  providers: ImageProvider[]
+}
+
+export interface ImageConfigInput {
+  provider: string
+  api_key: string
+  base_url: string
+  model: string
+}
+
+export async function apiGetImageConfig(): Promise<ImageConfig> {
+  return j(await fetch(`${BASE}/api/ai_image_config`))
+}
+
+export async function apiSetImageConfig(p: ImageConfigInput): Promise<ImageConfig> {
+  return j(await fetch(`${BASE}/api/ai_image_config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }))
+}
+
+export async function apiClearImageConfig(): Promise<ImageConfig> {
+  return j(await fetch(`${BASE}/api/ai_image_config/clear`, { method: 'POST' }))
+}
+
+export async function apiTestImageConfig(p: ImageConfigInput): Promise<{ ok: boolean; error?: string; count?: number; models?: string[]; note?: string }> {
+  return j(await fetch(`${BASE}/api/ai_image_test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }))
+}
+
+// ---- 账号档案（图文生成的事实底座） ----
+export interface AiProfile {
+  id: string
+  name: string
+  nickname: string
+  brand: string
+  industry: string
+  audience: string
+  selling_points: string
+  products: string
+  address: string
+  tone: string
+  avoid_words: string
+  updated_at?: string
+}
+
+export async function apiListProfiles(): Promise<{ ok: boolean; items: AiProfile[] }> {
+  return j(await fetch(`${BASE}/api/profiles`))
+}
+
+export async function apiSaveProfile(p: AiProfile): Promise<{ ok: boolean; item: AiProfile }> {
+  return j(await fetch(`${BASE}/api/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }))
+}
+
+export async function apiDeleteProfile(id: string): Promise<{ ok: boolean }> {
+  return j(await fetch(`${BASE}/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }))
+}
+
+// ---- 行业 / 口吻 选项库（档案下拉候选，可维护、可恢复默认） ----
+export interface AiOptions {
+  industries: string[]
+  tones: string[]
+}
+
+export async function apiAiOptions(): Promise<{ ok: boolean; industries: string[]; tones: string[]; defaults: AiOptions }> {
+  return j(await fetch(`${BASE}/api/ai_options`))
+}
+
+export async function apiSaveAiOptions(o: Partial<AiOptions>): Promise<{ ok: boolean; industries: string[]; tones: string[] }> {
+  return j(await fetch(`${BASE}/api/ai_options`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(o),
+  }))
+}
+
+export async function apiResetAiOptions(): Promise<{ ok: boolean; industries: string[]; tones: string[] }> {
+  return j(await fetch(`${BASE}/api/ai_options/reset`, { method: 'POST' }))
+}
+
+// ---- AI 大纲（一句话 → 标题/正文/标签/分页文案） ----
+export interface OutlinePage {
+  type: 'cover' | 'content' | string
+  heading: string
+  copy: string
+}
+export interface AiOutline {
+  title: string
+  body: string
+  tags: string
+  pages: OutlinePage[]
+}
+
+export async function apiAiOutline(payload: { profile_id: string; structure: string; note: Record<string, string> }): Promise<{ ok: boolean; outline: AiOutline; profile_id: string }> {
+  return j(await fetch(`${BASE}/api/ai_outline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }))
+}
