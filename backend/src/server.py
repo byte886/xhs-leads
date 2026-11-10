@@ -2959,6 +2959,29 @@ async def test_image(req: ImageConfigReq):
     return await ai_image.test_connection(req.provider, req.api_key, req.base_url)
 
 
+class ImageGenReq(BaseModel):
+    prompt: str = ""
+    size: str = ""
+    n: int = 1
+
+
+@app.post("/api/ai_image_generate")
+async def generate_note_image(req: ImageGenReq):
+    """真实生图：按已配置供应商出 3:4 竖图，返回图片 URL（当前仅接入阿里云百炼）。"""
+    _check_license_or_raise("llm")
+    if not req.prompt.strip():
+        raise HTTPException(400, "缺少生图提示词")
+    try:
+        urls = await ai_image.generate_image(
+            req.prompt.strip(),
+            size=req.size or ai_image.PORTRAIT_34,
+            n=max(1, min(req.n, 4)),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "urls": urls}
+
+
 # ================= 账号档案（图文生成的事实底座） =================
 class ProfileReq(BaseModel):
     id: str = ""

@@ -17,6 +17,9 @@ from .jsonio import read_json_safe, write_json
 
 CONFIG_PATH = config.DATA_DIR / "ai_image_config.json"
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+_GEN_TIMEOUT = httpx.Timeout(120.0, connect=15.0)
+# 小红书 3:4 竖图：wan2.7-image 2K 档官方 3:4 尺寸（封面/内页统一比例）。
+PORTRAIT_34 = "1728*2368"
 
 # 供应商注册表：models 只放已验证可出图的模型。
 PROVIDERS = [
@@ -142,3 +145,41 @@ async def test_connection(provider: str, api_key: str, base_url: str) -> dict:
         "models": [],
         "note": f"该端点不支持模型列举（HTTP {r.status_code}）；配置已保存，首次生成时再做真实校验",
     }
+
+
+def _extract_image_urls(data: dict) -> list[str]:
+    """从百炼响应里提取所有 type=image 的图片 URL。"""
+    urls = []
+    for choice in (data.get("output") or {}).get("choices") or []:
+        for item in (choice.get("message") or {}).get("content") or []:
+            if item.get("type") == "image" and item.get("image"):
+                urls.append(item["image"])
+    return urls
+
+
+async def _dashscope_generate(cfg: dict, prompt: str, size: str, n: int) -> dict:
+    """调阿里云百炼同步端点（multimodal-generation/generation）。"""
+    url = f"{cfg['base_url'].rstrip('/')}/services/aigc/multimodal-generation/generation"
+    body = {
+        "model": cfg["model"],
+        "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
+        "parameters": {"size": size, "n": n, "watermark": False},
+    }
+    async with httpx.AsyncClient(timeout=_GEN_TIMEOUT) as cli:
+        r = await cli.post(url, headers={"Authorization": f"Bearer {cfg['api_key']}"}, json=body)
+    if r.status_code != 200:
+        raise ValueError(f"生图失败（HTTP {r.status_code}）：{r.text[:200]}")
+    return r.json()
+
+
+async def generate_image(prompt: str, size: str = PORTRAIT_34, n: int = 1) -> list[str]:
+    """按已配置供应商生图，返回图片 URL（供应商链接 24h 有效，调用方负责下载落盘）。"""
+    cfg = require_image()
+    provider = cfg.get("provider", "dashscope")
+    if provider != "dashscope":
+        raise ValueError(f"供应商「{provider}」生成链路尚未接入，当前仅支持阿里云百炼")
+    data = await _dashscope_generate(cfg, prompt, size, n)
+    urls = _extract_image_urls(data)
+    if not urls:
+        raise ValueError("生图响应未包含图片 URL")
+    return urls
