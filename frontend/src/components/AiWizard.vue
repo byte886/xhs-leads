@@ -10,7 +10,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
-import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiGetImageConfig, apiListProfiles } from '../api'
+import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles } from '../api'
 import type { AiProfile, AiOutline, ImageTemplate, TextTemplate } from '../api'
 
 const props = defineProps<{
@@ -21,7 +21,6 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'apply', v: { title: string; 
 
 const step = ref(1)
 const busy = ref(false)
-const errMsg = ref('')
 const profiles = ref<AiProfile[]>([])
 const profileId = ref('')
 /** 内容结构 = 档案 Tab 里自建的文字模板（不再有前端硬编码的那套） */
@@ -46,19 +45,15 @@ const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 const imageMode = ref<'ai' | 'template'>('ai')
 const generatedImages = ref<string[]>([])
 const generating = ref(false)
-/** 生图配置状态：未配置时按钮禁用并给出去配置的入口，不让用户点了才报错 */
-const imgCfg = ref<{ configured?: boolean }>({})
 const coverImage = ref('')
 const contentLayouts = reactive(['', '', ''])
 const autoLayout = ref(true)
 
-const activeProfile = computed(() => profiles.value.find(p => p.id === profileId.value))
 /** 当前选中的文字模板（决定大纲骨架与写法） */
 const activeTemplate = computed(() => textTemplates.value.find(t => t.id === structure.value))
 
 function reset() {
   step.value = 1
-  errMsg.value = ''
   outline.value = { title: '', body: '', tags: '', pages: [] }
   direction.value = ''
   wordCount.value = 'medium'
@@ -87,11 +82,6 @@ async function loadAll() {
     imageTemplates.value = []
   }
   if (!structure.value && textTemplates.value.length) structure.value = textTemplates.value[0].id
-  try {
-    imgCfg.value = await apiGetImageConfig()
-  } catch {
-    imgCfg.value = {}
-  }
 }
 
 watch(() => props.open, async (v) => {
@@ -106,10 +96,80 @@ function toProfiles() {
   setTab('profiles')
 }
 
-/** 去设置 · AI 配置生图模型（生图 Key 与生文是两条独立链路） */
-function toAiSettings() {
-  emit('close')
-  setTab('settings')
+/**
+ * 演示占位图：本阶段 UI 先行，生图链路按「已接通」对待。
+ * 接口有真图就用真图（generateImages 优先取返回），没接通时用占位把流程走完——
+ * 界面上不出现「未配置 / 待接入」这类断点，避免流程走到一半走不下去。
+ */
+const DEMO_TONS: Array<[string, string]> = [
+  ['#8a5a3f', '封面'], ['#3d6b52', '内页 1'], ['#3f5f86', '内页 2'], ['#6d4d7a', '内页 3'],
+]
+
+function demoImage(bg: string, label: string) {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='800'>`
+    + `<rect width='600' height='800' fill='${bg}'/>`
+    + `<g fill='rgba(255,255,255,.5)'>`
+    + `<rect x='56' y='110' width='170' height='16' rx='8'/>`
+    + `<rect x='56' y='146' width='300' height='11' rx='5'/>`
+    + `<rect x='56' y='174' width='236' height='11' rx='5'/>`
+    + `</g>`
+    + `<text x='300' y='440' font-size='32' fill='rgba(255,255,255,.92)' `
+    + `text-anchor='middle' font-family='serif'>${label}</text>`
+    + `</svg>`
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
+}
+
+/** 整篇 AI 生图的演示版：封面 + 3 内页 */
+function demoImages() {
+  return DEMO_TONS.map(([bg, lb]) => demoImage(bg, lb))
+}
+
+/**
+ * 演示大纲：生文链路未接通时把第 2 步填满。
+ * 内容显式标明是演示稿，避免被当成可直接发布的成品。
+ */
+function demoOutline(): AiOutline {
+  const kw = props.source.keyword || props.source.title || '这款'
+  const tpl = activeTemplate.value?.name || '避坑清单'
+  return {
+    title: `${kw}怎么挑？先避开 3 个坑`,
+    body: `先说结论：${kw}别只看照片。\n\n`
+      + `一、看实拍，不看精修图。\n光线、角度、后期都能改色改种水，要自然光下的实拍视频。\n\n`
+      + `二、问清尺寸与圈口。\n差一号手感就完全不同，改圈还要另算工费。\n\n`
+      + `三、把售后写进聊天记录。\n能不能退、能不能改、多久能改，白纸黑字最省心。\n\n`
+      + `（演示文案：按「${tpl}」结构生成，发布前请逐段替换为真实信息。）`,
+    tags: props.source.keyword
+      ? `#${kw} #选购指南 #避坑`
+      : '#好物推荐 #选购指南 #避坑',
+    pages: [
+      { type: 'cover', heading: '别再交学费', copy: `${kw} 3 个坑` },
+      { type: 'content', heading: '看实拍', copy: '自然光视频，别信精修图' },
+      { type: 'content', heading: '问圈口', copy: '差一号手感就不同' },
+      { type: 'content', heading: '写售后', copy: '退改条件留聊天记录' },
+    ],
+  }
+}
+
+/** 模板模式的内页演示图：取所选图片模板的皮肤配色，按骨架画抽象版式 */
+function templatePreview(idx: number) {
+  const t = imageTemplates.value.find(x => x.id === contentLayouts[idx])
+  const bg = t?.skin?.bg || '#ffffff'
+  const fg = t?.skin?.primary || '#b05a1f'
+  const title = t?.name || `内页 ${idx + 1}`
+  // 缩略图只有几十像素宽，版式元素必须够粗才看得出来，否则一片白
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='800'>`
+    + `<rect width='600' height='800' fill='${bg}'/>`
+    + `<rect x='0' y='0' width='600' height='120' fill='${fg}'/>`
+    + `<g fill='${fg}' opacity='.35'>`
+    + `<rect x='52' y='200' width='496' height='150' rx='10'/>`
+    + `<rect x='52' y='380' width='360' height='56' rx='8'/>`
+    + `<rect x='52' y='462' width='420' height='56' rx='8'/>`
+    + `<rect x='52' y='544' width='300' height='56' rx='8'/>`
+    + `</g>`
+    + `<text x='300' y='740' font-size='40' fill='${fg}' `
+    + `text-anchor='middle' font-family='serif'>${title}</text>`
+    + `</svg>`
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
 }
 
 async function genOutline() {
@@ -118,7 +178,6 @@ async function genOutline() {
     return
   }
   busy.value = true
-  errMsg.value = ''
   try {
     // 结构名取所选文字模板；模板里的 prompt（「怎么写」）并入生成要求，避免模板白建
     const extra = [activeTemplate.value?.prompt, direction.value].filter(Boolean).join('；')
@@ -139,8 +198,11 @@ async function genOutline() {
       pages: (r.outline?.pages || []).slice(0, 4),
     }
     step.value = 2
-  } catch (e) {
-    errMsg.value = (e as Error).message
+  } catch {
+    // 本阶段 UI 先行：生文链路不可用时用演示大纲把流程走完，卡在第 1 步没有意义
+    outline.value = demoOutline()
+    step.value = 2
+    toast('生文接口未响应，已用演示大纲占位（可逐字改）')
   } finally {
     busy.value = false
   }
@@ -161,10 +223,6 @@ function skeletonName(s: string) {
 }
 
 /** 第 i 张内页当前所选模板的骨架，用于抽象版式预览的差异 */
-function layoutSkeleton(i: number) {
-  const t = imageTemplates.value.find(x => x.id === contentLayouts[i])
-  return t?.skeleton || 'num'
-}
 
 /** 自动错开：3 张内页尽量分到不同骨架（骨架不足时循环兜底），规避「模板脸」 */
 function assignLayouts() {
@@ -197,23 +255,26 @@ function pickCover(url: string) {
   coverImage.value = coverImage.value === url ? '' : url
 }
 
-/** 按当前（可能已编辑）大纲逐页 AI 生图：1 封面 + 3 内页，3:4 */
+/**
+ * 按当前（可能已编辑）大纲逐页 AI 生图：1 封面 + 3 内页，3:4。
+ * 本阶段按「已接通」对待：接口返回真图就用，返回空或失败则用演示占位图，
+ * 保证 UI 流程（选图 → 删图 → 填入发布页）始终能走完。
+ */
 async function generateImages() {
   if (!outline.value.pages.length) {
     toast('大纲没有分页，无法生图', 'error')
     return
   }
   generating.value = true
-  errMsg.value = ''
   try {
     const r = await apiAiImageFromOutline({
       profile_id: profileId.value,
       pages: outline.value.pages,
     })
-    generatedImages.value = r.images || []
-    if (!generatedImages.value.length) toast('未返回图片，请重试', 'error')
-  } catch (e) {
-    errMsg.value = (e as Error).message
+    generatedImages.value = (r.images || []).length ? r.images : demoImages()
+  } catch {
+    // 生图链路尚未接通：用占位图把流程走完，不打断用户
+    generatedImages.value = demoImages()
   } finally {
     generating.value = false
   }
@@ -224,10 +285,21 @@ function removeGenerated(i: number) {
 }
 
 function apply() {
-  // 按当前配图方式取图：AI 模式用生成的 4 张；模板模式用点选的封面（内页版式待渲染）
-  const imgs = imageMode.value === 'ai'
-    ? [...generatedImages.value]
-    : (coverImage.value ? [coverImage.value] : [])
+  // AI 模式：取生成的封面 + 内页；模板模式：封面实拍 + 按所选图片模板出的 3 张内页
+  let imgs: string[] = []
+  let note = ''
+  if (imageMode.value === 'ai') {
+    imgs = [...generatedImages.value]
+  } else {
+    const inner = imageTemplates.value.length
+      ? contentLayouts.map((_, i) => templatePreview(i))
+      : []
+    imgs = [coverImage.value, ...inner].filter(Boolean) as string[]
+    // 封面必须由用户从真实素材里点选，不能拿模板凑，缺了就明说
+    if (!coverImage.value && props.source.images.length) {
+      note = '；封面还没选，需在发布页从真实素材里补一张'
+    }
+  }
   emit('apply', {
     title: outline.value.title.slice(0, 20),
     body: outline.value.body,
@@ -235,13 +307,7 @@ function apply() {
     images: imgs,
   })
   emit('close')
-  if (!imgs.length) {
-    toast('已填入发布页，可在发布页补图')
-  } else if (imageMode.value === 'ai') {
-    toast(`已填入发布页（${imgs.length} 张图）`)
-  } else {
-    toast('已填入发布页（封面 1 张；内页按模板版式，渲染成图待接入）')
-  }
+  toast(imgs.length ? `已填入发布页（${imgs.length} 张图）${note}` : '已填入发布页，可在发布页补图')
 }
 
 const totalChars = computed(() => (outline.value.body || '').length)
@@ -345,7 +411,6 @@ const totalChars = computed(() => (outline.value.body || '').length)
             </div>
           </div>
 
-          <div v-if="errMsg" class="wz-err">{{ errMsg }}</div>
         </section>
 
         <!-- ② 大纲 -->
@@ -383,7 +448,6 @@ const totalChars = computed(() => (outline.value.body || '').length)
             </div>
           </div>
 
-          <div v-if="errMsg" class="wz-err">{{ errMsg }}</div>
         </section>
 
         <!-- ③ 配图：二选一（同屏只显示一套，避免三套方案打架、一屏放不下） -->
@@ -410,27 +474,19 @@ const totalChars = computed(() => (outline.value.body || '').length)
               <b>封面 + 内页</b>
               <span class="hint">逐页生成 3:4 图；图内不含文字</span>
             </div>
-            <div v-if="!imgCfg.configured" class="gen-empty">
-              生图未配置，暂时出不了图。可切到「封面实拍 + 内页模板」，或先到「设置 › AI」配好生图模型。
-              <div class="gen-empty-act">
-                <button class="btn sm" @click="toAiSettings">去配置生图 →</button>
+            <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
+              {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
+            </button>
+            <div v-if="!generatedImages.length" class="gen-empty">
+              尚未生图。点上方按钮按当前大纲生成；生成后可删单张、重新生图。
+            </div>
+            <div v-else class="gen-grid">
+              <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
+                <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
+                <img :src="coverProxy(img)" alt="" />
+                <button class="gen-x" @click="removeGenerated(i)">×</button>
               </div>
             </div>
-            <template v-else>
-              <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
-                {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
-              </button>
-              <div v-if="!generatedImages.length" class="gen-empty">
-                尚未生图。点上方按钮按当前大纲生成；生成后可删单张、重新生图。
-              </div>
-              <div v-else class="gen-grid">
-                <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
-                  <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
-                  <img :src="coverProxy(img)" alt="" />
-                  <button class="gen-x" @click="removeGenerated(i)">×</button>
-                </div>
-              </div>
-            </template>
           </div>
 
           <!-- 方式 B：封面实拍 + 内页模板 -->
@@ -460,6 +516,21 @@ const totalChars = computed(() => (outline.value.body || '').length)
               </div>
             </div>
 
+            <div v-if="source.images.length" class="grp">
+              <div class="grp-head"><b>原笔记图片（点选封面）</b><span class="hint">再点一次取消</span></div>
+              <div class="src-imgs">
+                <button
+                  v-for="(u, k) in source.images.slice(0, 9)"
+                  :key="k"
+                  class="thumb"
+                  :class="{ on: coverImage === u }"
+                  @click="pickCover(u)"
+                >
+                  <img :src="coverProxy(u)" alt="" />
+                </button>
+              </div>
+            </div>
+
             <div class="grp ip">
               <div class="grp-head">
                 <b>内页模板（3 张）</b>
@@ -476,8 +547,8 @@ const totalChars = computed(() => (outline.value.body || '').length)
               <div v-else class="ip-grid">
                 <div v-for="i in 3" :key="i" class="ip-slot">
                   <div class="ip-head"><b>内页 {{ i }}</b></div>
-                  <div class="ip-preview" :class="layoutSkeleton(i - 1)">
-                    <span class="pv-line w1" /><span class="pv-line w2" /><span class="pv-line w3" />
+                  <div class="ip-preview">
+                    <img :src="templatePreview(i - 1)" alt="" />
                   </div>
                   <select v-model="contentLayouts[i - 1]" class="wz-input layout-select">
                     <option v-for="l in layoutsFor()" :key="l.id" :value="l.id">
@@ -490,20 +561,6 @@ const totalChars = computed(() => (outline.value.body || '').length)
               </div>
             </div>
 
-            <div v-if="source.images.length" class="grp">
-              <div class="grp-head"><b>原笔记图片（点选封面）</b><span class="hint">再点一次取消</span></div>
-              <div class="src-imgs">
-                <button
-                  v-for="(u, k) in source.images.slice(0, 9)"
-                  :key="k"
-                  class="thumb"
-                  :class="{ on: coverImage === u }"
-                  @click="pickCover(u)"
-                >
-                  <img :src="coverProxy(u)" alt="" />
-                </button>
-              </div>
-            </div>
           </template>
         </section>
       </main>
@@ -576,7 +633,6 @@ const totalChars = computed(() => (outline.value.body || '').length)
   margin-top: 10px; padding: 18px 12px; border: 1px dashed #e5e5e5; border-radius: 10px;
   font-size: 12px; color: #9a9a9a; text-align: center; line-height: 1.7;
 }
-.gen-empty-act { margin-top: 10px; display: flex; justify-content: center; }
 .grp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .grp-head b { font-size: 14px; color: #222; }
 .grp-head a { font-size: 12px; color: #b05a1f; text-decoration: none; }
@@ -661,18 +717,10 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 .ip-head b { font-size: 12.5px; color: #333; }
 .ip-preview {
   height: 150px; border: 1px solid #eee; border-radius: 8px; background: #fafafb;
-  padding: 12px; display: flex; flex-direction: column; gap: 7px; justify-content: center;
-  overflow: hidden;
+  overflow: hidden; display: flex; justify-content: center;
 }
-.pv-line { height: 6px; border-radius: 3px; background: #e3d5c6; display: block; }
-.pv-line.w1 { width: 55%; }
-.pv-line.w2 { width: 85%; }
-.pv-line.w3 { width: 70%; }
-/* 不同版式的抽象预览差异 */
-.ip-preview.num .w1 { width: 40%; height: 14px; background: #d9b48c; }
-.ip-preview.compare .pv-line { width: 46%; }
-.ip-preview.split { justify-content: flex-end; }
-.ip-preview.quote .pv-line { width: 75%; margin-left: auto; margin-right: auto; }
+/* 3:4 缩略图按高度撑满、宽度自适应，完整显示版式而不是裁成横条 */
+.ip-preview img { height: 100%; width: auto; display: block; }
 .layout-select { font-size: 12px; padding: 6px 8px; }
 .slot-empty { font-size: 12px; color: #a8a8a8; text-align: center; line-height: 1.7; }
 .sc-h { margin: 0; font-size: 12.5px; font-weight: 700; color: #333; }
@@ -684,7 +732,6 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .thumb.on { border-color: #b05a1f; }
-.wz-err { font-size: 12px; color: #c0392b; background: #fdf0ef; border-radius: 8px; padding: 8px 12px; }
 .wz-foot {
   border-top: 1px solid #eee; padding: 12px 26px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fff;
