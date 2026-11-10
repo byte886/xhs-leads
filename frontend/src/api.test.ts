@@ -231,3 +231,56 @@ describe('账号管理 API 契约', () => {
     expect(r.active).toBe('default')
   })
 })
+
+describe('AI 图文模块 API 契约（表驱动）', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const minProfile = { id: 'p1', name: '店' } as any
+  const minPage = { type: 'cover', heading: 'h', copy: 'c' }
+  const outlinePayload = { profile_id: 'p1', structure: 's', note: {} }
+  const cases: Array<[string, string, string, () => Promise<unknown> | unknown]> = [
+    ['apiGetImageConfig', '/api/ai_image_config', 'GET', () => api.apiGetImageConfig()],
+    ['apiSetImageConfig', '/api/ai_image_config', 'POST', () => api.apiSetImageConfig({} as any)],
+    ['apiClearImageConfig', '/api/ai_image_config/clear', 'POST', () => api.apiClearImageConfig()],
+    ['apiTestImageConfig', '/api/ai_image_test', 'POST', () => api.apiTestImageConfig({} as any)],
+    ['apiListProfiles', '/api/profiles', 'GET', () => api.apiListProfiles()],
+    ['apiSaveProfile', '/api/profiles', 'POST', () => api.apiSaveProfile(minProfile)],
+    ['apiDeleteProfile', '/api/profiles/p1', 'DELETE', () => api.apiDeleteProfile('p1')],
+    ['apiAiOptions', '/api/ai_options', 'GET', () => api.apiAiOptions()],
+    ['apiSaveAiOptions', '/api/ai_options', 'POST', () => api.apiSaveAiOptions({} as any)],
+    ['apiResetAiOptions', '/api/ai_options/reset', 'POST', () => api.apiResetAiOptions()],
+    ['apiContentTemplates', '/api/content_templates', 'GET', () => api.apiContentTemplates()],
+    ['apiSaveTextTemplate', '/api/content_templates/text', 'POST', () => api.apiSaveTextTemplate({} as any)],
+    ['apiSaveImageTemplate', '/api/content_templates/image', 'POST', () => api.apiSaveImageTemplate({} as any)],
+    ['apiDeleteTemplate', '/api/content_templates/text/t1', 'DELETE', () => api.apiDeleteTemplate('text', 't1')],
+    ['apiResetTemplates', '/api/content_templates/reset', 'POST', () => api.apiResetTemplates()],
+    ['apiResetTemplateGroup', '/api/content_templates/reset/image', 'POST', () => api.apiResetTemplateGroup('image')],
+    ['apiAiOutline', '/api/ai_outline', 'POST', () => api.apiAiOutline(outlinePayload)],
+    ['apiAiGenerateNote', '/api/ai_generate_note', 'POST', () => api.apiAiGenerateNote(outlinePayload)],
+    ['apiAiImageFromOutline', '/api/ai_image_from_outline', 'POST',
+      () => api.apiAiImageFromOutline({ profile_id: 'p1', pages: [minPage] })],
+  ]
+
+  it.each(cases)('%s 命中 %s', async (_name, url, method, fn) => {
+    let captured: any = null
+    mockFetch(async (u, init) => {
+      captured = { u: String(u), method: init?.method || 'GET' }
+      return okRes({ ok: true })
+    })
+    await fn()
+    expect(captured.method).toBe(method)
+    expect(captured.u).toContain(url)
+  })
+
+  it('apiAiImageFromOutline：pages 原样进 body（人改后的大纲）', async () => {
+    let body: any = null
+    mockFetch(async (_u, init) => {
+      body = JSON.parse(init!.body as string)
+      return okRes({ ok: true, images: [] })
+    })
+    await api.apiAiImageFromOutline({ profile_id: 'p1', pages: [minPage] })
+    expect(body.profile_id).toBe('p1')
+    expect(body.pages).toHaveLength(1)
+    expect(body.pages[0].heading).toBe('h')
+  })
+})
