@@ -237,10 +237,12 @@ function assignLayouts() {
   }
 }
 
-/** 进第 3 步：封面默认取原笔记首图，内页自动排版式 */
+/**
+ * 进第 3 步：只排内页版式。
+ * 封面不预填原笔记首图——封面是「人把关」的那一处，替用户默认选上会造成
+ * 「看起来已经定好、其实没人看过」的假象；空槽 + 明确引导更诚实。
+ */
 function prefillStep3() {
-  const src = (props.source.images || []).filter(Boolean)
-  coverImage.value = src[0] || ''
   assignLayouts()
 }
 
@@ -499,35 +501,36 @@ const totalChars = computed(() => (outline.value.body || '').length)
               <div class="cv-head">
                 <b>封面 3:4</b>
                 <span class="real-tag">真实素材</span>
-                <span class="hint">从下方原笔记图点选，或上传门店 / 产品实拍</span>
+                <span class="hint">在右栏点选原笔记图，或上传门店 / 产品实拍</span>
               </div>
               <div class="cv-box">
                 <div class="cv-thumb">
                   <img v-if="coverImage" :src="coverProxy(coverImage)" alt="" />
                   <div v-else class="slot-empty">
-                    请从下方原笔记图点选<br />或上传门店 / 产品实拍
+                    请点选右栏原笔记图<br />或上传门店 / 产品实拍
                   </div>
                 </div>
-                <div v-if="outline.pages[0]" class="cv-meta">
-                  <p class="sc-h">{{ outline.pages[0].heading }}</p>
-                  <p class="sc-c">{{ outline.pages[0].copy }}</p>
+                <div class="cv-meta">
+                  <template v-if="outline.pages[0]">
+                    <p class="sc-h">{{ outline.pages[0].heading }}</p>
+                    <p class="sc-c">{{ outline.pages[0].copy }}</p>
+                  </template>
                   <p class="cv-spec">建议 1242×1656（3:4），顶部留 15% 安全区；文字压在画面上，单图文字占比 ≤40%</p>
+                  <div v-if="source.images.length" class="cv-src">
+                    <span class="cv-src-t">从原笔记图点选（再点一次取消）</span>
+                    <div class="src-imgs">
+                      <button
+                        v-for="(u, k) in source.images.slice(0, 9)"
+                        :key="k"
+                        class="thumb"
+                        :class="{ on: coverImage === u }"
+                        @click="pickCover(u)"
+                      >
+                        <img :src="coverProxy(u)" alt="" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            <div v-if="source.images.length" class="grp">
-              <div class="grp-head"><b>原笔记图片（点选封面）</b><span class="hint">再点一次取消</span></div>
-              <div class="src-imgs">
-                <button
-                  v-for="(u, k) in source.images.slice(0, 9)"
-                  :key="k"
-                  class="thumb"
-                  :class="{ on: coverImage === u }"
-                  @click="pickCover(u)"
-                >
-                  <img :src="coverProxy(u)" alt="" />
-                </button>
               </div>
             </div>
 
@@ -706,6 +709,8 @@ textarea.wz-input { resize: vertical; line-height: 1.7; }
 .cv-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .cv-meta { flex: 1; min-width: 0; }
 .cv-spec {
+.cv-src { margin-top: 12px; }
+.cv-src-t { font-size: 11.5px; color: #9a9a9a; }
   margin: 12px 0 0; font-size: 11.5px; color: #9a9a9a; line-height: 1.7;
   border-top: 1px dashed #eee; padding-top: 10px;
 }
