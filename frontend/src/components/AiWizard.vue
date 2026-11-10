@@ -10,7 +10,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
-import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles } from '../api'
+import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiGetImageConfig, apiListProfiles } from '../api'
 import type { AiProfile, AiOutline, ImageTemplate, TextTemplate } from '../api'
 
 const props = defineProps<{
@@ -46,6 +46,8 @@ const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 const imageMode = ref<'ai' | 'template'>('ai')
 const generatedImages = ref<string[]>([])
 const generating = ref(false)
+/** 生图配置状态：未配置时按钮禁用并给出去配置的入口，不让用户点了才报错 */
+const imgCfg = ref<{ configured?: boolean }>({})
 const coverImage = ref('')
 const contentLayouts = reactive(['', '', ''])
 const autoLayout = ref(true)
@@ -85,6 +87,11 @@ async function loadAll() {
     imageTemplates.value = []
   }
   if (!structure.value && textTemplates.value.length) structure.value = textTemplates.value[0].id
+  try {
+    imgCfg.value = await apiGetImageConfig()
+  } catch {
+    imgCfg.value = {}
+  }
 }
 
 watch(() => props.open, async (v) => {
@@ -97,6 +104,12 @@ watch(() => props.open, async (v) => {
 function toProfiles() {
   emit('close')
   setTab('profiles')
+}
+
+/** 去设置 · AI 配置生图模型（生图 Key 与生文是两条独立链路） */
+function toAiSettings() {
+  emit('close')
+  setTab('settings')
 }
 
 async function genOutline() {
@@ -397,19 +410,27 @@ const totalChars = computed(() => (outline.value.body || '').length)
               <b>封面 + 内页</b>
               <span class="hint">逐页生成 3:4 图；图内不含文字</span>
             </div>
-            <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
-              {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
-            </button>
-            <div v-if="!generatedImages.length" class="gen-empty">
-              尚未生图。点上方按钮按当前大纲生成；生成后可删单张、重新生图。
-            </div>
-            <div v-else class="gen-grid">
-              <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
-                <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
-                <img :src="coverProxy(img)" alt="" />
-                <button class="gen-x" @click="removeGenerated(i)">×</button>
+            <div v-if="!imgCfg.configured" class="gen-empty">
+              生图未配置，暂时出不了图。可切到「封面实拍 + 内页模板」，或先到「设置 › AI」配好生图模型。
+              <div class="gen-empty-act">
+                <button class="btn sm" @click="toAiSettings">去配置生图 →</button>
               </div>
             </div>
+            <template v-else>
+              <button class="btn primary" :disabled="generating || !outline.pages.length" @click="generateImages">
+                {{ generating ? '正在生图（约 10–30 秒）…' : (generatedImages.length ? '重新生图' : '开始 AI 生图') }}
+              </button>
+              <div v-if="!generatedImages.length" class="gen-empty">
+                尚未生图。点上方按钮按当前大纲生成；生成后可删单张、重新生图。
+              </div>
+              <div v-else class="gen-grid">
+                <div v-for="(img, i) in generatedImages" :key="i" class="gen-cell">
+                  <span class="gen-tag">{{ i === 0 ? '封面' : '内页 ' + i }}</span>
+                  <img :src="coverProxy(img)" alt="" />
+                  <button class="gen-x" @click="removeGenerated(i)">×</button>
+                </div>
+              </div>
+            </template>
           </div>
 
           <!-- 方式 B：封面实拍 + 内页模板 -->
@@ -555,6 +576,7 @@ const totalChars = computed(() => (outline.value.body || '').length)
   margin-top: 10px; padding: 18px 12px; border: 1px dashed #e5e5e5; border-radius: 10px;
   font-size: 12px; color: #9a9a9a; text-align: center; line-height: 1.7;
 }
+.gen-empty-act { margin-top: 10px; display: flex; justify-content: center; }
 .grp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .grp-head b { font-size: 14px; color: #222; }
 .grp-head a { font-size: 12px; color: #b05a1f; text-decoration: none; }
