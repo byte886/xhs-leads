@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 import httpx
 
@@ -16,6 +17,8 @@ from src import config
 from .jsonio import read_json_safe, write_json
 
 CONFIG_PATH = config.DATA_DIR / "ai_image_config.json"
+# 与 server.py 同一个图片目录（DATA_DIR/images），已挂载到 /app/images 供前端访问。
+IMAGES_DIR = config.DATA_DIR / "images"
 _TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _GEN_TIMEOUT = httpx.Timeout(120.0, connect=15.0)
 # 小红书 3:4 竖图：wan2.7-image 2K 档官方 3:4 尺寸（封面/内页统一比例）。
@@ -172,14 +175,30 @@ async def _dashscope_generate(cfg: dict, prompt: str, size: str, n: int) -> dict
     return r.json()
 
 
+async def _download(url: str, filename: str) -> str:
+    """把供应商图片（链接 24h 有效）下载到本地 images 目录，返回 /app/images 访问路径。"""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    async with httpx.AsyncClient(timeout=_GEN_TIMEOUT) as cli:
+        r = await cli.get(url)
+    if r.status_code != 200:
+        raise ValueError(f"下载生成图片失败（HTTP {r.status_code}）")
+    (IMAGES_DIR / filename).write_bytes(r.content)
+    return f"/app/images/{filename}"
+
+
 async def generate_image(prompt: str, size: str = PORTRAIT_34, n: int = 1) -> list[str]:
-    """按已配置供应商生图，返回图片 URL（供应商链接 24h 有效，调用方负责下载落盘）。"""
+    """按已配置供应商生图并下载落盘，返回本地可访问路径（/app/images/...）。"""
     cfg = require_image()
     provider = cfg.get("provider", "dashscope")
     if provider != "dashscope":
         raise ValueError(f"供应商「{provider}」生成链路尚未接入，当前仅支持阿里云百炼")
     data = await _dashscope_generate(cfg, prompt, size, n)
-    urls = _extract_image_urls(data)
-    if not urls:
+    remote = _extract_image_urls(data)
+    if not remote:
         raise ValueError("生图响应未包含图片 URL")
-    return urls
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    out = []
+    for i, url in enumerate(remote):
+        name = f"ai_{stamp}_{uuid.uuid4().hex[:8]}_{i}.png"
+        out.append(await _download(url, name))
+    return out

@@ -18,8 +18,9 @@ def test_extract_image_urls():
 
 
 def test_generate_image_success(monkeypatch, tmp_path):
-    """已配置 → 调百炼生成，返回图片 URL，且默认 3:4 尺寸。"""
+    """已配置 → 调百炼生成并下载落盘，返回本地 /app/images 路径，默认 3:4 尺寸。"""
     monkeypatch.setattr(ai_image, "CONFIG_PATH", tmp_path / "cfg.json")
+    monkeypatch.setattr(ai_image, "IMAGES_DIR", tmp_path / "images")
     ai_image._save({  # noqa: SLF001
         "provider": "dashscope", "api_key": "sk-x",
         "base_url": "https://dashscope.aliyuncs.com/api/v1", "model": "wan2.7-image",
@@ -30,8 +31,14 @@ def test_generate_image_success(monkeypatch, tmp_path):
         return {"output": {"choices": [{"message": {"content":
             [{"type": "image", "image": "http://a/1.png"}]}}]}}
 
+    async def fake_download(url, filename):
+        assert url == "http://a/1.png" and filename.startswith("ai_") and filename.endswith(".png")
+        return f"/app/images/{filename}"
+
     monkeypatch.setattr(ai_image, "_dashscope_generate", fake_post)
-    assert asyncio.run(ai_image.generate_image("提示")) == ["http://a/1.png"]
+    monkeypatch.setattr(ai_image, "_download", fake_download)
+    out = asyncio.run(ai_image.generate_image("提示"))
+    assert len(out) == 1 and out[0].startswith("/app/images/ai_") and out[0].endswith(".png")
 
 
 def test_generate_image_not_configured(monkeypatch, tmp_path):
@@ -68,3 +75,27 @@ def test_generate_route_empty_prompt(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "ai_image", ai_image)
     r = TestClient(server.app).post("/api/ai_image_generate", json={"prompt": "  "})
     assert r.status_code == 400
+
+
+def test_download_writes_file(monkeypatch, tmp_path):
+    """下载函数：把响应字节写入 IMAGES_DIR，返回 /app/images 路径。"""
+    monkeypatch.setattr(ai_image, "IMAGES_DIR", tmp_path / "images")
+
+    class FakeResp:
+        status_code = 200
+        content = b"PNGDATA"
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr(ai_image.httpx, "AsyncClient", lambda *a, **k: FakeClient())
+    path = asyncio.run(ai_image._download("http://a/1.png", "ai_x_0.png"))  # noqa: SLF001
+    assert path == "/app/images/ai_x_0.png"
+    assert (tmp_path / "images" / "ai_x_0.png").read_bytes() == b"PNGDATA"
