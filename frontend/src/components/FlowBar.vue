@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// FlowBar：工作流 5-Tab（采集 → 创作 → 客户 → 档案 → 设置）
-// 登录态 / AI Key 状态徽标已移除：这些状态在「设置」页查看；
-// 登录失效由 App 的强制登录对话框提示，无需顶部常驻徽标。
+// FlowBar：5 个平级功能选项卡（采集 / 创作 / 客户 / 档案 / 设置）
+// 它们是并列的功能入口，不是先后步骤——所以用分段选项卡呈现，不带序号、不带箭头。
+// 登录态 / AI Key 状态徽标已移除：这些状态在「设置」页查看。
 import { appState, setTab } from '../store'
 import type { Tab } from '../store'
 
@@ -16,19 +16,17 @@ const tabs: { id: Tab; label: string }[] = [
 
 <template>
   <div class="flow-wrap">
-    <!-- 5-Tab 工作流导航 -->
-    <div class="flow">
-      <template v-for="(t, i) in tabs" :key="t.id">
-        <span v-if="i > 0" class="arrow">›</span>
-        <button
-          class="tab"
-          :class="{ cur: appState.tab === t.id }"
-          @click="setTab(t.id)"
-        >
-          <span class="dot">{{ i + 1 }}</span>{{ t.label }}
-        </button>
-      </template>
-    </div>
+    <nav class="tabs" role="tablist" aria-label="功能导航">
+      <button
+        v-for="t in tabs"
+        :key="t.id"
+        class="tab"
+        :class="{ cur: appState.tab === t.id }"
+        role="tab"
+        :aria-selected="appState.tab === t.id"
+        @click="setTab(t.id)"
+      >{{ t.label }}</button>
+    </nav>
   </div>
 </template>
 
@@ -36,44 +34,35 @@ const tabs: { id: Tab; label: string }[] = [
 .flow-wrap {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  padding: 10px 22px 8px;
+  padding: 9px 22px;
 }
-.flow {
-  display: flex;
+/* 分段控件：浅底槽 + 选中项浮起成白色卡片。
+   比「带序号的胶囊 + 箭头」弱化流程感，五个入口看起来是并列的。 */
+.tabs {
+  display: inline-flex;
   align-items: center;
   gap: 2px;
+  background: var(--panel-2);
+  border-radius: var(--r-ctl);
+  padding: 3px;
 }
-/* 当前项只用一个 accent（小红书面板上的米橙棕是第二强调色，已去掉） */
 .tab {
   border: 0;
   background: transparent;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.5;
   color: var(--ink-3);
-  padding: 7px 13px;
-  border-radius: var(--r-ctl);
-  transition: background .15s, color .15s;
+  padding: 5px 16px;
+  border-radius: 4px;
+  transition: background .15s, color .15s, box-shadow .15s;
 }
-.tab:hover { background: var(--panel-2); color: var(--ink); }
+.tab:hover:not(.cur) { color: var(--ink); }
 .tab:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
-.tab.cur { background: var(--red-soft); color: var(--red); }
-.dot {
-  width: 19px;
-  height: 19px;
-  border-radius: 50%;
-  background: var(--panel-2);
-  color: var(--ink-3);
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.tab.cur {
+  background: var(--panel);
+  color: var(--red);
+  box-shadow: 0 1px 3px rgba(28, 20, 16, .08);
 }
-.tab.cur .dot { background: var(--red); color: #fff; }
-.arrow { color: rgba(43, 30, 24, .22); font-size: 13px; padding: 0 1px; }
 </style>
