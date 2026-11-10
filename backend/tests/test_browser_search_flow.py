@@ -429,3 +429,47 @@ def test_wait_search_result_url_returns_false_when_stuck_on_explore():
         url = "https://www.xiaohongshu.com/explore"
 
     assert asyncio.run(bc._wait_search_result_url(_P(), timeout_s=0.4)) is False
+
+
+class TestSearchByTypingNoDoubleEncoding:
+    """双重编码回归：搜索必须把原始中文逐字键入、由平台自己生成 URL，
+    绝不导航已 quote 的搜索 URL（旧 goto 路径导致 keyword=%25E7... 双重编码）。"""
+
+    def test_types_raw_keyword(self, monkeypatch):
+        typed = []
+        pressed = []
+
+        class _Keyboard:
+            async def type(self, text, delay=0):
+                typed.append(text)
+
+            async def press(self, key):
+                pressed.append(key)
+
+        class _P:
+            def __init__(self):
+                self.keyboard = _Keyboard()
+                self.url = "https://www.xiaohongshu.com/search_result?keyword=x"
+
+            async def evaluate(self, js):
+                return True  # 聚焦/全选均成功，不走坐标点击退路
+
+        async def fake_cdp(aw, *, timeout=None, label="", skip=False):
+            return await aw
+
+        async def fake_wait_url(page, timeout_s=10):
+            return True
+
+        async def fake_wait_cards(page, timeout_s=20):
+            return True, None
+
+        monkeypatch.setattr(bc, "cdp_call", fake_cdp)
+        monkeypatch.setattr(bc, "_wait_search_result_url", fake_wait_url)
+        monkeypatch.setattr(bc, "_wait_note_cards", fake_wait_cards)
+        monkeypatch.setattr(bc, "_check_login_wall", lambda *a: None)
+
+        ok = _run(bc._search_by_typing(_P(), "翡翠手串", "default"))
+        assert ok is True
+        # 键入的是原始中文，未做任何 percent-encode（不是 %E7，更不是 %25E7）
+        assert typed == ["翡翠手串"]
+        assert "Enter" in pressed
