@@ -10,7 +10,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
-import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles } from '../api'
+import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles, apiUploadImage } from '../api'
 import type { AiProfile, AiOutline, ImageTemplate, TextTemplate } from '../api'
 
 const props = defineProps<{
@@ -45,6 +45,7 @@ const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
 const imageMode = ref<'ai' | 'template'>('ai')
 const generatedImages = ref<string[]>([])
 const generating = ref(false)
+const applying = ref(false)
 const coverImage = ref('')
 const contentLayouts = reactive(['', '', ''])
 const autoLayout = ref(true)
@@ -130,8 +131,8 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.closePath()
 }
 
-/** 把一页大纲按模板骨架画成 3:4 真图，返回 dataURL */
-function renderInnerPage(idx: number): string {
+/** 把一页大纲按模板骨架画成 3:4 真图，返回 canvas（预览与落盘共用同一绘制结果） */
+function buildInnerCanvas(idx: number): HTMLCanvasElement | null {
   const tpl = imageTemplates.value.find((x) => x.id === contentLayouts[idx])
   const page = outline.value.pages[idx + 1]
   const heading = (page?.heading || '这一页讲什么').trim()
@@ -148,7 +149,7 @@ function renderInnerPage(idx: number): string {
   cv.width = INNER_W
   cv.height = INNER_H
   const ctx = cv.getContext('2d')
-  if (!ctx) return ''
+  if (!ctx) return null
 
   ctx.fillStyle = bg
   ctx.fillRect(0, 0, INNER_W, INNER_H)
@@ -291,11 +292,45 @@ function renderInnerPage(idx: number): string {
     ctx.globalAlpha = 1
   }
 
-  return cv.toDataURL('image/png')
+  return cv
+}
+
+/** 即时预览：canvas 转 dataURL，改模板/大纲时由 computed 整体重算 */
+function renderInnerPage(idx: number): string {
+  const cv = buildInnerCanvas(idx)
+  return cv ? cv.toDataURL('image/png') : ''
 }
 
 /** 3 张内页预览：内容/模板/大纲一变就整体重算，避免重复渲染 */
 const innerPreviews = computed(() => contentLayouts.map((_, i) => renderInnerPage(i)))
+
+/** canvas → PNG File（toBlob 是异步的，包一层 Promise） */
+function canvasToFile(cv: HTMLCanvasElement, idx: number): Promise<File> {
+  return new Promise((resolve, reject) => {
+    cv.toBlob((blob) => {
+      if (!blob) { reject(new Error('第 ' + (idx + 1) + ' 张内页导出失败')); return }
+      resolve(new File([blob], `inner_${idx + 1}.png`, { type: 'image/png' }))
+    }, 'image/png')
+  })
+}
+
+/**
+ * 把 3 张内页 canvas 走上传接口落盘成真实文件（/app/images/...），返回持久路径。
+ * data URI 只用于即时预览，不能当真实文件——手动发布到 Chrome 时需要落盘文件。
+ * 任一张失败就抛出，由调用方如实报错，不悄悄降级。
+ */
+async function uploadInnerPages(): Promise<string[]> {
+  const paths: string[] = []
+  for (let i = 0; i < 3; i++) {
+    const cv = buildInnerCanvas(i)
+    if (!cv) continue
+    const file = await canvasToFile(cv, i)
+    const r = await apiUploadImage(file)
+    if (!r.ok || !r.path) throw new Error(r.note || `第 ${i + 1} 张内页落盘失败`)
+    paths.push(r.path)
+  }
+  return paths
+}
 
 async function genOutline() {
   if (!profileId.value) {
@@ -412,17 +447,25 @@ function removeGenerated(i: number) {
   generatedImages.value.splice(i, 1)
 }
 
-function apply() {
-  // AI 模式：取生成的封面 + 内页；模板模式：封面实拍 + 按所选图片模板出的 3 张内页
+async function apply() {
+  if (applying.value) return
+  // AI 模式：取生成的封面 + 内页；模板模式：封面实拍 + 3 张内页落盘成真实文件
   let imgs: string[] = []
   let note = ''
   if (imageMode.value === 'ai') {
     imgs = [...generatedImages.value]
   } else {
-    const inner = imageTemplates.value.length
-      ? [...innerPreviews.value]
-      : []
-    imgs = [coverImage.value, ...inner].filter(Boolean) as string[]
+    applying.value = true
+    try {
+      // 内页 canvas 落盘成真实文件路径（data URI 只用于即时预览，不能当文件发布）
+      const inner = imageTemplates.value.length ? await uploadInnerPages() : []
+      imgs = [coverImage.value, ...inner].filter(Boolean) as string[]
+    } catch (e) {
+      toast(`内页落盘失败：${(e as Error).message}`, 'error')
+      return
+    } finally {
+      applying.value = false
+    }
     // 封面必须由用户从真实素材里点选，不能拿模板凑，缺了就明说
     if (!coverImage.value && props.source.images.length) {
       note = '；封面还没选，需在发布页从真实素材里补一张'
@@ -703,7 +746,7 @@ const totalChars = computed(() => (outline.value.body || '').length)
           </button>
           <button v-if="step === 2" class="btn primary" :disabled="busy" @click="step = 3">下一步：配图</button>
           <button v-if="step === 2" class="btn" :disabled="busy" @click="genOutline">重新生成</button>
-          <button v-if="step === 3" class="btn primary" @click="apply">填入发布页</button>
+          <button v-if="step === 3" class="btn primary" :disabled="applying" @click="apply">{{ applying ? '正在落盘…' : '填入发布页' }}</button>
         </div>
       </footer>
     </div>
