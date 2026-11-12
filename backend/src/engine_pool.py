@@ -266,10 +266,11 @@ def _normalize_exit_type(default_dir: str) -> None:
 
 
 def _collect_win_executable() -> str | None:
-    """采集调试窗命令行路由用的内置 CFT 路径；拿不到就 None（退 window.open）。
+    """采集调试窗命令行路由用的内置 CFT 路径；拿不到就 None（改由 CDP
+    `Target.createTarget(newWindow)` 建标准窗口，仍不会退成无地址栏 popup）。
 
-    右窗要标准浏览器外观（地址栏/标签栏），只能靠命令行 `--new-window`
-    路由，因此建窗时必须带上可执行路径。
+    右窗要标准浏览器外观（地址栏/标签栏），命令行 `--new-window` 是最稳的一条
+    路由，因此建窗时尽量带上可执行路径。
     """
     try:
         return builtin_cft_candidates()
