@@ -22,7 +22,11 @@ hiddenimports = (
 )
 datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
-    (str(ROOT / "extension" / "lib"), "extension/lib"),          # DOM 提取源 extract.js
+    # 整个 extension 目录：manifest.json + background.js 是扩展本体（采集窗标签组与
+    # 采集窗认领依赖它），lib/extract.js 是 DOM 提取源。只拷 lib 会让
+    # builtin_extension_dir() 找不到 manifest.json 而静默跳过加载，打包版就没有
+    # 「采集窗口」蓝色标签组。
+    (str(ROOT / "extension"), "extension"),
 ] + collect_data_files("playwright")
 # 注意：内置引擎 CFT 不进 PyInstaller datas——其可执行二进制会被 PyInstaller 当
 # binary 处理失败（bincache 无法处理签名 app bundle）；改由 build_mac.sh 在

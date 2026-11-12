@@ -27,7 +27,9 @@ hiddenimports = (
 )
 datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
-    (str(ROOT / "extension" / "lib"), "extension/lib"),
+    # 整个 extension 目录：manifest.json + background.js 是扩展本体，只拷 lib 会让
+    # builtin_extension_dir() 找不到 manifest.json 而静默跳过加载（无「采集窗口」标签组）。
+    (str(ROOT / "extension"), "extension"),
 ] + collect_data_files("playwright")
 
 a = Analysis(
