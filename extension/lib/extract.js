@@ -47,26 +47,38 @@ function xhsExtractNoteDetail(root = document) {
   );
   // 视频判断（收紧）：只认正文容器内的 video/播放器，或 SEO og:video 元数据。
   // 绝不使用全文档 [class*="player"] —— 相关推荐流里的视频卡片 class 也含 player，会把图文笔记误判成视频（用户实测 bug）。
-  const videoEl = (contentRoot ? contentRoot.querySelector('video, [class*="video-player"]') : null)
-    || root.querySelector('video[src], video source[src], meta[property="og:video"], meta[name="og:video"]');
-  // 视频地址：video 元素 src / source src / og:video meta content（供视频克隆下载原视频）
-  let videoUrl = '';
-  try {
-    if (videoEl) {
-      if (videoEl.tagName === 'META') {
-        videoUrl = (videoEl.getAttribute('content') || '').trim();
-      } else if (typeof videoEl.src === 'string') {
-        videoUrl = videoEl.src.trim();
-      } else if (videoEl.querySelector) {
-        const srcEl = videoEl.querySelector('source[src]');
-        if (srcEl) videoUrl = (srcEl.getAttribute('src') || '').trim();
-      }
+  // 「实况图/动图」（SSR imageList[].livePhoto=true）的图文笔记，详情页同样用 <video class="live-video">
+  // 播放（src 是 blob:、外层 .live-photo-contain，真机实测 3.12s / 0x0），它不是视频笔记；
+  // 旧逻辑「见 video 元素即视频」会把这类判成 type=video、video_url=blob:，前端据此禁用克隆/导出。
+  const isLivePhotoEl = (el) => {
+    if (!el) return false;
+    if (/live-video/.test(String(el.className || ''))) return true;
+    return !!(el.closest && el.closest('.live-photo-contain'));
+  };
+  let domVideoEl = null;
+  if (contentRoot) {
+    domVideoEl = [...contentRoot.querySelectorAll('video, [class*="video-player"]')]
+      .find((el) => !isLivePhotoEl(el)) || null;
+  }
+  if (!domVideoEl) {
+    const v = root.querySelector('video[src]');
+    if (v && !isLivePhotoEl(v)) domVideoEl = v;
+    else {
+      const s = root.querySelector('video source[src]');
+      if (s && s.parentElement && !isLivePhotoEl(s.parentElement)) domVideoEl = s.parentElement;
     }
-    if (!videoUrl) {
-      const ogVideo = root.querySelector('meta[property="og:video"]');
-      if (ogVideo) videoUrl = (ogVideo.getAttribute('content') || '').trim();
-    }
-  } catch (e) { /* 拿不到视频地址就空 */ }
+  }
+  const ogVideoEl = root.querySelector('meta[property="og:video"], meta[name="og:video"]');
+  const elVideoUrl = (el) => {
+    if (!el) return '';
+    try {
+      if (el.tagName === 'META') return (el.getAttribute('content') || '').trim();
+      const direct = typeof el.src === 'string' ? el.src.trim() : '';
+      if (direct) return direct;
+      const s = el.querySelector ? el.querySelector('source[src]') : null;
+      return s ? (s.getAttribute('src') || '').trim() : '';
+    } catch (e) { return ''; }
+  };
   // 主图：小红书笔记正文轮播图。官方主图 class 为 note-slider-img（社区爬虫实证：所有笔记图
   // 均含此属性，评论区图/头像/推荐区不含，天然隔离）。仅当主图区为空时，才在正文容器内
   // 兜底找 .swiper-wrapper/.swiper-slide 图（避免抓到评论区/推荐区的轮播图）。
@@ -74,14 +86,14 @@ function xhsExtractNoteDetail(root = document) {
   // 解决"两张一模一样"的重复图问题。
   const IMG_HOST = /sns-webpic|sns-img|sns-preview/i;
   const IMG_EXCLUDE = /avatar|fe-static|formula-static|logo|qrcode|svg/i;
+  // URL 规范化去重：去掉 query/hash，且忽略 http/https 协议差异——实况图笔记实测同一张图
+  // 会以 http 与 https 两种地址同时出现（2 张正文图被取成 3 张），只比 host+path 才认得出是同一张。
   const norm = (u) => {
     try {
       const p = new URL(u);
-      p.search = '';
-      p.hash = '';
-      return p.href.replace(/\/$/, '');
+      return (p.host + p.pathname).replace(/\/$/, '');
     } catch {
-      return (u || '').split('?')[0].replace(/\/$/, '');
+      return (u || '').split(/[?#]/)[0].replace(/^https?:\/\//, '').replace(/\/$/, '');
     }
   };
   let imgNodes = [...root.querySelectorAll('img.note-slider-img')];
@@ -91,7 +103,7 @@ function xhsExtractNoteDetail(root = document) {
   }
   const seen = new Set();
   const imgs = imgNodes
-    .map((i) => i.src || i.getAttribute('data-src') || null)
+    .map((i) => (i.src || i.getAttribute('data-src') || '').replace(/^http:\/\/sns-/, 'https://sns-'))
     .filter((u) => u && IMG_HOST.test(u))                 // 仅笔记图床域名
     .filter((u) => !IMG_EXCLUDE.test(u))                 // 排除头像/静态资源/logo/二维码/svg
     .filter((u) => {
@@ -105,7 +117,7 @@ function xhsExtractNoteDetail(root = document) {
   // 含 interactInfo{likedCount/collectedCount/commentCount/shareCount} + time(毫秒) + user.userId，
   // 无需签名接口，比 DOM 抓取更可靠（新版详情页互动计数不在静态 DOM 文本中）。
   let interact = null, pubTimeMs = null, noteId = null, authorUserId = null, authorNick = '';
-  let authorAvatar = '', ssrAvatar = '';
+  let authorAvatar = '', ssrAvatar = '', ssrNote = null;
   try {
     const st = window.__INITIAL_STATE__ || {};
     const detailMap = (st.note && st.note.noteDetailMap) || {};
@@ -118,6 +130,7 @@ function xhsExtractNoteDetail(root = document) {
       if (k) cur = detailMap[k].note;
     }
     if (cur) {
+      ssrNote = cur;
       interact = cur.interactInfo || null;
       pubTimeMs = cur.time || null;
       noteId = cur.noteId || null;
@@ -126,6 +139,18 @@ function xhsExtractNoteDetail(root = document) {
       ssrAvatar = (cur.user && cur.user.avatar) || '';
     }
   } catch (e) { /* 拿不到就走空值 */ }
+  // 类型判定：SSR 的 note.type 是平台自己的分类（normal=图文 / video=视频），优先采信；
+  // 拿不到 SSR 时才回退 DOM（DOM 已排除实况图播放器）。
+  const isVideo = (ssrNote && ssrNote.type)
+    ? String(ssrNote.type).toLowerCase() === 'video'
+    : (!!domVideoEl || !!ogVideoEl);
+  // 视频地址：只有真实视频笔记才记；blob: 是实况图的本地播放地址，无法下载，不记。
+  let videoUrl = '';
+  if (isVideo) {
+    videoUrl = [elVideoUrl(domVideoEl), elVideoUrl(ogVideoEl)]
+      .map((u) => (u || '').trim())
+      .find((u) => u && !u.startsWith('blob:')) || '';
+  }
   // 作者头像：优先 DOM 头像的完整 src（带 imageView2 query，裸路径会 404）；
   // DOM 缺失时用 SSR 裸路径并补标准 query。
   try {
@@ -152,7 +177,7 @@ function xhsExtractNoteDetail(root = document) {
     author: authorEl ? authorEl.innerText.trim() : '',
     date: dateEl ? dateEl.innerText.trim() : '',
     imgs,
-    type: videoEl ? 'video' : 'note',
+    type: isVideo ? 'video' : 'note',
     video_url: videoUrl,
     note_id: noteId,
     user_id: authorUserId,
