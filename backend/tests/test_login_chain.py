@@ -55,7 +55,8 @@ def test_login_begin_force_sets_gate(client):
 # ------------------------------------------------------- 登录成功通知（R-6.87）
 
 def test_login_ok_clears_gate_and_invalid(client, monkeypatch):
-    """登录成功通知：清登录门、解失效记忆，且不需要任何 Cookie 参数。"""
+    """引擎复核为有效登录后：清登录门、解失效记忆，且不需要任何 Cookie 参数。"""
+    _fake_engine(monkeypatch, (True, True, False, False))
     monkeypatch.setattr(server, "_LOGIN_GATE", {"pending": True, "force": True})
     monkeypatch.setattr(server, "_LOGIN_INVALID", True)
     r = client.post("/api/auth/login_ok", json={"fresh_scan": True})
@@ -65,8 +66,9 @@ def test_login_ok_clears_gate_and_invalid(client, monkeypatch):
     assert server._LOGIN_INVALID is False
 
 
-def test_login_ok_accepts_empty_body(client):
+def test_login_ok_accepts_empty_body(client, monkeypatch):
     """守卫轮询发的是空 JSON，端点必须容忍。"""
+    _fake_engine(monkeypatch, (True, True, False, False))
     r = client.post("/api/auth/login_ok", json={})
     assert r.status_code == 200 and r.json()["ok"] is True
 

@@ -575,16 +575,29 @@ def _mark_login_ok() -> None:
 
 @app.post("/api/auth/login_ok")
 async def login_ok():
-    """登录成功通知（壳窗/采集窗页面离开 /login 后由守卫调用）。
+    """登录成功通知（守卫在登录页检测到登录 Cookie 后调用）。
 
-    这里不再搬运 Cookie。壳窗、采集窗、引擎是**同一个 CFT 实例、同一个
-    profile**，「守卫从壳窗读 cookie → POST → 后端 add_cookies 回同一个 context」
-    是旧架构（引擎曾是独立 Playwright context）遗留的自导自演，还会在注入后导航
-    页面刷新登录态、把正在采集的搜索页踢回首页。现在 Cookie 全交给浏览器写进
-    各账号 profile；本接口只负责「登录成功」这一件事——解除失效记忆、清登录门、
-    推一次事件给前端，让 APP 立刻回到可用状态。
+    守卫只凭「浏览器里有 id_token / web_session」就通知，而残留的 web_session
+    可能已被平台判失效（踢出）或被风控拦截——实测出现过「页面停在 /login、
+    cookie 还在，却被当成登录成功」的假阳性。故这里不再无条件放行，而是以
+    **引擎实况复核为唯一权威**：真的已登录、未被踢、未被风控拦截，才收尾
+    （解除失效记忆、清登录门、推事件）并返回 logged_in=True；否则返回
+    logged_in=False，守卫据此继续监视，不解除失效记忆。
+
+    这里不搬运 Cookie（壳窗/采集窗/引擎是同一个 CFT 实例、同一个 profile，
+    Cookie 由浏览器自己写盘）。引擎未就绪 / CDP 假死时保守返回 false，
+    绝不判成功。
     """
     _LOGIN_CACHE["t"] = 0.0  # 强制下次 login_status 真实判定（清缓存）
+    try:
+        from src import engine_pool
+
+        eng = await engine_pool.pool.get("default")
+        has_ws, page_logged_in, kicked, risk_verify = await _engine_login_state(eng)
+    except Exception:  # noqa: BLE001（引擎未就绪/CDP 假死：保守不判成功）
+        return {"ok": True, "logged_in": False}
+    if not (has_ws and page_logged_in and not kicked and not risk_verify):
+        return {"ok": True, "logged_in": False}
     _mark_login_ok()
     return {"ok": True, "logged_in": True}
 

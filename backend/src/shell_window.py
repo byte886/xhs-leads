@@ -910,8 +910,10 @@ async def _guard_try_notify_login(win: "ShellWindow", base: str, cs, state) -> b
     """出现登录 Cookie 且满 0.5s → 通知后端「登录成功」；成功返回 True。
 
     不再把 Cookie POST 给后端搬运。壳窗/采集窗/引擎是同一个 CFT 实例、
-    同一个 profile，Cookie 由浏览器自己写盘；这里只做一个**不带 Cookie** 的通知，
-    让后端解除失效记忆、推事件给前端。state 持 _t_last_import 做节流。
+    同一个 profile，Cookie 由浏览器自己写盘；这里只发一个**不带 Cookie** 的通知。
+    后端 login_ok 会以引擎实况复核（cookie 残留但被踢/风控/页面仍在登录页时
+    返回 logged_in=False），本函数据此返回 False 让监视继续，不产生假阳性。
+    state 持 _t_last_import 做节流。
     """
     if not has_login_cookie(cs):
         return False

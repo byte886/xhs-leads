@@ -202,10 +202,34 @@ def test_mirror_window_set(client):
     assert r.status_code in (200, 500, 503, 404) or True
 
 
-def test_login_ok_returns_logged_in(client):
-    """R-6.87：登录成功只发通知（不再上传 Cookie），返回 logged_in 供守卫判断。"""
+def test_login_ok_returns_logged_in(client, monkeypatch):
+    """登录成功通知：引擎实况复核为有效登录后，返回 logged_in 供守卫判断。"""
+    async def fake_get(*a, **k):
+        return object()
+    monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
+
+    async def fake_state(eng):
+        return (True, True, False, False)  # has_ws, page_logged_in, kicked, risk_verify
+    monkeypatch.setattr(server, "_engine_login_state", fake_state)
+
     r = client.post("/api/auth/login_ok", json={"fresh_scan": True}).json()
     assert r["ok"] is True and r["logged_in"] is True
+
+
+def test_login_ok_rejects_stale_cookie(client, monkeypatch):
+    """假阳性防御：cookie 残留但页面仍在登录页（被踢）时，不判登录、不解除失效记忆。"""
+    monkeypatch.setattr(server, "_LOGIN_INVALID", True)
+    async def fake_get(*a, **k):
+        return object()
+    monkeypatch.setattr("src.engine_pool.pool.get", fake_get)
+
+    async def fake_state(eng):
+        return (True, False, True, False)  # 有 web_session 但页面未登录、被踢
+    monkeypatch.setattr(server, "_engine_login_state", fake_state)
+
+    r = client.post("/api/auth/login_ok", json={}).json()
+    assert r["ok"] is True and r["logged_in"] is False
+    assert server._LOGIN_INVALID is True  # 失效记忆保持，不被解除
 
 
 def test_import_cookies_endpoint_removed(client):
