@@ -30,8 +30,11 @@ class TestToIntAndEdge:
         assert info["fan_ratio"] == 3.0
 
     def test_zero_fans_no_crash(self):
+        """粉丝未知：低粉与赞粉比都不计分（不能靠"没有分母"白拿满分）。"""
         info = score_note(_note(fans_count=0))
         assert info["dimensions"]["low_fan"] == 0.0
+        assert info["dimensions"]["like_fan_ratio"] == 0.0
+        assert info["fan_ratio"] == 0.0
 
     def test_zero_likes_low_score(self):
         info = score_note(_note(liked_count=0, fans_count=100))
@@ -46,6 +49,23 @@ class TestToIntAndEdge:
     def test_bad_publish_time(self):
         info = score_note(_note(publish_time=-1))
         assert info["dimensions"]["freshness"] == 0.0
+
+
+class TestUnknownFans:
+    """粉丝数未知（详情补全失败 → fans=0）的笔记不得被误判为低粉/低粉爆款。"""
+
+    def test_no_low_fan_hit_with_unknown_fans(self):
+        info = score_note(_note(liked_count=1672, fans_count=0))
+        assert info["tag"] != TAGS["low_fan_hit"]
+
+    def test_no_low_fan_with_unknown_fans(self):
+        info = score_note(_note(liked_count=800, fans_count=0))
+        assert info["tag"] != TAGS["low_fan"]
+
+    def test_unknown_fans_scores_lower_than_known_low_fan(self):
+        unknown = score_note(_note(liked_count=1672, fans_count=0, publish_time=1700000000))
+        known = score_note(_note(liked_count=1672, fans_count=50, publish_time=1700000000))
+        assert unknown["score"] < known["score"], "有粉丝基数且比值高，才该高于粉丝未知"
 
 
 class TestTagLogic:

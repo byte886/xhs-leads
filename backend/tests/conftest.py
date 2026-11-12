@@ -26,6 +26,22 @@ def _no_real_browser(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_real_data(monkeypatch, tmp_path):
+    """全局兜底：测试绝不读写真实 data/（尤其不许清空用户已采集的笔记）。
+
+    背景（真实事故）：`with TestClient(app)` 会触发 @app.on_event("startup")
+    → _reset_collection_data() 把 notes / 客户 / 采集图片全部清掉。该函数只经
+    `_db()`（读模块级 DB_PATH）与 IMAGES_DIR 落手，所以把这两者指向临时目录后，
+    startup 的清理与测试自己的「清库」用例都只作用于临时数据，真实 data/ 不受影响。
+    """
+    from src import server
+
+    monkeypatch.setattr(server, "DB_PATH", tmp_path / "isolated.db")
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(server, "IMAGES_DIR", tmp_path / "images")
+
+
+@pytest.fixture(autouse=True)
 def _reset_collect_throttle():
     """重置拟人频率保护状态：测试间连续调用 /api/search|collect_start 不应互相节流。
 

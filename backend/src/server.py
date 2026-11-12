@@ -1750,7 +1750,9 @@ def _notes_query(keyword: str, tag: str, order: str) -> tuple:
         sql += " AND tag = ?"
         params.append(tag)
     if order == "score":
-        sql += " ORDER BY score DESC"
+        # 同分用点赞量兜底：粉丝数未知的笔记赞粉比不计分，同分时按绝对热度排，
+        # 避免"同分时随机/插入序"看起来像没按分数排。
+        sql += " ORDER BY score DESC, liked_count DESC"
     elif order == "time_asc":
         sql += " ORDER BY fetched_at ASC"  # 过程中：新卡片只往后追加、旧卡不动
     else:

@@ -88,8 +88,15 @@ def _days_since(publish_time: int | None, now: datetime | None = None) -> float:
 
 
 def _ratio_score(liked: int, fans: int, hot_ratio: float) -> tuple[float, float]:
-    """维度 1：点赞粉丝比（40 分封顶）。返回 (得分, 原始比值)。"""
-    fan_ratio = liked / fans if fans > 0 else (liked if liked > 0 else 0.0)
+    """维度 1：点赞粉丝比（40 分封顶）。返回 (得分, 原始比值)。
+
+    粉丝数未知（fans<=0）时该维不计分、比值记 0：没有分母就没有「比值」，
+    任何代替值都是编造。曾用 liked 顶替比值，导致「粉丝未知」的笔记白拿
+    40 分并被打上「低粉爆款」标，整张榜单排序失真。
+    """
+    if fans <= 0:
+        return 0.0, 0.0
+    fan_ratio = liked / fans
     return min(40.0, 40.0 * fan_ratio / hot_ratio), fan_ratio
 
 
@@ -118,12 +125,17 @@ def _fresh_score(days: float, fresh_days: int) -> float:
 
 
 def _pick_tag(liked: int, fan_ratio: float, fans: int, t: dict) -> str:
-    """分级标签（生财实战口径，优先级从高到低）。"""
+    """分级标签（生财实战口径，优先级从高到低）。
+
+    fans<=0 视为「粉丝数未知」，不打「低粉」「低粉爆款」这两个需要粉丝基数的标
+    （否则数据不全的笔记会被误报成低粉爆款）。
+    """
+    fans_known = fans > 0
     if liked <= t["low_like"]:
         return TAGS["low_like"]
-    if liked > t["hot_like"] and fan_ratio > t["hot_ratio"]:
+    if fans_known and liked > t["hot_like"] and fan_ratio > t["hot_ratio"]:
         return TAGS["low_fan_hit"]
-    if fans < t["low_fan"]:
+    if fans_known and fans < t["low_fan"]:
         return TAGS["low_fan"]
     if liked > t["hot_like"]:
         return TAGS["high_like"]
@@ -180,5 +192,5 @@ def rank_notes(notes: list[dict], **kwargs) -> list[dict]:
     for note in notes:
         info = score_note(note, **kwargs)
         ranked.append({**note, "score_info": info})
-    ranked.sort(key=lambda n: n["score_info"]["score"], reverse=True)
+    ranked.sort(key=lambda n: (-n["score_info"]["score"], -_to_int(n.get("liked_count"))))
     return ranked
