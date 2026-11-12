@@ -5,10 +5,26 @@
 # Optional:
 #   -SkipDeps      skip pip install (deps already present)
 #   -CftVersion    Chrome for Testing version (default matches repo mac engine)
+#   -Format        dir | zip | installer | all      (default all)
+#                    dir        only the onedir build (dev self-check)
+#                    zip        onedir + Desktop\XHSLeads-win64.zip (portable)
+#                    installer  onedir + Desktop\XHSLeads-Setup-x64.exe (Inno Setup, no admin)
+#                    all        zip + installer
 #
 # Output: %LOCALAPPDATA%\xhs-leads-build\dist\XHSLeads\  (onedir)
-#         Desktop\XHSLeads-win64.zip
+#         Desktop\XHSLeads-win64.zip            (Format zip|all)
+#         Desktop\XHSLeads-Setup-x64.exe        (Format installer|all)
 # Log:    <repo>\build-win.log  (transcript; readable from the Mac side over the share)
+#
+# NOTE: installer requires Inno Setup on the build machine once:
+#       winget install --id JRSoftware.InnoSetup -e
+
+param(
+    [switch]$SkipDeps,
+    [string]$CftVersion = "158.0.8127.18",
+    [ValidateSet("dir", "zip", "installer", "all")]
+    [string]$Format = "all"
+)
 
 param(
     [switch]$SkipDeps,
@@ -193,12 +209,37 @@ try {
     & $venvPy (Join-Path $RepoRoot "scripts\packaging\check_pack.py") $outDir --platform win32
     if ($LASTEXITCODE -ne 0) { throw "artifact self-check failed" }
 
-    Step "7/7 zip to desktop"
-    $zipOut = Join-Path $Desktop "XHSLeads-win64.zip"
-    # Compress-Archive writes backslash entry names (breaks non-Windows extractors),
-    # so build the archive with Python zipfile instead.
-    & $venvPy (Join-Path $RepoRoot "scripts\packaging\make_zip.py") $outDir $zipOut "XHSLeads"
-    if ($LASTEXITCODE -ne 0) { throw "zip creation failed" }
+    Step "7/7 distribute ($Format)"
+
+    if ($Format -eq "zip" -or $Format -eq "all") {
+        $zipOut = Join-Path $Desktop "XHSLeads-win64.zip"
+        # Compress-Archive writes backslash entry names (breaks non-Windows extractors),
+        # so build the archive with Python zipfile instead.
+        & $venvPy (Join-Path $RepoRoot "scripts\packaging\make_zip.py") $outDir $zipOut "XHSLeads"
+        if ($LASTEXITCODE -ne 0) { throw "zip creation failed" }
+        Write-Host "zip:   $zipOut"
+    }
+
+    if ($Format -eq "installer" -or $Format -eq "all") {
+        # Inno Setup: installs into %LOCALAPPDATA%\Programs\XHSLeads (no admin rights).
+        $iscc = $null
+        foreach ($c in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"))) {
+            if ($c -and (Test-Path $c)) { $iscc = $c; break }
+        }
+        if (-not $iscc) { throw "Inno Setup not found: winget install --id JRSoftware.InnoSetup -e" }
+        $issPath = Join-Path $RepoRoot "scripts\packaging\xhs_leads.iss"
+        $icoPath = Join-Path $RepoRoot "build_resources\icon\XHSLeadsIcon.ico"
+        Write-Host "iscc:  $iscc"
+        & $iscc "/DMyDistDir=$outDir" "/DMyOutDir=$Desktop" "/DMyIcon=$icoPath" "/Qp" $issPath
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed with code $LASTEXITCODE" }
+        $setupOut = Join-Path $Desktop "XHSLeads-Setup-x64.exe"
+        if (-not (Test-Path $setupOut)) { throw "installer not produced: $setupOut" }
+        Write-Host "setup: $setupOut"
+    }
+
     Write-Host "BUILD_OK"
 }
 catch {

@@ -1,11 +1,38 @@
 #!/usr/bin/env bash
-# 一键打包 macOS .app（B 批壳）
-# 用法：bash scripts/packaging/build_mac.sh [--no-frontend-build]
+# 一键打包 macOS 壳（B 批）
+#
+# 用法：bash scripts/packaging/build_mac.sh [选项]
+#   --no-frontend-build     复用现有 frontend/dist，不重建前端
+#   --format <F>            产物形态，默认 all
+#                             dir   只留 dist/XHSLeads.app（绿色目录，开发自查）
+#                             zip   只出 XHSLeads-mac-Intel.zip（绿色免安装）
+#                             dmg   只出 XHSLeads-mac-Intel.dmg（安装镜像：拖进「应用程序」）
+#                             all   zip + dmg 都出
+#   -h, --help              显示本说明
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-# 1) 前端构建产物（frontend/dist）——默认先 build；--no-frontend-build 可跳过（仅重打壳）
-if [[ "${1:-}" != "--no-frontend-build" ]]; then
+FORMAT="all"
+SKIP_FRONTEND=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-frontend-build) SKIP_FRONTEND=1; shift ;;
+    --format)
+      [[ $# -ge 2 ]] || { echo "--format 需要值：dir|zip|dmg|all" >&2; exit 2; }
+      FORMAT="$2"; shift 2 ;;
+    --format=*) FORMAT="${1#*=}"; shift ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    *) echo "未知参数：$1（可用 --no-frontend-build / --format dir|zip|dmg|all）" >&2; exit 2 ;;
+  esac
+done
+case "$FORMAT" in
+  dir|zip|dmg|all) ;;
+  *) echo "--format 只接受 dir|zip|dmg|all（收到：$FORMAT）" >&2; exit 2 ;;
+esac
+echo ">> 产物形态：$FORMAT"
+
+# 1) 前端构建产物（frontend/dist）
+if [[ "$SKIP_FRONTEND" -eq 0 ]]; then
   echo ">> 构建前端 (Vite → frontend/dist)"
   (cd frontend && npm run build)
 else
@@ -18,8 +45,7 @@ echo ">> 同步内置引擎 CFT → build_resources/engine"
 mkdir -p build_resources/engine
 rsync -a --delete "$HOME/Library/Application Support/xhs-leads/engine/chrome-mac-x64/" build_resources/engine/chrome-mac-x64/
 
-# 2.1) 品牌图标：从设计资产（build_resources/icon/XHSLeadsIcon-1024.png）生成 icns，
-# 同时用于 .app（PyInstaller BUNDLE icon）与内置引擎 CFT 的 Dock/窗口图标（R-6.21 用户需求）。
+# 2.1) 品牌图标：从设计资产生成 icns，同时用于 .app 与内置引擎 CFT 的 Dock/窗口图标
 echo ">> 生成品牌图标 icns（build_resources/icon/XHSLeadsIcon.icns）"
 ICON_PNG="build_resources/icon/XHSLeadsIcon-1024.png"
 ICONSET="$(mktemp -d)/xhs_icon.iconset"
@@ -42,7 +68,7 @@ echo ">> 内置引擎 CFT 写入 .app"
 mkdir -p dist/XHSLeads.app/Contents/Resources/engine
 rsync -a --delete build_resources/engine/ dist/XHSLeads.app/Contents/Resources/engine/
 
-# 4.1) 引擎 CFT 应用图标替换为品牌图标（Dock/窗口图标；R-6.21 用户需求）
+# 4.1) 引擎 CFT 应用图标替换为品牌图标（Dock/窗口图标）
 echo ">> 内置引擎 CFT 图标替换为品牌图标"
 cp build_resources/icon/XHSLeadsIcon.icns \
   dist/XHSLeads.app/Contents/Resources/engine/chrome-mac-x64/Google\ Chrome\ for\ Testing.app/Contents/Resources/app.icns
@@ -55,9 +81,29 @@ ls -d dist/XHSLeads.app
 echo ">> 产物资产自检"
 backend/.venv/bin/python scripts/packaging/check_pack.py dist/XHSLeads.app
 
-# 5) 压分发 zip 到桌面（XHS Leads · 小红书获客助手 分发给朋友的交付物；Intel x86_64）
-ZIP_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.zip"
-echo ">> 压缩分发 zip → ${ZIP_OUT}"
-rm -f "${ZIP_OUT}"
-zip -ry -q "${ZIP_OUT}" dist/XHSLeads.app
-ls -lh "${ZIP_OUT}"
+# 5) 分发件：zip（绿色免安装）与 dmg（安装镜像）
+if [[ "$FORMAT" == "zip" || "$FORMAT" == "all" ]]; then
+  ZIP_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.zip"
+  echo ">> 压缩绿色包 zip → ${ZIP_OUT}"
+  rm -f "${ZIP_OUT}"
+  zip -ry -q "${ZIP_OUT}" dist/XHSLeads.app
+  ls -lh "${ZIP_OUT}"
+fi
+
+if [[ "$FORMAT" == "dmg" || "$FORMAT" == "all" ]]; then
+  DMG_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.dmg"
+  echo ">> 制作安装镜像 dmg → ${DMG_OUT}"
+  STAGE="$(mktemp -d)"
+  # ditto 而非 cp：保留符号链接/扩展属性，避免破坏 .app 内的签名与框架链接
+  ditto dist/XHSLeads.app "$STAGE/XHSLeads.app"
+  ln -s /Applications "$STAGE/Applications"   # 镜像里给「应用程序」快捷方式，拖进去即安装
+  rm -f "${DMG_OUT}"
+  hdiutil create -volname "XHS Leads 小红书获客助手" -srcfolder "$STAGE" \
+    -ov -format UDZO -quiet "${DMG_OUT}"
+  rm -rf "$STAGE"
+  echo ">> 校验镜像可挂载"
+  hdiutil verify "${DMG_OUT}" | tail -1
+  ls -lh "${DMG_OUT}"
+fi
+
+echo ">> 完成（形态 ${FORMAT}）"

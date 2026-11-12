@@ -111,9 +111,10 @@ _DEFAULTS = {
     "front_port": 8791,           # 前端服务端口（uvicorn 监听；XHS_FRONT_PORT 可覆盖）
     "auto_front_port": True,      # front_port 被占用时自动探测空闲端口
     "headless": False,
-    "collect_tab_visible": False,
-                                  #   True=采集 tab 前置可见（调试/演示）；False=采集后台完成、
-                                  #   不抢前台（设置页「关闭采集 Tab」开关，口径：平时关）。
+    "collect_tab_visible": True,
+                                  #   True=启动即建右采集窗（含蓝色「采集窗口」标签组）：采集过程
+                                  #   可见，登录也在该窗完成（默认口径，两端一致）；
+                                  #   False=采集完全后台、不抢前台（设置页可关）。
     "collect_group_enabled": True,
                                     #   收进原生标签组「采集窗口」（名字+颜色由内置扩展设）。
                                     #   扩展目录缺失时自动跳过，行为与关闭一致。

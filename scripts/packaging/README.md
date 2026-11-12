@@ -11,8 +11,9 @@
 | `xhs_leads.spec` | macOS 专属差异：`BUNDLE` + icns + Info.plist（bundle `com.xhsleads.app`） |
 | `xhs_leads_win.spec` | Windows 专属差异：ico + macOS 桥接模块 excludes |
 | `check_pack.py` | **两端共用产物自检**：扩展三件套 / 前端产物 / 内置引擎 / 主程序，缺一项就让构建失败 |
-| `build_mac.sh` | macOS 一键构建：前端重建（可跳过）→ PyInstaller → 自检 → zip |
-| `build_win.ps1` | Windows 一键构建（在 Windows 上跑，Mac 不能交叉编译）：venv/依赖 → PyInstaller → 自检 → zip |
+| `build_mac.sh` | macOS 一键构建：前端重建（可跳过）→ PyInstaller → 自检 → 按 `--format` 出 zip / dmg |
+| `build_win.ps1` | Windows 一键构建（在 Windows 上跑，Mac 不能交叉编译）：venv/依赖 → PyInstaller → 自检 → 按 `-Format` 出 zip / 安装包 |
+| `xhs_leads.iss` | Windows 安装包定义（Inno Setup 6）：装到 `%LOCALAPPDATA%\Programs\XHSLeads`、免管理员、带卸载项 |
 
 ## launcher.py 职责
 
@@ -67,11 +68,24 @@
 
 ## 构建与冒烟
 
-```bash
-# 构建（默认先重建前端；跳过用 --no-frontend-build）
-bash scripts/packaging/build_mac.sh
-# 产物：dist/XHSLeads.app（bundle com.xhsleads.app，显示名 XHS Leads）
+**产物形态是参数**（源程序 / 安装包二选一或都要）：
 
+```bash
+# macOS（默认 --format all = zip + dmg 都出）
+bash scripts/packaging/build_mac.sh                        # 全量：重建前端 → .app → zip + dmg
+bash scripts/packaging/build_mac.sh --no-frontend-build    # 复用现有 frontend/dist
+bash scripts/packaging/build_mac.sh --format dir           # 只留 dist/XHSLeads.app（开发自查，最快）
+bash scripts/packaging/build_mac.sh --format dmg           # 只出安装镜像
+bash scripts/packaging/build_mac.sh --format zip           # 只出绿色免安装包
+
+# 产物：dist/XHSLeads.app（bundle com.xhsleads.app，显示名 XHS Leads）
+#       ~/Desktop/XHSLeads-mac-Intel.zip（绿色免安装，478M）
+#       ~/Desktop/XHSLeads-mac-Intel.dmg（安装镜像，拖进「应用程序」，525M）
+```
+
+DMG 内部：`XHSLeads.app` + `Applications` 软链接（拖拽安装）；用 `ditto` 拷入（保留符号链接/扩展属性，不破签名），`hdiutil verify` 校验 CRC 后才算成功。
+
+```bash
 # 冒烟（无窗口路径；CZ_SELF_EXIT_AFTER=N 可自动优雅退出）
 CZ_NO_BROWSER=1 CZ_SELF_EXIT_AFTER=8 dist/XHSLeads.app/Contents/MacOS/XHSLeads
 # 验证：curl http://127.0.0.1:8791/ → 200，页面标题「XHS Leads · 小红书获客助手」
@@ -94,10 +108,19 @@ Mac 不能交叉编译 Windows 程序（PyInstaller 只能打本平台包）；�
 # 在 Windows 里（共享路径 \\Mac\Home\Desktop\codex-zhuke）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\packaging\build_win.ps1            # 全量
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\packaging\build_win.ps1 -SkipDeps  # 引擎/前端已就位时约 40 秒
+
+# -Format dir | zip | installer | all（默认 all）
+#   dir        只产出 onedir 目录（自查）
+#   zip        绿色免安装包 Desktop\XHSLeads-win64.zip
+#   installer  安装包 Desktop\XHSLeads-Setup-x64.exe
+#   all        zip + installer
 ```
 
-产物：`%LOCALAPPDATA%\xhs-leads-build\dist\XHSLeads\XHSLeads.exe`（onedir，`_internal/` 布局）+ 桌面 `XHSLeads-win64.zip`。
-启动自检：构建输出末尾必须出现 `PASS 6 项随包资产齐全`，否则 zip 不应生成。
+产物：`%LOCALAPPDATA%\xhs-leads-build\dist\XHSLeads\XHSLeads.exe`（onedir，`_internal/` 布局）+ 桌面 zip / 安装包。
+
+**安装包（Inno Setup 6）**：构建机装一次 `winget install --id JRSoftware.InnoSetup -e`；脚本自动在 `%LOCALAPPDATA%\Programs\Inno Setup 6\`、`Program Files (x86)`、`Program Files` 三处找 `ISCC.exe`。安装器装到 `%LOCALAPPDATA%\Programs\XHSLeads`（`PrivilegesRequired=lowest`，**不需要管理员**），带开始菜单/可选桌面快捷方式与卸载项（`unins000.exe`）。实测：静默安装 `/VERYSILENT` 后 exe、`_internal\extension\manifest.json`、`_internal\engine\chrome-win64\chrome.exe`、卸载器四项齐全，`unins000.exe /VERYSILENT` 卸载后目录清空。
+
+启动自检：构建输出末尾必须出现 `PASS 6 项随包资产齐全`，否则不该生成 zip / 安装包。
 
 ### 两个只在 Windows 才会犯的坑（都踩过，别再踩）
 
@@ -110,5 +133,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\packaging\build_wi
 
 - **前端产物不入库**：`frontend/dist/` 在 .gitignore，交付物为本地构建；克隆仓库后需 `cd frontend && npm install && npm run build`。
 - **迁移不覆盖已存在数据**：新数据目录已存在则跳过迁移（幂等）。
-- **采集窗默认不建**：`config.json` 的 `collect_tab_visible` 默认 `false`（「采集后台完成、不抢前台」口径）。想让启动即出现右采集窗（含蓝色「采集窗口」组），需在设置里打开，或在该数据目录的 `config.json` 里写 `{"collect_tab_visible": true}`——两端行为一致，差异只来自数据目录里的这份配置。
+- **采集窗默认建（两端一致）**：`config.py` 的 `collect_tab_visible` 默认 `true`——启动即出现右采集窗与蓝色「采集窗口」标签组，采集过程可见、登录也在这个窗里扫码完成。想改成纯后台采集，在设置页关掉即可（`config.json` 里 `{"collect_tab_visible": false}` 同理）。
 - **`Start-Transcript` 不记录子进程 stdout**：`build-win.log` 里看不到 PyInstaller 的 INFO 与 `check_pack` 输出，判断某步是否执行要看 `prlctl exec` 的 stdout 或产物本身。
