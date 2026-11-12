@@ -305,17 +305,23 @@ onMounted(async () => {
   <aside class="panel">
     <!-- 常用输入：关键词 / 结果上限（一行一条，不占多余标题行） -->
     <section class="collect-sec">
-      <!-- 关键词 + 结果上限：一行 -->
-      <div class="param-row">
-        <div class="param">
-          <input v-model="appState.params.keyword" placeholder="关键词，如：翡翠" @keyup.enter="doCollect" />
-        </div>
-        <div class="param param-num">
-          <span class="num-label">上限</span>
-          <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
-          <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
-          <button class="num-step" type="button" @click="stepLimit(1)">+</button>
-        </div>
+    <!-- 关键词：独占一整行（客户反馈面板太窄、关键词挤在半个格子里显得局促） -->
+    <div class="param">
+      <input
+        v-model="appState.params.keyword"
+        class="kw-input"
+        placeholder="关键词，如：翡翠手串、翡翠手镯"
+        @keyup.enter="doCollect"
+      />
+    </div>
+
+    <!-- 结果上限 + 筛选条件：同一行 -->
+    <div class="param-row">
+      <div class="param param-num">
+        <span class="num-label">上限</span>
+        <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
+        <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
+        <button class="num-step" type="button" @click="stepLimit(1)">+</button>
       </div>
 
       <!-- 筛选条件：独立按钮（展开/收起面板）+ 已选 chips 区（每项可单独 × 移除） -->
@@ -324,6 +330,7 @@ onMounted(async () => {
         <span class="fl-count">{{ filterItems().length ? `已选 ${filterItems().length} 项` : '未设置' }}</span>
         <span class="fl-arrow">▾</span>
       </div>
+    </div>
 
       <!-- 已选条件 chips：浅金胶囊、尾部 × 单个移除；>3 个折叠为 +N；可一键清除全部 -->
       <div v-if="filterItems().length" class="chips-area">
@@ -400,6 +407,10 @@ onMounted(async () => {
 
 .param input:focus, .param select:focus { outline: none; border-color: #e0b36b; }
 
+/* 关键词输入：整行铺满，字号/高度比筛选控件大一档，视觉上就是这块的主输入
+   （选择器要压过 .param input，否则字号/内边距被通用规则覆盖） */
+.param .kw-input { font-size: 14px; padding: 9px 11px; }
+
 .param-row { display: flex; gap: 8px; }
 .param-row > * { flex: 1; min-width: 0; }
 .param input, .param select {
@@ -413,7 +424,7 @@ onMounted(async () => {
   color: #333;
 }
 .param-num {
-  flex: 0 0 106px;
+  flex: 0 0 124px;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -456,8 +467,10 @@ onMounted(async () => {
 .num-step:hover { background: #e8e8e8; color: #111; }
 .num-step:active { background: #ddd; }
 
-/* 筛选条件一行：下拉控件视觉（白底实线边框 + 右侧醒目倒三角按钮） */
+/* 筛选条件：与「上限」并排占满剩余宽度（点击整条区域展开/收起选项） */
 .filters-line {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
