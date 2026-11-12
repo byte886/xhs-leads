@@ -383,6 +383,52 @@ _register(
          "扫码后导航到 explore 不会残留白底遮罩。",
 )
 
+# 登录页「获取验证码」失败可见化：平台点完只请求 redcaptcha 配置并挂一个全屏透明
+# login-modal，但**验证码组件在本引擎里渲染不出来**（实测：不带任何注入的干净 CFT
+# 表现一致 → 不是我们注入导致）。用户看到的就是「点了没反应」。
+# 这里只在点击后 4s 仍无倒计时、也无可见验证码组件时补一条自己的提示，
+# 把「静默无反应」变成「明确告诉你改扫码登录」。不拦截事件、不改平台 UI。
+_LOGIN_SMS_HINT_JS = (
+    "(function(){"
+    "if(window.__xhs_leads_sms_hint)return;window.__xhs_leads_sms_hint=true;"
+    "if(!/(^|\\.)xiaohongshu\\.com$/.test(location.hostname))return;"
+    "if(!/\\/(login|website-login)(\\/|$)/.test(location.pathname))return;"
+    "function toast(msg){"
+    "var old=document.getElementById('xhs-leads-sms-hint');if(old)old.remove();"
+    "var d=document.createElement('div');d.id='xhs-leads-sms-hint';d.textContent=msg;"
+    "d.style.cssText='position:fixed;left:50%;bottom:56px;transform:translateX(-50%);"
+    "padding:10px 18px;border-radius:8px;background:rgba(0,0,0,.82);color:#fff;"
+    "font-size:14px;line-height:1.5;z-index:2147483647;pointer-events:none;"
+    "max-width:70%;text-align:center;';"
+    "document.body.appendChild(d);setTimeout(function(){d.remove();},9000);"
+    "}"
+    "function captchaVisible(){"
+    "var ns=document.querySelectorAll('#red-captcha,[class*=captcha],[class*=slider],[class*=verify]');"
+    "for(var i=0;i<ns.length;i++){var c=getComputedStyle(ns[i]),r=ns[i].getBoundingClientRect();"
+    "if(r.width>40&&r.height>20&&c.display!=='none'&&c.visibility!=='hidden'"
+    "&&Number(c.opacity)>0.05)return true;}"
+    "return false;}"
+    "function inCountdown(){"
+    "var b=document.querySelector('.code-button');"
+    "return !!b&&!/获取验证码/.test(b.textContent||'');}"
+    "document.addEventListener('click',function(e){"
+    "var t=e.target&&e.target.closest&&e.target.closest('.code-button');"
+    "if(!t)return;"
+    "setTimeout(function(){"
+    "if(!inCountdown()&&!captchaVisible())"
+    "toast('平台验证码没有加载出来，收不到短信；请改用左侧二维码扫码登录');"
+    "},4000);"
+    "},true);"
+    "})();"
+)
+_register(
+    "login_sms_hint",
+    _LOGIN_SMS_HINT_JS,
+    kind="evaluate",
+    note="登录页获取验证码静默失败提示：点击后 4s 无倒计时/无验证码组件 → 提示改用扫码。"
+         "不拦截事件、不遮挡；域名+路径守卫，仅登录页生效。",
+)
+
 # ---------------------------------------------------------------------------
 # 幂等注入助手
 # ---------------------------------------------------------------------------

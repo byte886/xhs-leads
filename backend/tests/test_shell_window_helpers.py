@@ -564,19 +564,48 @@ def test_open_collect_window_uses_plain_window(monkeypatch):
     assert p.fronted is True          # 建完置前，用户能看见
 
 
-def test_open_collect_window_falls_back_to_window_open(monkeypatch):
-    """没有 CFT 路径（无命令行路由）：退回 window.open 开独立窗口。"""
+class _CdpSessionRec(_CdpSession):
+    """记录 (method, params) 的假 CDP session（标准窗口建窗断言用）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.params = []
+
+    async def send(self, method, args=None):
+        self.params.append((method, args or {}))
+        return await super().send(method, args)
+
+
+class _CtxWithCdp(_CtxExpect):
+    """带 pages / new_cdp_session 的 context 假对象（标准窗口兜底路径用）。"""
+
+    def __init__(self, page, new_page=None):
+        super().__init__(page, new_page)
+        self.cdp = _CdpSessionRec()
+        self.pages = [page]
+
+    async def new_cdp_session(self, page):
+        return self.cdp
+
+
+def test_open_collect_window_falls_back_to_standard_window(monkeypatch):
+    """没有 CFT 路径（无命令行路由）：退回 CDP `Target.createTarget(newWindow)`
+    建**标准窗口**（带地址栏），绝不能再退回 window.open——那会建成无地址栏的
+    popup，用户看到的就是「右窗变成 APP 形态」。"""
     _pin_geometry(monkeypatch)
     monkeypatch.setattr(sw, "cdp_call", _fake_cdp_call)
     page = _PgFull()
     shell = _ShellEval()
-    p = asyncio.run(sw.open_collect_window(_CtxExpect(page), shell))
+    ctx = _CtxWithCdp(page)
+    p = asyncio.run(sw.open_collect_window(ctx, shell))
     assert p is page
-    assert any("window.open" in c[0] for c in shell.calls), "兜底路径必须真的窗口化"
+    assert any(m == "Target.createTarget" and v.get("newWindow") is True
+               for m, v in ctx.cdp.params), "兜底必须建标准窗口而不是 popup"
+    assert [c for c in shell.calls if "window.open" in c[0]] == [], "不许再退回 window.open"
 
 
 def test_open_collect_window_falls_back_to_new_page(monkeypatch):
-    """window.open 没吐出新页（被拦/弹窗策略吃掉）：退化到引擎内新页，不抛给上层。"""
+    """连 CDP 标准窗口都建不出来：退化到引擎内新页，不抛给上层。"""
     _pin_geometry(monkeypatch)
     fallback = _PgFull()
     shell = _ShellEval()

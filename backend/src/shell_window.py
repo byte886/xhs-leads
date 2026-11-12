@@ -181,12 +181,20 @@ async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
 async def _create_collect_page(
     ctx, shell, url: str, *, user_data_dir, executable, bounds: dict,
 ):
-    """建采集调试窗的页（三条路径选一，）：
-    ① 命令行 `--new-window` 标准窗口（带地址栏/标签栏）；
-    ② window.open 同 context 新窗口（Chrome 多不给地址栏）；
-    ③ 引擎内新页（拿不到独立窗口时的能力兜底）。
+    """建采集调试窗的页（按优先级选路径）：
+    ① 内置扩展 chrome.windows.create（type=normal，原子建窗+摆位+分组）；
+    ② 命令行 `--new-window`（标准窗口，带地址栏/标签栏）；
+    ③ CDP Target.createTarget(newWindow=true)（同样是**标准窗口**，不依赖
+       扩展/executable —— 打包态拿不到 CFT 路径时的主兜底）；
+    ④ 引擎内新页（连独立窗口都拿不到的极端兜底）。
 
-    ① 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
+    历史 bug：③ 原为 `window.open(url, 'xhs_collect', 'width=…,height=…')`。
+    带 features 时 Chrome 建出来的是 **popup 窗口——没有地址栏/标签栏**，
+    打包态（扩展没加载、CFT 路径没解析到）就会走到这里，用户看到右窗「变成
+    APP 形态」。用户拍板右窗必须是带地址栏的标准浏览器窗口 → 改用
+    CDP 建标准窗口。
+
+    ② 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
     避免 `--new-window` 沿用它记住的旧位置、先把窗口叠在壳窗上。
     """
     from src import engine_pool  # noqa: PLC0415
@@ -206,17 +214,7 @@ async def _create_collect_page(
         )
         if page is not None:
             return page
-    try:
-        async with ctx.expect_page(timeout=8000) as pinfo:
-            await shell.evaluate(
-                "(u) => window.open(u, 'xhs_collect', "
-                f"'width={win_w},height={win_h},left={win_left},top=0')",
-                url,
-            )
-        page = await pinfo.value
-    except Exception as e:  # noqa: BLE001（window.open 被拦：退化到引擎内新页）
-        log.warning("采集调试窗 window.open 未返回新页——退化到引擎内新页: %r", e)
-        page = None
+    page = await _create_standard_window(ctx)
     if page is not None:
         return page
     page = await ctx.new_page()
@@ -225,6 +223,36 @@ async def _create_collect_page(
     except Exception:  # noqa: BLE001
         pass
     return page
+
+
+async def _create_standard_window(ctx):
+    """CDP `Target.createTarget(newWindow=true)`：新建**标准浏览器窗口**。
+
+    与 `window.open(features)` 的 popup 不同，这种方式由浏览器自己建窗，
+    带地址栏/标签栏/前进后退（实测同尺寸下 innerHeight 比 app 窗少 ~87px，
+    正好是浏览器 chrome 的高度）。也不需要扩展或 CFT 可执行路径。
+    """
+    pages = getattr(ctx, "pages", None) or []
+    anchor = pages[0] if pages else None
+    if anchor is None or not hasattr(ctx, "new_cdp_session"):
+        return None
+    try:
+        async with ctx.expect_page(timeout=8000) as pinfo:
+            cdp = await ctx.new_cdp_session(anchor)
+            try:
+                await cdp.send("Target.createTarget",
+                               {"url": "about:blank", "newWindow": True})
+            finally:
+                try:
+                    await cdp.detach()
+                except Exception:  # noqa: BLE001
+                    pass
+        page = await pinfo.value
+        log.info("采集窗经 CDP Target.createTarget(newWindow) 建成标准窗口")
+        return page
+    except Exception as e:  # noqa: BLE001（建窗失败：调用方退化引擎内新页）
+        log.warning("CDP 标准窗口建窗失败——退化到引擎内新页: %r", e)
+        return None
 
 
 async def _ensure_shell_title(page) -> None:
@@ -812,14 +840,15 @@ async def ensure_shell(base_url: str):
 
 
 async def _ensure_login_injects(win: "ShellWindow") -> None:
-    """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配 + login_clean 净化）：
+    """登录页行为注入（force_login 弹窗锁 + login_fit 居中适配 + login_clean 净化
+    + login_sms_hint 验证码静默失败提示）：
     page 级 add_init_script——浏览器在每个新 document（整页导航/SPA 重建）创建
     瞬间自动执行，JS 内部 MutationObserver 事件驱动；无守卫轮询补注
     幂等：已注册的仅对当前文档 evaluate 立即生效；防重标记避免重复 add 累积。
     evaluate 失败（页面导航中/未就绪）不重试轮询——下一事件点（导航登录页/
     重绑定/拉回）自然补注，且新 document 由 init script 自动生效。
     """
-    for key in ("force_login", "login_fit", "login_clean"):
+    for key in ("force_login", "login_fit", "login_clean", "login_sms_hint"):
         js = injections.get(key)
         flag = f"_login_{key}_installed"
         if not getattr(win.page, flag, False):
