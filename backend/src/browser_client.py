@@ -573,13 +573,42 @@ LOGIN_URL = "https://www.xiaohongshu.com/login"
 # 实测 rect≈245,79,580,24）；旧的 #search-input 是隐藏元素（rect 全 0），点它等于点 (0,0)
 # ——这是历史「点搜索框没反应」的代码层原因。按候选顺序取**有尺寸**的那个。
 _SEARCH_BOX_JS = """() => {
-  const cands = ['#search-input-in-feeds', 'textarea.search-input', '#search-input', 'input.search-input'];
+  // #search-input-ai / textarea.textarea 是**折叠态点开后的搜索浮层**里的真实输入框
+  // （Win11 640 宽实测：点 .search-icon 后浮层出现 522×24 的 textarea，id=search-input-ai）
+  const cands = ['#search-input-ai', '#search-input-in-feeds', 'textarea.search-input',
+                 '#search-input', 'input.search-input', 'textarea.textarea'];
   for (const sel of cands) {
-    const el = document.querySelector(sel);
-    if (!el) continue;
+    // 同一选择器可能命中多个（宽/窄两种头部布局各有一份），必须逐个量尺寸：
+    // 只取 querySelector 第一个会把 0×0 的隐藏副本当成「没有搜索框」。
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 10) continue;
+      return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+    }
+  }
+  // 兜底：任何可见的 input/textarea（浮层换 DOM 时不至于直接失效）
+  for (const el of document.querySelectorAll('input, textarea')) {
     const r = el.getBoundingClientRect();
-    if (r.width < 20 || r.height < 10) continue;
+    if (r.width < 60 || r.height < 10) continue;
+    if (el.readOnly || el.disabled) continue;
     return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+  }
+  return null;
+}"""
+
+# 窄窗口折叠态：窗口内宽 < ~720 时小红书把整条搜索区 display:none，只留一个 40×40
+# 放大镜按钮（实测 Win11 采集窗 640 宽就是这么折叠的，focus() 永远拿不到焦点）。
+# 这里点开它，让 Python 侧稍后重试聚焦。
+_EXPAND_SEARCH_JS = """() => {
+  const cands = ['#search-button', 'a.search-icon', 'button.search-icon', '.search-icon',
+                 'header .search-icon', 'div.search-icon', '.search-area .icon'];
+  for (const sel of cands) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      el.click();
+      return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
+    }
   }
   return null;
 }"""
@@ -713,14 +742,33 @@ async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
     """
     focused = await cdp_call(page.evaluate(_FOCUS_SEARCH_BOX_JS), timeout=CDP_EVAL,
                              label="search.focus")
+    if not focused:
+        # 窄窗口（实测 Win11 采集窗 640 宽）下小红书把搜索区折叠成放大镜按钮：
+        # 先点开它，再重试聚焦。这是 Windows 上「聚焦=False→0 条」的真因。
+        trig = await cdp_call(page.evaluate(_EXPAND_SEARCH_JS), timeout=CDP_EVAL,
+                              label="search.expand", skip=True)
+        if trig:
+            await asyncio.sleep(1.2)
+            focused = await cdp_call(page.evaluate(_FOCUS_SEARCH_BOX_JS), timeout=CDP_EVAL,
+                                     label="search.focus2")
+    if not focused:
+        # 退路：按坐标点一次（同一选择器逐个量尺寸后的可见框）
+        box = await cdp_call(page.evaluate(_SEARCH_BOX_JS), timeout=CDP_EVAL,
+                             label="search.box", skip=True)
+        if box:
+            await cdp_call(page.mouse.click(box["x"], box["y"]), timeout=CDP_QUICK,
+                           label="search.click")
+            await asyncio.sleep(0.8)
+            focused = await cdp_call(page.evaluate(_FOCUS_SEARCH_BOX_JS), timeout=CDP_EVAL,
+                                     label="search.focus3")
     log.info("搜索聚焦=%s url=%s", focused, _page_url_now(page))
     if not focused:
-        # 退路：仍取不到焦点时按坐标点一次，至少不放弃
-        box = await cdp_call(page.evaluate(_SEARCH_BOX_JS), timeout=CDP_EVAL, label="search.box")
-        if not box:
-            return False
-        await cdp_call(page.mouse.click(box["x"], box["y"]), timeout=CDP_QUICK, label="search.click")
-        await asyncio.sleep(0.8)
+        # 取不到焦点就别硬输入：盲打+回车会停在 explore，把推荐流误当结果（历史 bug）。
+        # 这里明确失败并带上视口宽度，方便判断是不是窗口太窄被折叠。
+        active = await cdp_call(page.evaluate(_FOCUS_SELF_CHECK_JS), timeout=CDP_EVAL,
+                                label="search.active", skip=True)
+        log.warning("搜索框取不到焦点，跳过本轮（active=%s）", active)
+        return False
     # 上一次采集可能残留关键词：全选后删除，避免拼成「翡翠翡翠」
     await cdp_call(page.evaluate(_SELECT_FOCUSED_TEXT_JS), timeout=CDP_EVAL, label="search.select")
     await cdp_call(page.keyboard.press("Backspace"), timeout=CDP_QUICK, label="search.clear")
@@ -767,16 +815,35 @@ async def _is_on_search_result(page) -> bool:
 
 
 _FOCUS_SEARCH_BOX_JS = """() => {
-  const cands = ['#search-input-in-feeds', 'textarea.search-input', '#search-input', 'input.search-input'];
+  const cands = ['#search-input-ai', '#search-input-in-feeds', 'textarea.search-input',
+                 '#search-input', 'input.search-input', 'textarea.textarea'];
   for (const sel of cands) {
-    const el = document.querySelector(sel);
-    if (!el) continue;
+    // 逐个量尺寸：同一选择器可能命中隐藏副本（宽/窄头部各一份），首个往往是 0×0
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 10) continue;
+      el.focus();
+      // activeElement === el 之外还接受「焦点落在它的子元素」（部分实现会移到内部 input）
+      if (document.activeElement === el || el.contains(document.activeElement)) return true;
+    }
+  }
+  // 兜底：可见的 input/textarea（搜索浮层换 DOM 时仍能聚焦）
+  for (const el of document.querySelectorAll('input, textarea')) {
     const r = el.getBoundingClientRect();
-    if (r.width < 20 || r.height < 10) continue;
+    if (r.width < 60 || r.height < 10) continue;
+    if (el.readOnly || el.disabled) continue;
     el.focus();
-    return document.activeElement === el;
+    if (document.activeElement === el || el.contains(document.activeElement)) return true;
   }
   return false;
+}"""
+
+_FOCUS_SELF_CHECK_JS = """() => {
+  const el = document.activeElement;
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {tag: el.tagName, id: el.id || '', w: Math.round(r.width), h: Math.round(r.height),
+          viewport: window.innerWidth};
 }"""
 
 _SELECT_FOCUSED_TEXT_JS = """() => {

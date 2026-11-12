@@ -22,6 +22,7 @@ import logging
 import logging.handlers
 import pathlib
 import re
+import sys
 import time
 
 # ---------------------------------------------------------------------------
@@ -134,11 +135,16 @@ def _setup() -> None:
     root = logging.getLogger("src")
     root.setLevel(logging.INFO)
     # 控制台（app.log 双写，避免 print 时代排障信息丢失）
+    # 注意：windowed 打包（PyInstaller console=False）下 sys.stderr 是 None，
+    # StreamHandler(None) 会让每条记录抛「'NoneType' has no attribute 'write'」，
+    # Windows 实机日志里刷了一屏 Logging error。没有流就不挂控制台 handler。
     flt = _SourceFilter()
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-    console.addFilter(flt)
-    root.addHandler(console)
+    stream = getattr(sys, "stderr", None)
+    if stream is not None:
+        console = logging.StreamHandler(stream)
+        console.setFormatter(fmt)
+        console.addFilter(flt)
+        root.addHandler(console)
     # 滚动文件
     fh = logging.handlers.RotatingFileHandler(
         logs_dir / "app.log", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf8",
