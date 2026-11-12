@@ -6,7 +6,7 @@ import { appState } from '../store'
 // R 批 v1.4：全局状态提示条 = 实时播报「正在干什么」（不落盘，区别于审计日志）。
 // 数据源 GET /api/status_now（后端聚合采集任务注册表）；2s 轮询；空闲时隐藏。
 
-const st = ref<{ action: string; detail: string; collecting: boolean; phase: string; collected: number; saved: number; filtered: number; limit: number; keyword: string }>({ action: '空闲', detail: '', collecting: false, phase: '', collected: 0, saved: 0, filtered: 0, limit: 0, keyword: '' })
+const st = ref<{ action: string; detail: string; collecting: boolean; phase: string; collected: number; saved: number; limit: number; keyword: string }>({ action: '空闲', detail: '', collecting: false, phase: '', collected: 0, saved: 0, limit: 0, keyword: '' })
 // 前端点了「开始采集」、但后端还没推第一条进度（要等抓完第一页卡片，十几秒）时，
 // 状态条先按本地状态显示「正在启动」——否则这十几秒一直挂着「空闲」，像没点上。
 const booting = computed(() => appState.collecting && !st.value.collecting)
@@ -22,7 +22,6 @@ function apply(d: Record<string, any>) {
         phase: d.phase || '',
         collected: d.collected ?? 0,
         saved: d.saved ?? 0,
-        filtered: d.filtered ?? 0,
         limit: d.limit ?? 0,
         keyword: d.keyword || '',
       }
@@ -34,7 +33,6 @@ function apply(d: Record<string, any>) {
         phase: '',
         collected: 0,
         saved: 0,
-        filtered: 0,
         limit: 0,
         keyword: '',
       }
@@ -61,7 +59,7 @@ onBeforeUnmount(() => { if (off) { off(); off = null } })
       </template>
       <template v-else>
         {{ st.action }}<template v-if="st.keyword">「{{ st.keyword }}」</template>
-        · 已入库 {{ st.saved }}<template v-if="st.limit">/{{ st.limit }}</template> 条<template v-if="st.filtered"> · 过滤 {{ st.filtered }} 条</template>
+        · 已入库 {{ st.saved }}<template v-if="st.limit">/{{ st.limit }}</template> 条
       </template>
       <template v-if="st.detail"> · {{ st.detail }}</template>
     </span>

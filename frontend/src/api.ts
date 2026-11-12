@@ -61,7 +61,7 @@ export async function apiCollectStart(p: SearchParams): Promise<{ ok: boolean; t
   const body = {
     keyword: p.keyword, limit: p.limit, sort: p.sort, note_type: p.noteType,
     time_range: p.timeRange, scope: p.scope, distance: p.distance,
-    interval: p.interval, fast: !!p.fast, min_like: p.minLike ?? 0,
+    interval: p.interval, fast: !!p.fast,
   }
   return j(await fetch(`${BASE}/api/collect_start`, {
     method: 'POST',

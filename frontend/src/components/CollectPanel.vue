@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { appState, setStage, toast } from '../store'
 import { apiCollectClear, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { onAppEvent } from '../events'
@@ -26,21 +26,6 @@ const distanceOptions = ['不限', '同城', '附近']
 
 /** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
 const showFilters = ref(false)
-
-/** 入库门槛档位：默认关（不限）。行业默认 500 来自调研——小红书「小爆文」= 点赞 500~3000，
- *  「低粉爆文」= 粉丝<5000 且 点赞>500；低于 500 属未起量，评论区几乎没有求购线索。 */
-const ENTRY_MIN_LIKE = 500
-type GateMode = 'off' | 'industry' | 'custom'
-const gateMode = ref<GateMode>(
-  (appState.params.minLike ?? 0) === 0
-    ? 'off'
-    : (appState.params.minLike ?? 0) === ENTRY_MIN_LIKE ? 'industry' : 'custom',
-)
-watch(gateMode, (m) => {
-  if (m === 'off') appState.params.minLike = 0
-  else if (m === 'industry') appState.params.minLike = ENTRY_MIN_LIKE
-  else if (!appState.params.minLike) appState.params.minLike = ENTRY_MIN_LIKE
-})
 
 /**筛选没生效时的用户提示。位置距离组（同城/附近）依赖浏览器定位，
  *  失败必须让人看得见——否则结果不对却毫无反馈，比报错更难排查。 */
@@ -322,22 +307,6 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 入库门槛：默认关；开启后点赞不足的笔记不入库，收尾会念出过滤了几条 -->
-      <div class="param-row gate-row">
-        <div class="param">
-          <label>入库门槛</label>
-          <select v-model="gateMode">
-            <option value="off">不限（全部入库）</option>
-            <option value="industry">点赞 ≥ 500（行业爆文线）</option>
-            <option value="custom">自定义点赞下限</option>
-          </select>
-        </div>
-        <div v-if="gateMode === 'custom'" class="param param-num">
-          <span class="num-label">点赞 ≥</span>
-          <input v-model.number="appState.params.minLike" type="number" min="1" max="100000" />
-        </div>
-      </div>
-
       <!-- 筛选条件：独立按钮（展开/收起面板）+ 已选 chips 区（每项可单独 × 移除） -->
       <div class="filters-line" :class="{ open: showFilters }" @click="showFilters = !showFilters">
         <span class="fl-label">筛选条件</span>
@@ -422,8 +391,6 @@ onMounted(async () => {
 
 .param-row { display: flex; gap: 8px; }
 .param-row > * { flex: 1; min-width: 0; }
-.gate-row { margin-top: 8px; align-items: flex-end; }
-.gate-row .param label { font-size: 11px; color: var(--ink-2); display: block; margin-bottom: 3px; }
 .param input, .param select {
   width: 100%;
   box-sizing: border-box;

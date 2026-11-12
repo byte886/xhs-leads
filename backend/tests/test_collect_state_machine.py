@@ -10,8 +10,8 @@ import pytest
 from src import server
 
 
-def _req(limit: int = 20, fast: bool = False, min_like: int = 0) -> "server.SearchReq":
-    return server.SearchReq(keyword="翡翠", limit=limit, fast=fast, min_like=min_like)
+def _req(limit: int = 20, fast: bool = False) -> "server.SearchReq":
+    return server.SearchReq(keyword="翡翠", limit=limit, fast=fast)
 
 
 def _state(**kw) -> dict:
@@ -21,7 +21,6 @@ def _state(**kw) -> dict:
         "stop_event": False,
         "saved": 0,
         "collected": 0,
-        "filtered": 0,
         "partial_items": [],
         "note": "",
     }
@@ -62,18 +61,11 @@ class TestFinalize:
         assert st["status"] == "done"
         assert "未采集到有效数据" in st["note"]
 
-    def test_filtered_count_visible_in_note(self):
-        """过滤条数必须写进收尾话术，「采 5 条只进 2 条」不能看起来像丢数据。"""
-        st = _state(saved=2, filtered=3, min_like=500)
+    def test_low_like_no_longer_blocks(self):
+        """点赞数不再参与入库判定：低赞笔记照样进库（门槛已移除）。"""
+        st = _state(saved=2)
         server._collect_finalize(st, _req(limit=2), {})
-        assert st["note"] == "采集完成：2 条已按评分排序，另过滤 3 条（点赞不足 500）"
-
-    def test_all_below_gate_says_like_not_id(self):
-        """全被门槛挡掉时，别说「候选缺笔记 ID」——真实原因是点赞没到 500。"""
-        st = _state(saved=0, filtered=4, min_like=500)
-        server._collect_finalize(st, _req(limit=20), {})
-        assert st["status"] == "done"
-        assert "点赞均不足 500" in st["note"] and "缺少笔记 ID" not in st["note"]
+        assert st["note"] == "采集完成：2 条已按评分排序"
 
 
 class TestFinalizeEmpty:
@@ -150,9 +142,9 @@ class _FakeCon:
         self.commits += 1
 
 
-def _ctx(con, fast: bool = False, min_like: int = 0) -> dict:
+def _ctx(con, fast: bool = False) -> dict:
     return {
-        "req": _req(fast=fast, min_like=min_like),
+        "req": _req(fast=fast),
         "account_id": "default",
         "con": con,
         "cache": {},
@@ -169,7 +161,7 @@ class TestCollectOne:
 
         seen = []
 
-        def fake_rank(con, n, keyword, now, account_id="default", min_like=0):
+        def fake_rank(con, n, keyword, now, account_id="default"):
             seen.append(n)
             return True
 
@@ -248,8 +240,8 @@ class TestCollectOne:
         assert emitted == []  # 拒收（saved 未变）不推送
         assert st["saved"] == 0
 
-    def test_below_entry_gate_filtered_not_saved(self, monkeypatch):
-        """点赞 < 500：不写库、不计 saved、filtered+1，且推送过滤提示（用户要看得到）。"""
+    def test_low_like_still_inserted(self, monkeypatch):
+        """300 赞也照常写库：点赞数不再当入库判据，不该出现「采到却被挡掉」。"""
         async def ok_detail(item, account_id):
             return item
 
@@ -265,13 +257,11 @@ class TestCollectOne:
         emitted = []
         monkeypatch.setattr(server, "emit_collect", lambda s: emitted.append(s))
         con, st = _FakeCon(), _state()
-        asyncio.run(
-            server._collect_one({"feed_id": "f1", "liked_count": 300}, st, _ctx(con, min_like=500))
-        )
-        assert ranked == []  # 根本没走到写库点
-        assert st["saved"] == 0 and st["filtered"] == 1
-        assert con.commits == 0
-        assert len(emitted) == 1 and "过滤 1 条" in emitted[0]["note"]
+        asyncio.run(server._collect_one({"feed_id": "f1", "liked_count": 300}, st, _ctx(con)))
+        assert len(ranked) == 1  # 走到写库点
+        assert st["saved"] == 1
+        assert con.commits == 1
+        assert len(emitted) == 1 and "已采集 1 条" in emitted[0]["note"]
 
 
 class TestOrphanTakeover:

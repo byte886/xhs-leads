@@ -11,9 +11,7 @@ export const DEFAULT_PARAMS: SearchParams = {
   scope: '不限',
   distance: '不限',
   interval: 1000,
-  fast: false,
-  // 入库门槛默认关：能入库的一定过门槛，但门槛值由用户在面板显式选择后才生效
-  minLike: 0
+  fast: false
 }
 
 function loadStoredParams(): SearchParams {
