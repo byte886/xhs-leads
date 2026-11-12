@@ -35,6 +35,8 @@ export interface Note {
     score: number
     tag: string
     fan_ratio: number
+    /** 粉丝数是否已知：false = 采集没取到，赞粉比/低粉两维不计分（不是 0 粉） */
+    fans_known?: boolean
     dimensions: {
       like_fan_ratio: number
       low_fan: number
@@ -48,6 +50,7 @@ export interface Note {
     score: number
     tag: string
     fan_ratio: number
+    fans_known?: boolean
     dimensions: {
       like_scale: number
       interaction: number

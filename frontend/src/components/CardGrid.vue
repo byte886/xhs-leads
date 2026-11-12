@@ -24,6 +24,9 @@ const emit = defineEmits<{
 const filtered = computed(() => filterNotes(props.notes, props.filterText))
 
 function fmt(n: number | null | undefined): string {
+  // 粉丝/互动取不到时后端存 NULL——这里必须显式显示「—」，不能退化成 0，
+  // 否则「未知」在界面上又变成「0 粉丝」，等于把采集失败伪装成真实数据。
+  if (n == null) return '—'
   const v = n || 0
   return v >= 10000 ? (v / 10000).toFixed(1) + '万' : String(v)
 }
@@ -186,11 +189,25 @@ function tagOf(note: Note | null): string | null {
   if (!note) return null
   return (isHot.value ? (note.hot_info?.tag ?? note.tag) : note.tag) ?? null
 }
+function isFansKnown(note: Note): boolean {
+  const info = isHot.value ? note.hot_info : note.score_info
+  return info?.fans_known !== false
+}
 function dimsOf(note: Note) {
   const dims = ((isHot.value ? note.hot_info?.dimensions : note.score_info?.dimensions) || {}) as Record<string, number>
   return (isHot.value ? DIMS_HOT : DIMS_LOWFAN).map(d => ({ ...d, val: dims[d.key] ?? 0 }))
 }
-function tagConclusion(tag: string | null): string {
+function tagConclusion(note: Note): string {
+  const tag = tagOf(note) || ''
+  // 粉丝未知时不能拿「赞/粉比」下结论——分母都没有，说「未过 3」是编出来的判断。
+  if (!isFansKnown(note) && tag) {
+    switch (tag) {
+      case '低赞': return '低赞：点赞≤300，互动不足，暂不推荐（粉丝数未知，未评估低粉爆款）'
+      case '高赞': return '高赞：点赞>500，但粉丝数未取到，无法判断是否为低粉爆款'
+      case '普通': return '普通：互动数据中规中矩；粉丝数未知，未评估低粉爆款'
+      default: return '评分失败/数据不完整，无法给出结论'
+    }
+  }
   switch (tag) {
     case '低粉爆款🔥': return '低粉爆款：点赞>500 且 赞/粉>3——粉丝少但互动爆发，最值得模仿'
     case '低粉': return '低粉：粉丝<500，数据被低估，值得关注'
@@ -262,6 +279,8 @@ function fmtPub(ts: string | number | null): string {
             </svg>
             {{ (scoreOf(note) ?? 0).toFixed(1) }}
           </span>
+          <span v-if="scoreOf(note) != null && !isFansKnown(note)" class="score-unknown"
+                title="粉丝数未取到（不是 0 粉）：赞粉比、低粉两维不计分" @click.stop="openScore(note)">?</span>
         </span>
         <button class="open-link" title="打开原作品（新窗口）" @click.stop="openOrigin(note)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4">
@@ -363,6 +382,9 @@ function fmtPub(ts: string | number | null): string {
         <div class="sm-tag">{{ tagOf(scoreModal) || '未评分' }}<span class="sm-mode">{{ isHot ? '综合热度' : '低粉潜力' }}</span></div>
         <button class="sm-close" @click="closeScore">×</button>
       </div>
+      <div v-if="!isFansKnown(scoreModal)" class="sm-warn">
+        粉丝数未取到（不是 0 粉）：赞粉比、低粉两维不计分，本分只由已知维度相加，不作跨笔记比较。
+      </div>
       <div class="sm-dim" v-for="d in dimsOf(scoreModal)" :key="d.key">
         <div class="sm-row">
           <span class="sm-lbl">{{ d.label }}</span>
@@ -373,9 +395,9 @@ function fmtPub(ts: string | number | null): string {
         <div class="sm-hint">{{ d.hint }}</div>
       </div>
       <div class="sm-raw">
-        点赞 {{ fmt(scoreModal.liked_count) }} · 收藏 {{ fmt(scoreModal.collected_count) }} · 评论 {{ fmt(scoreModal.comment_count) }} · 转发 {{ fmt(scoreModal.shared_count) }} · 粉丝 {{ fmt(scoreModal.fans_count) }} · 发布 {{ fmtPub(scoreModal.publish_time) }}
+        点赞 {{ fmt(scoreModal.liked_count) }} · 收藏 {{ fmt(scoreModal.collected_count) }} · 评论 {{ fmt(scoreModal.comment_count) }} · 转发 {{ fmt(scoreModal.shared_count) }} · 粉丝 {{ isFansKnown(scoreModal) ? fmt(scoreModal.fans_count) : '未知' }} · 发布 {{ fmtPub(scoreModal.publish_time) }}
       </div>
-      <div class="sm-concl">{{ tagConclusion(tagOf(scoreModal) || '') }}</div>
+      <div class="sm-concl">{{ tagConclusion(scoreModal) }}</div>
     </div>
   </div>
 
@@ -389,6 +411,9 @@ function fmtPub(ts: string | number | null): string {
 /* 分数整体绝对定位在封面右上角（修复：原为 relative 被封面图挤到封面下方、
    徽标错位不可见）；内部徽标/ⓘ 横向排列，tooltip 相对本容器下拉 */
 .score-wrap { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 2px; z-index: 3; }
+/* 粉丝未知角标：与分数并列，点开可见原因；不给它抢分数的视觉权重 */
+.score-unknown { width: 16px; height: 16px; border-radius: 50%; background: rgba(0,0,0,.55); color: #FCD493;
+  font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; cursor: pointer; }
 .score-modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200; display: flex; align-items: center; justify-content: center; }
 .score-modal { width: 380px; max-width: 92vw; max-height: 86vh; overflow-y: auto; background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
 .sm-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
@@ -397,6 +422,8 @@ function fmtPub(ts: string | number | null): string {
 .sm-mode { font-size: 11px; font-weight: 500; color: var(--ink-3); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 8px; }
 .sm-close { margin-left: auto; border: none; background: none; font-size: 20px; cursor: pointer; color: #888; line-height: 1; }
 .sm-dim { margin-bottom: 12px; }
+/* 粉丝未知提示：明说「不是 0 粉」与「不作跨笔记比较」，避免把缺数据当低粉奖励 */
+.sm-warn { margin: -4px 0 14px; padding: 8px 10px; border-radius: 8px; background: #FFF6E8; border: 1px solid #F2D9AE; color: #8A5B18; font-size: 12px; line-height: 1.55; }
 .sm-row { display: flex; align-items: baseline; gap: 8px; }
 .sm-lbl { font-weight: 600; color: #222; font-size: 13px; }
 .sm-w { color: #999; font-size: 11px; }

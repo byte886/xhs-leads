@@ -1242,13 +1242,21 @@ async def _read_note_detail(page) -> dict:
     return await page.evaluate("() => xhsExtractNoteDetail()")
 
 
-_AUTHOR_POINT_JS = """() => {
-  const links = [...document.querySelectorAll('a[href*="/user/profile/"]')].map(a => {
-    const r = a.getBoundingClientRect();
-    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
-             w: Math.round(r.width), h: Math.round(r.height) };
-  }).filter(l => l.w >= 30 && l.h >= 10 && l.y > 40 && l.y < 400);
-  return links.length ? links[0] : null;
+_AUTHOR_OPEN_JS = """(uid) => {
+  // 详情页里有 60+ 个 /user/profile/ 链接（作者本人、评论区、推荐位、侧栏「我」），
+  // 而且它们**统统被 VIDEO 遮罩或 note-detail-mask 盖住**——Nov 12 实测：按坐标点击，
+  // 命中点上层是 VIDEO/遮罩而非链接本身，点了开不出页（3/3 失败）；旧实现靠「y40~400 带内
+  // 第一个」还会点到推荐位里的隔壁博主，取回**别人的**粉丝数。
+  // 改为按笔记作者 uid 精确匹配 href，并在 DOM 层直接触发该链接的点击：
+  // 平台仍按真实点击处理、照常开新标签页，且天然绕开视觉遮挡。
+  if (!uid) return {ok: false, reason: 'no-uid'};
+  const links = [...document.querySelectorAll('a[href*="/user/profile/"]')]
+    .filter(a => (a.getAttribute('href') || '').includes('/user/profile/' + uid));
+  if (!links.length) return {ok: false, reason: 'not-found'};
+  const a = links[0];
+  const href = a.getAttribute('href') || '';
+  a.click();
+  return {ok: true, href, count: links.length};
 }"""
 
 
@@ -1279,25 +1287,68 @@ async def _wait_user_page(page, before: set, tries: int = 16):
     return None
 
 
-async def _read_author_profile(page, account_id: str = "default") -> dict:
+def _uid_from_profile_url(url: str) -> str:
+    """从作者页 URL 取 uid（/user/profile/<uid>?xsec_token=...）。"""
+    m = re.search(r"/user/profile/([0-9a-zA-Z]+)", url or "")
+    return m.group(1) if m else ""
+
+
+async def _open_profile_page(page, href: str):
+    """兜底：新标签页直接打开作者页 URL（href 自带 xsec_token，实测与点击等效）。"""
+    if not href:
+        return None
+    url = href if href.startswith("http") else "https://www.xiaohongshu.com" + href
+    try:
+        np = await page.context.new_page()
+        await np.goto(url, wait_until="domcontentloaded", timeout=20000)
+        return np
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _read_author_profile(page, uid: str = "", account_id: str = "default") -> dict:
     """详情页内点作者 → 平台新开一个作者页标签 → 在它上面取资料 → 立刻关掉。
 
     +（Nov 6 实测）：点作者**不是同页跳转，而是新标签页**（引擎里一度堆了
     3 个作者页），所以不能靠等当前页 URL 变化；拿到新页后取完立即关闭，搜索页与历史栈
     都不受影响。搜索页上点作者会污染历史栈，所以只能在这里（详情页内）做。
+
+    +（Nov 12 实测，两条血案都出在这里）：
+    1. 详情页有 68 个 /user/profile/ 链接，旧实现取「y40~400 带内第一个」，
+       那个位置排着的是**推荐位/评论区的隔壁博主**，取回的是别人的粉丝数——比 0 更危险，
+       因为 0 会被当未知降级，错值会被当真值打分。
+    2. 这些链接**全被 VIDEO 遮罩盖住**，鼠标坐标点击落到遮罩上，页根本开不出来（3/3 失败）。
+       所以改成按作者 uid 精确匹配 href + DOM 层直接触发点击；仍打不开时按 href 直开兜底。
+    点开/直开后一律校验新页 uid，与目标不符直接丢弃。
     """
     before = {id(p) for p in page.context.pages}
-    pt = await cdp_call(page.evaluate(_AUTHOR_POINT_JS),
-                        timeout=CDP_EVAL, label="author.point", skip=True)
-    if not pt:
+    res = await cdp_call(page.evaluate(_AUTHOR_OPEN_JS, uid),
+                         timeout=CDP_EVAL, label="author.open", skip=True) or {}
+    if not res.get("ok"):
+        log.info("详情页没有作者本人主页链接 uid=%s reason=%s", uid, res.get("reason"))
         return {}
-    await cdp_call(page.mouse.click(pt["x"], pt["y"]),
-                   timeout=CDP_QUICK, label="author.click", skip=True)
-    fresh = await _wait_user_page(page, before)
+    fresh = await _wait_user_page(page, before, tries=8)
     if fresh is None:
-        log.info("作者页未出现，跳过作者资料 url=%s", _page_url_now(page))
+        fresh = await _open_profile_page(page, res.get("href") or "")
+    if fresh is None:
+        cur = _page_url_now(page)
+        if "/user/profile/" in cur:
+            # 极端情况：链接在当前页内跳转——就地取，取完退回详情页
+            if uid and _uid_from_profile_url(cur) not in ("", uid):
+                log.warning("作者页 uid 不匹配，丢弃 期望=%s 实际=%s", uid, _uid_from_profile_url(cur))
+                return {}
+            try:
+                await asyncio.sleep(0.8)
+                return await _extract_user(page)
+            finally:
+                await page.go_back()
+        log.info("作者页未出现，跳过作者资料 uid=%s url=%s", uid, cur)
         return {}
     try:
+        got = _uid_from_profile_url(fresh.url)
+        if uid and got and got != uid:
+            log.warning("作者页 uid 不匹配，丢弃 期望=%s 实际=%s", uid, got)
+            return {}
         await asyncio.sleep(1)
         return await _extract_user(fresh)
     finally:
@@ -1305,12 +1356,12 @@ async def _read_author_profile(page, account_id: str = "default") -> dict:
                        timeout=CDP_QUICK, label="author.close", skip=True)
 
 
-async def _read_author_fans(page, account_id: str = "default") -> str:
-    """只取粉丝数（作者资料取完页已关，这里不再需要回退）。"""
-    u = await _read_author_profile(page, account_id)
+async def _read_author_fans(page, uid: str = "", account_id: str = "default") -> str:
+    """只取粉丝数（作者资料取完页已关，这里不再需要回退）。取不到返回空串，不伪造 0。"""
+    u = await _read_author_profile(page, uid, account_id)
     fans = (u or {}).get("fans", "") or ""
     if fans:
-        log.info("作者页粉丝 fans=%s", fans)
+        log.info("作者页粉丝 uid=%s fans=%s", uid, fans)
     return fans
 
 
@@ -1354,7 +1405,7 @@ async def note(note_id: str, xsec_token: str = "", wait_ms: int = 5000,
                  _page_url_now(page),
                  sorted(d) if isinstance(d, dict) else type(d).__name__)
         if d and with_author:
-            d["author_fans"] = await _read_author_fans(page, account_id)
+            d["author_fans"] = await _read_author_fans(page, d.get("user_id", ""), account_id)
         return d
     finally:
         await _back_to_list(page)
@@ -1545,7 +1596,7 @@ async def user(uid: str, account_id: str = "default") -> dict:
     if _page_position(page) != "detail":
         log.info("作者页需在详情页内打开，当前页=%s 跳过 uid=%s", _page_url_now(page), uid)
         return {}
-    u = await _read_author_profile(page, account_id)
+    u = await _read_author_profile(page, uid, account_id)
     log.info("作者页提取 uid=%s 命中=%s", uid, bool(u))
     return u
 

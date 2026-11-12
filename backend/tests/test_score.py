@@ -5,6 +5,8 @@ from src.score import (
     DEFAULT_THRESHOLDS,
     DEFAULT_WEIGHTS,
     TAGS,
+    fans_for_db,
+    fans_known_of,
     passes_entry_gate,
     rank_notes,
     score_note,
@@ -31,8 +33,11 @@ class TestToIntAndEdge:
         assert info["fan_ratio"] == 3.0
 
     def test_zero_fans_no_crash(self):
-        """粉丝未知：低粉与赞粉比都不计分（不能靠"没有分母"白拿满分）。"""
-        info = score_note(_note(fans_count=0))
+        """粉丝未知（采集失败）：低粉与赞粉比都不计分（不能靠"没有分母"白拿满分）。
+
+        未知用 None 表示；0 是真·零粉，会拿满低粉分（见 TestFansUnknown）。
+        """
+        info = score_note(_note(fans_count=None))
         assert info["dimensions"]["low_fan"] == 0.0
         assert info["dimensions"]["like_fan_ratio"] == 0.0
         assert info["fan_ratio"] == 0.0
@@ -224,3 +229,53 @@ class TestHotScore:
         info = score_note_hot(_note(liked_count=0, collected_count=0,
                                     comment_count=0, shared_count=0, fans_count=100))
         assert info["score"] < 20
+
+
+class TestFansUnknown:
+    """粉丝数未知（采集失败）与真·0 粉必须区分——旧实现把失败写成 0，
+    既让「低粉」标签误报，又让低粉潜力 65 分权重凭空清零，且完全不可见。"""
+
+    def test_none_and_blank_are_unknown_zero_is_known(self):
+        assert fans_known_of(None) == (0, False)
+        assert fans_known_of("") == (0, False)
+        assert fans_known_of("  ") == (0, False)
+        assert fans_known_of("0") == (0, True)
+        assert fans_known_of("5.3万") == (53000, True)
+
+    def test_unknown_gets_no_low_fan_bonus(self):
+        unknown = score_note(_note(liked_count=800, fans_count=None))
+        assert unknown["dimensions"]["low_fan"] == 0.0
+        # 真·0 粉是最低粉，理应拿满（旧实现这里也返回 0，等于把真零粉当成异常）
+        assert score_note(_note(liked_count=800, fans_count=0))["dimensions"]["low_fan"] == 25.0
+
+    def test_unknown_counts_only_known_dimensions(self):
+        # 不虚构缺失维度：只累加互动+时效，上限 35。曾归一化到 100，实测把 27 赞的
+        # 笔记抬成满分，等于用数据缺失奖励它。
+        info = score_note(_note(liked_count=800, fans_count=None))
+        expect = info["dimensions"]["interaction_health"] + info["dimensions"]["freshness"]
+        assert info["score"] == pytest.approx(expect, abs=0.2)
+        assert info["score"] <= 35.0
+
+    def test_unknown_flag_exposed_on_both_calibers(self):
+        assert score_note(_note(fans_count=None))["fans_known"] is False
+        assert score_note(_note(fans_count=1200))["fans_known"] is True
+        assert score_note_hot(_note(fans_count=None))["fans_known"] is False
+
+    def test_unknown_never_tagged_low_fan(self):
+        # 粉丝未知时不能打「低粉」「低粉爆款」——否则数据不全的笔记被当成优质小号
+        info = score_note(_note(liked_count=2000, fans_count=None))
+        assert info["tag"] not in (TAGS["low_fan"], TAGS["low_fan_hit"])
+
+    def test_fans_for_db_keeps_null(self):
+        assert fans_for_db(None) is None
+        assert fans_for_db("") is None
+        assert fans_for_db("5.3万") == 53000
+        assert fans_for_db(0) == 0
+
+    def test_unknown_hot_counts_only_known_dimensions(self):
+        info = score_note_hot(_note(liked_count=3000, fans_count=None))
+        expect = (info["dimensions"]["like_scale"]
+                  + info["dimensions"]["interaction"]
+                  + info["dimensions"]["freshness"])
+        assert info["score"] == pytest.approx(expect, abs=0.2)
+        assert info["score"] <= 85.0

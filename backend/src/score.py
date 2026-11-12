@@ -75,6 +75,26 @@ def _to_int(value: str | int | None, default: int = 0) -> int:
     return default
 
 
+def fans_known_of(value) -> tuple[int, bool]:
+    """粉丝数归一：返回 (数值, 是否已知)。
+
+    None / 空串 = 采集失败（未知），**不是**「0 粉」。真·0 粉极罕见但保留为已知 0。
+    旧实现把采集失败写成 0，导致低粉潜力 65 分权重凭空清零、还白送「低粉」标，
+    榜单系统性失真且完全不可见。
+    """
+    if value is None:
+        return 0, False
+    if isinstance(value, str) and not value.strip():
+        return 0, False
+    return _to_int(value), True
+
+
+def fans_for_db(value) -> int | None:
+    """写库用：未知存 NULL，真值存 int（不把未知伪装成 0）。"""
+    n, known = fans_known_of(value)
+    return n if known else None
+
+
 def _days_since(publish_time: int | None, now: datetime | None = None) -> float:
     """publish_time 为秒级时间戳；返回发布距今的天数。"""
     if not publish_time:
@@ -100,9 +120,13 @@ def _ratio_score(liked: int, fans: int, hot_ratio: float) -> tuple[float, float]
     return min(40.0, 40.0 * fan_ratio / hot_ratio), fan_ratio
 
 
-def _low_fan_score(fans: int, low_fan: int) -> float:
-    """维度 2：低粉权重（25 分：粉丝越少越高；500 粉丝以上线性衰减，5000 归零）。"""
-    if fans == 0:
+def _low_fan_score(fans: int, low_fan: int, known: bool = True) -> float:
+    """维度 2：低粉权重（25 分：粉丝越少越高；500 粉丝以上线性衰减，5000 归零）。
+
+    known=False（采集失败，粉丝未知）不计分——未知不等于零粉，不能白拿这 25 分。
+    已知且真的是 0 粉则拿满（0 粉确实是「最低粉」，逻辑上该得满分）。
+    """
+    if not known:
         return 0.0
     if fans < low_fan:
         return 25.0
@@ -162,21 +186,29 @@ def score_note(
     collected = _to_int(note.get("collected_count"))
     commented = _to_int(note.get("comment_count"))
     shared = _to_int(note.get("shared_count"))
-    fans = _to_int(note.get("fans_count"))
+    fans, fans_known = fans_known_of(note.get("fans_count"))
     publish_time = note.get("publish_time")
 
     ratio_score, fan_ratio = _ratio_score(liked, fans, t["hot_ratio"])
-    low_fan_score = _low_fan_score(fans, t["low_fan"])
+    low_fan_score = _low_fan_score(fans, t["low_fan"], fans_known)
     health = _health_score(liked, collected, commented, shared)
     fresh_score = _fresh_score(_days_since(publish_time, now), t["fresh_days"])
 
-    total = round(ratio_score + low_fan_score + health + fresh_score, 1)
+    if fans_known:
+        total = round(ratio_score + low_fan_score + health + fresh_score, 1)
+    else:
+        # 粉丝未知：赞粉比(40) + 低粉(25) 这两维没有分母，**不虚构**，只累加能算的两维
+        # （上限 35）。曾试过按已知维度归一化到 100 —— 实测把一条 27 赞的笔记抬成了
+        # 100 分（互动+时效两维满分即可），等于用「数据缺失」奖励它，排行榜直接失真。
+        # 宁可让它排在有粉丝的笔记后面，并在界面明确标「粉丝未知」。
+        total = round(health + fresh_score, 1)
     tag = _pick_tag(liked, fan_ratio, fans, t)
 
     return {
         "score": total,
         "tag": tag,
         "fan_ratio": round(fan_ratio, 4),
+        "fans_known": fans_known,
         "dimensions": {
             "like_fan_ratio": round(ratio_score, 1),
             "low_fan": round(low_fan_score, 1),
@@ -258,7 +290,7 @@ def score_note_hot(note: dict, now: datetime | None = None) -> dict:
     collected = _to_int(note.get("collected_count"))
     commented = _to_int(note.get("comment_count"))
     shared = _to_int(note.get("shared_count"))
-    fans = _to_int(note.get("fans_count"))
+    fans, fans_known = fans_known_of(note.get("fans_count"))
     publish_time = note.get("publish_time")
 
     like_scale = _like_scale_score(liked, ht["saturate_like"], ht["mid_like"])
@@ -267,10 +299,17 @@ def score_note_hot(note: dict, now: datetime | None = None) -> dict:
     fresh = _fresh_score(_days_since(publish_time, now), t["fresh_days"])
     fan_ratio = (liked / fans) if fans > 0 else 0.0
 
+    if fans_known:
+        total = like_scale + engage + reach + fresh
+    else:
+        # 破圈(15) 没有分母 → 不虚构，只累加上限 85 的三维，理由同 score_note。
+        total = like_scale + engage + fresh
+
     return {
-        "score": round(like_scale + engage + reach + fresh, 1),
+        "score": round(total, 1),
         "tag": _pick_tag(liked, fan_ratio, fans, t),
         "fan_ratio": round(fan_ratio, 4),
+        "fans_known": fans_known,
         "dimensions": {
             "like_scale": round(like_scale, 1),
             "interaction": round(engage, 1),

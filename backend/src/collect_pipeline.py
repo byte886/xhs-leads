@@ -23,7 +23,7 @@ from src import logger as xlog  # noqa: E402
 log = xlog.get("collect")
 # 允许从任意 cwd 导入 score 模块
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from src.score import rank_notes, _to_int  # noqa: E402
+from src.score import rank_notes, _to_int, fans_for_db  # noqa: E402
 from src.urls import build_url  # noqa: E402
 
 REQUEST_INTERVAL = (1.0, 1.8)  # 真人浏览节奏：请求间随机 1-1.8s（用户拍板合理像人档，勿再调快）
@@ -242,9 +242,13 @@ async def get_user_profile(note: dict, cache: dict, account_id: str = "default")
         note["fans_count"] = cache[uid]
         return note
     u = await _run_browser("user", uid, "USER", "", account_id, wait_ms=3500)
-    fans = 0
+    # 取不到就留 None（未知），绝不写 0——0 会被评分当成真·零粉，白送「低粉」标签；
+    # 未知则明确降级为「粉丝未知」，评分按已知维度归一化，不进低粉判断。
+    fans: int | None = None
     if u:
-        fans = _parse_fans(u.get("fans") or "")
+        raw = (u.get("fans") or "").strip()
+        if raw:
+            fans = _parse_fans(raw)
         if not fans and u.get("nickname"):
             note["nickname"] = u["nickname"]
     cache[uid] = fans
@@ -312,7 +316,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
             n.get("cover_url", ""), n.get("xsec_token", ""), n.get("desc", ""), n.get("ip_location", ""),
             _to_int(n.get("liked_count")), _to_int(n.get("collected_count")),
             _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
-            _to_int(n.get("fans_count")), n.get("publish_time"),
+            fans_for_db(n.get("fans_count")), n.get("publish_time"),
             si["score"], si["tag"], si["fan_ratio"],
             now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
             n.get("origin", ""),

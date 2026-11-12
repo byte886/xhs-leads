@@ -52,7 +52,9 @@ IMAGES_DIR = DATA_DIR / "images"
 
 _INTERVAL = (1.0, 1.8)
 
-from src.score import rank_notes, score_note_hot, _to_int, passes_entry_gate  # noqa: E402
+from src.score import (  # noqa: E402
+    rank_notes, score_note_hot, _to_int, passes_entry_gate, fans_for_db,
+)
 from src.jsonio import read_json_safe, write_json  # noqa: E402
 from src.browser_client import BrowserLoginRequiredError
 from src.collect_pipeline import (  # noqa: E402
@@ -924,7 +926,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 n.get("ip_location", ""),
                 _to_int(n.get("liked_count")), _to_int(n.get("collected_count")),
                 _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
-                _to_int(n.get("fans_count")), n.get("publish_time"),
+                fans_for_db(n.get("fans_count")), n.get("publish_time"),
                 si["score"], si["tag"], si["fan_ratio"],
                 now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
                 account_id or "default", n.get("origin", ""),
@@ -1048,13 +1050,18 @@ async def _enrich_fast(n: dict, cache: dict, account_id: str = "default") -> Non
 
 
 async def _fill_fans(n: dict, uid: str, cache: dict, account_id: str = "default") -> None:
-    """作者粉丝数（按 uid 缓存；作者主页失败兜底 0）。"""
+    """作者粉丝数（按 uid 缓存；取不到记 None=未知，不写 0）。
+
+    旧实现对 user() 传了不存在的 wait_ms，每次 TypeError 被 except 吞掉，
+    快速档整批粉丝恒为 0 —— 低粉潜力 65 分权重凭空清零，榜单系统性失真。
+    """
     if uid not in cache:
         try:
-            u = await browser_client.user(uid, wait_ms=3500, account_id=account_id)
-            cache[uid] = u.get("fans", "") or "0"
+            u = await browser_client.user(uid, account_id=account_id)
+            raw = (u.get("fans") or "").strip() if u else ""
+            cache[uid] = _to_int(raw) if raw else None
         except Exception:  # noqa: BLE001
-            cache[uid] = "0"
+            cache[uid] = None
     n["fans_count"] = cache[uid]
 
 
