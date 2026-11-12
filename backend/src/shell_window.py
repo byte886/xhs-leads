@@ -126,6 +126,36 @@ _EXT_CREATE_JS = """
 """
 
 
+def _runtime_ext_ids(ctx) -> list[str]:
+    """浏览器**实际加载**的扩展 ID 列表（取自扩展 service worker 的 URL）。
+
+    Chromium 给目录型扩展的 ID 来自「安装路径」，但各平台的路径规范化口径并不
+    一致：Windows 实测推导值与真实 ID 不同（消息因此打到不存在的接收方，报
+    "Receiving end does not exist"，原子建窗被静默降级成命令行建窗）。所以运行时
+    真相优先，路径推导只做拿不到 SW 时的兜底。
+    """
+    ids: list[str] = []
+    try:
+        for sw in getattr(ctx, "service_workers", None) or []:
+            u = getattr(sw, "url", "") or ""
+            if not u.startswith("chrome-extension://"):
+                continue
+            seg = u.split("/")
+            if len(seg) > 2 and seg[2] and seg[2] not in ids:
+                ids.append(seg[2])
+    except Exception:  # noqa: BLE001（拿不到 SW 列表就退回路径推导）
+        return ids
+    return ids
+
+
+def _pick_ext_id(computed: str, runtime_ids: list[str]) -> str:
+    """选发给扩展的 ID：推导值在运行时列表里就用它；只有一个运行时扩展且对不上
+    时以运行时为准（说明该平台的路径推导口径与 Chromium 不同）。"""
+    if runtime_ids and computed not in runtime_ids and len(runtime_ids) == 1:
+        return runtime_ids[0]
+    return computed
+
+
 async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
     """让内置扩展一次调用链完成「建窗 → 摆位 → 建组命名 → 导航」。
 
@@ -142,8 +172,15 @@ async def _create_window_via_extension(ctx, shell, *, url: str, bounds: dict):
     ext_dir = engine_types.builtin_extension_dir()
     if not ext_dir:
         return None
+    computed_id = engine_types.unpacked_extension_id(ext_dir)
+    ext_id = _pick_ext_id(computed_id, _runtime_ext_ids(ctx))
+    if ext_id != computed_id:
+        log.info(
+            "扩展 ID 以运行时为准：路径推导=%s 实际=%s（当前平台的路径规范化口径不同）",
+            computed_id, ext_id,
+        )
     payload = {
-        "extId": engine_types.unpacked_extension_id(ext_dir),
+        "extId": ext_id,
         "req": {
             "type": _EXT_CREATE_MSG,
             "url": url,

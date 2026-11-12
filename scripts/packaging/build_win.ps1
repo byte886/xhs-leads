@@ -1,4 +1,4 @@
-# XHSLeads Windows packaging script (run on Windows; PyInstaller cannot cross-compile)
+﻿# XHSLeads Windows packaging script (run on Windows; PyInstaller cannot cross-compile)
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\packaging\build_win.ps1
@@ -185,8 +185,11 @@ try {
         if (-not (Test-Path $c)) { throw "artifact missing: $c" }
         Write-Host "OK  $c"
     }
-    # 随包资产清单与 macOS 共用一份（check_pack.py）：扩展三件套（manifest/background/
-    # extract）、前端产物、内置引擎、主程序，缺一项即打包失败。
+    # Shared asset manifest with macOS (scripts/packaging/check_pack.py):
+    # extension trio (manifest/background/extract), frontend dist, engine, main exe.
+    # NOTE: keep this file UTF-8 *with BOM*. Windows PowerShell 5.1 decodes BOM-less
+    # UTF-8 as GBK; a CJK char at line end can swallow the newline and silently turn
+    # the following command line into part of the comment.
     & $venvPy (Join-Path $RepoRoot "scripts\packaging\check_pack.py") $outDir --platform win32
     if ($LASTEXITCODE -ne 0) { throw "artifact self-check failed" }
 
