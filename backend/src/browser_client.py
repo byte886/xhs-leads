@@ -416,11 +416,36 @@ def _filter_warn(label: str, val: str) -> dict:
     return {"label": label, "value": val, "hint": hint}
 
 
+async def _active_contains(page, val: str) -> bool:
+    """当前面板的 active 项里是否包含目标值。"""
+    active = await page.evaluate(_ACTIVE_TAGS_JS)
+    return any(val in str(a) for a in (active or []))
+
+
+async def _filter_is_active(page, val: str) -> bool:
+    """点击后校验选项是否真被平台选中。
+
+    平台点选项后会自动收起筛选面板，固定等待后 `div.tags.active` 已随面板
+    不可见，直接读会把「实际已生效」误判成未生效（真机实测：点击后面板可见
+    项归零，但重开面板能读到该项 active、结果也已过滤）。先读一次（面板仍
+    展开的情况），读不到就重新展开面板并轮询 active，避免平台渲染抖动偶发误报。
+    """
+    await asyncio.sleep(1.0)
+    if await _active_contains(page, val):
+        return True
+    await _open_filter_panel(page)
+    for _ in range(3):
+        if await _active_contains(page, val):
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
 async def _apply_filters(page, filters: dict):
     """搜索页应用筛选（排序 / 笔记类型 / 发布时间 / 搜索范围 / 位置距离）。
 
     跳过默认值（综合 / 全部 / 不限）：只在用户明确选择非默认条件时点击对应选项。
-    点击条件后页面会刷新，每项点击后等待结果重新加载。
+    点击条件后页面会刷新，每项点击后用 `_filter_is_active` 校验是否真被选中。
 
     （2026-11-08 实测）：平台每个筛选选项有两层 `div.tags`——可见层，以及一层
     `data-hp-kind="xhs-filter-tag-<值>"` 的透明热区代理层。两层 innerText 都是
@@ -438,20 +463,15 @@ async def _apply_filters(page, filters: dict):
         pt = await _pick_filter_point(page, val)
         if pt:
             await page.mouse.click(pt["x"], pt["y"])
-            # navigator.geolocation，定位返回前面板仍显示旧值；零延迟读会把「实际已生效」
-            # 误判成「仍是 不限」（真机踩过：卡片已换成本地内容，日志却报未选中）。
-            # 等待后再读不到，才说明是真的没生效。
-            await asyncio.sleep(1.2)
-            active = await page.evaluate(_ACTIVE_TAGS_JS)
-            if any(val in str(a) for a in (active or [])):
-                log.info("筛选已选 %s=%s 面板选中态=%s", label, val, active)
+            if await _filter_is_active(page, val):
+                log.info("筛选已选 %s=%s", label, val)
             else:
-                log.warning("筛选未生效 %s=%s 面板选中态=%s", label, val, active)
+                log.warning("筛选未生效 %s=%s", label, val)
                 warns.append(_filter_warn(label, val))
         else:
             log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
             warns.append(_filter_warn(label, val))
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(1.5)
     setattr(page, "_xhs_filter_warns", warns)
     await _close_filter_panel(page)
 
