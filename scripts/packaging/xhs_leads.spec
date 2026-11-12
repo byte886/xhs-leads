@@ -1,79 +1,42 @@
 # -*- mode: python ; coding: utf-8 -*-
 """XHSLeads macOS .app 打包配置（B 批壳）。
 
+公共部分（datas / hiddenimports / Analysis·EXE·COLLECT 参数）在 spec_common.py，
+本文件只保留 macOS 专有内容：BUNDLE 外壳、icns 图标、Info.plist。
+
 要点：
-- 入口 scripts/launcher.py（起 uvicorn + 开浏览器 + 优雅退出）。
-- pathex 含 backend（src 包父目录），使 `src.*` 可被收集。
-- datas 打包前端构建产物 frontend/dist（server 静态托管）+ playwright driver（引擎 node 子进程）。
-- hiddenimports 全量收集 src / uvicorn 子模块，避免动态导入漏包。
+- 入口 scripts/packaging/launcher.py（起 uvicorn + 开浏览器 + 优雅退出）。
 - console=False：GUI 应用；launcher 已将 stdout/stderr 重定向到数据目录 logs/app.log。
+- 内置引擎 CFT 不进 datas：其可执行二进制会被 PyInstaller 当 binary 处理失败
+  （bincache 无法处理签名 app bundle），由 build_mac.sh 打包后 post-copy 到
+  .app/Contents/Resources/engine/（R-6.11）。
 """
-from pathlib import Path
+import sys
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+sys.path.insert(0, SPECPATH)  # noqa: F821 —— SPECPATH 由 PyInstaller 注入
 
-SPEC_DIR = Path(SPECPATH)           # scripts/packaging/
-ROOT = SPEC_DIR.parent.parent          # 项目根
-APP_NAME = "XHSLeads"
+import spec_common as sc  # noqa: E402
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules  # noqa: E402
 
-hiddenimports = (
-    collect_submodules("src")
-    + collect_submodules("uvicorn")
-)
-datas = [
-    (str(ROOT / "frontend" / "dist"), "frontend/dist"),
-    # 整个 extension 目录：manifest.json + background.js 是扩展本体（采集窗标签组与
-    # 采集窗认领依赖它），lib/extract.js 是 DOM 提取源。只拷 lib 会让
-    # builtin_extension_dir() 找不到 manifest.json 而静默跳过加载，打包版就没有
-    # 「采集窗口」蓝色标签组。
-    (str(ROOT / "extension"), "extension"),
-] + collect_data_files("playwright")
-# 注意：内置引擎 CFT 不进 PyInstaller datas——其可执行二进制会被 PyInstaller 当
-# binary 处理失败（bincache 无法处理签名 app bundle）；改由 build_mac.sh 在
-# 打包完成后 post-copy 直拷进 .app/Contents/Resources/engine/（R-6.11）。
+spec_dir, root = sc.paths(SPECPATH)  # noqa: F821
 
 a = Analysis(
-    [str(SPEC_DIR / "launcher.py")],
-    pathex=[str(ROOT / "backend")],
-    binaries=[],
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "notebook"],
-    noarchive=False,
+    datas=sc.datas(root) + collect_data_files("playwright"),
+    hiddenimports=sc.hiddenimports(collect_submodules),
+    excludes=sc.EXCLUDES_COMMON,
+    **sc.analysis_kwargs(root, spec_dir / "launcher.py"),
 )
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name=APP_NAME,
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,  # GUI 模式：日志由 launcher 落盘
-    disable_windowed_traceback=False,
-)
+exe = EXE(pyz, a.scripts, [], **sc.exe_kwargs())
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name=APP_NAME,
-)
+coll = COLLECT(exe, a.binaries, a.datas, **sc.collect_kwargs())
 
 app = BUNDLE(
     coll,
-    name=f"{APP_NAME}.app",
-    icon=str(ROOT / "build_resources" / "icon" / "XHSLeadsIcon.icns"),  # 品牌图标（build_mac.sh 生成）
+    name=f"{sc.APP_NAME}.app",
+    icon=str(root / "build_resources" / "icon" / "XHSLeadsIcon.icns"),  # 品牌图标（build_mac.sh 生成）
     bundle_identifier="com.xhsleads.app",
     info_plist={
         # 品牌名统一为「XHS Leads · 小红书获客助手」（用户拍板：保留英文品牌 + 中文副标题）：

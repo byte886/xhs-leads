@@ -185,6 +185,10 @@ try {
         if (-not (Test-Path $c)) { throw "artifact missing: $c" }
         Write-Host "OK  $c"
     }
+    # 随包资产清单与 macOS 共用一份（check_pack.py）：扩展三件套（manifest/background/
+    # extract）、前端产物、内置引擎、主程序，缺一项即打包失败。
+    & $venvPy (Join-Path $RepoRoot "scripts\packaging\check_pack.py") $outDir --platform win32
+    if ($LASTEXITCODE -ne 0) { throw "artifact self-check failed" }
 
     Step "7/7 zip to desktop"
     $zipOut = Join-Path $Desktop "XHSLeads-win64.zip"

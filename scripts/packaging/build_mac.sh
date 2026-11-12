@@ -50,6 +50,11 @@ cp build_resources/icon/XHSLeadsIcon.icns \
 echo ">> 产物: dist/XHSLeads.app"
 ls -d dist/XHSLeads.app
 
+# 4.2) 产物自检：随包资产（扩展三件套/前端/引擎）缺一项就判打包失败。
+# 历史上只拷 extension/lib 漏了 manifest.json，打包版因此静默没了「采集窗口」标签组。
+echo ">> 产物资产自检"
+backend/.venv/bin/python scripts/packaging/check_pack.py dist/XHSLeads.app
+
 # 5) 压分发 zip 到桌面（XHS Leads · 小红书获客助手 分发给朋友的交付物；Intel x86_64）
 ZIP_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.zip"
 echo ">> 压缩分发 zip → ${ZIP_OUT}"

@@ -1,48 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
 """XHSLeads Windows（win64 / onedir）打包配置。
 
-与 macOS spec 的差异：
-- macOS 用 BUNDLE 出 .app；Windows 无 bundle 概念，直接 EXE + COLLECT（onedir）。
-- datas 在 onedir 下落在 _MEIPASS（dist/XHSLeads/ 或 _internal/）——engine_types 的
-  builtin_cft_candidates() 已按平台分支解析 chrome-win64/chrome.exe。
-- 内置引擎 CFT（Windows 版 chrome-win64）同样不进 datas：build_win.ps1 在打包后
-  post-copy 到 dist/XHSLeads/engine/。
-- console=False：窗口化应用，日志由 launcher 落盘到 %LOCALAPPDATA%\\xhs-leads\\data\\logs\\app.log。
+公共部分（datas / hiddenimports / Analysis·EXE·COLLECT 参数）在 spec_common.py，
+本文件只保留 Windows 专有内容：EXE 的 ico 图标、macOS 桥接相关 excludes。
 
-构建（在 Windows 上，PyInstaller 不能跨平台交叉编译）：
+与 macOS 的布局差异：
+- 无 BUNDLE 概念，EXE + COLLECT 即 onedir；datas 落在 _internal/（或 dist/XHSLeads/），
+  engine_types 的 builtin_cft_candidates() 已按平台分支解析 chrome-win64/chrome.exe。
+- 内置引擎 CFT（chrome-win64）同样不进 datas：build_win.ps1 post-copy 到
+  dist/XHSLeads/_internal/engine/。
+- console=False：窗口化应用，日志由 launcher 落盘到
+  %LOCALAPPDATA%\\xhs-leads\\data\\logs\\app.log。
+
+构建（必须在 Windows 上，PyInstaller 不能跨平台交叉编译）：
     python -m PyInstaller --noconfirm --clean scripts/packaging/xhs_leads_win.spec
 """
-from pathlib import Path
+import sys
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+sys.path.insert(0, SPECPATH)  # noqa: F821 —— SPECPATH 由 PyInstaller 注入
 
-SPEC_DIR = Path(SPECPATH)          # scripts/packaging/
-ROOT = SPEC_DIR.parent.parent      # 项目根
-APP_NAME = "XHSLeads"
+import spec_common as sc  # noqa: E402
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules  # noqa: E402
 
-hiddenimports = (
-    collect_submodules("src")
-    + collect_submodules("uvicorn")
-    + ["psutil", "multipart", "python_multipart"]
-)
-datas = [
-    (str(ROOT / "frontend" / "dist"), "frontend/dist"),
-    # 整个 extension 目录：manifest.json + background.js 是扩展本体，只拷 lib 会让
-    # builtin_extension_dir() 找不到 manifest.json 而静默跳过加载（无「采集窗口」标签组）。
-    (str(ROOT / "extension"), "extension"),
-] + collect_data_files("playwright")
+spec_dir, root = sc.paths(SPECPATH)  # noqa: F821
 
 a = Analysis(
-    [str(SPEC_DIR / "launcher.py")],
-    pathex=[str(ROOT / "backend")],
-    binaries=[],
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "notebook", "pyobjc", "AppKit", "Quartz"],
-    noarchive=False,
+    datas=sc.datas(root) + collect_data_files("playwright"),
+    hiddenimports=sc.hiddenimports(
+        collect_submodules, extra=sc.WINDOWS_EXTRA_HIDDENIMPORTS
+    ),
+    excludes=sc.EXCLUDES_WINDOWS,
+    **sc.analysis_kwargs(root, spec_dir / "launcher.py"),
 )
 
 pyz = PYZ(a.pure)
@@ -51,22 +39,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    exclude_binaries=True,
-    name=APP_NAME,
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,                     # 窗口化：双击不弹黑框
-    disable_windowed_traceback=False,
-    icon=str(ROOT / "build_resources" / "icon" / "XHSLeadsIcon.ico"),
+    **sc.exe_kwargs(root / "build_resources" / "icon" / "XHSLeadsIcon.ico"),
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name=APP_NAME,
-)
+coll = COLLECT(exe, a.binaries, a.datas, **sc.collect_kwargs())
