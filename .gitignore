@@ -68,3 +68,4 @@ data/license_private.pem
 data/license.json
 data/license_private.pem
 build_resources/
+build-win.log

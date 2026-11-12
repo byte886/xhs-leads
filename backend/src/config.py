@@ -36,6 +36,22 @@ CONFIG_FILE = DATA_DIR / "config.json"
 # 跨平台由 DATA_DIR 决定（macOS 打包态在 Application Support，Windows 打包态在 %APPDATA%），
 # 搬数据目录或换平台都不用改注册表。
 ACCOUNTS_DIR_NAME = "accounts"
+
+
+def resource_root() -> pathlib.Path:
+    """打包态资源根（extension/lib、frontend/dist 等 datas 所在目录）。
+
+    布局差异：macOS BUNDLE 的 datas 落在 Contents/Resources（_MEIPASS 的兄弟目录），
+    Windows onedir 的 datas 直接在 _MEIPASS 下。按「extract.js 是否存在」挑第一个命中的候选。
+    """
+    mp = getattr(sys, "_MEIPASS", None)
+    if not mp:
+        return ROOT
+    for cand in (pathlib.Path(mp), pathlib.Path(mp).parent / "Resources", pathlib.Path(mp).parent):
+        if (cand / "extension" / "lib" / "extract.js").exists():
+            return cand
+    return pathlib.Path(mp)
+
 # 历史多账户根目录：早期账号落在这里，仅保留读取与进程扫描兼容，不再作为新账号默认位置。
 ACCOUNTS_ROOT = "~/.xhs-leads/accounts"
 

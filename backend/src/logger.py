@@ -107,8 +107,17 @@ def redact(text: str) -> str:
 # ---------------------------------------------------------------------------
 # logging 初始化（幂等）
 # ---------------------------------------------------------------------------
-_LOGS_DIR = pathlib.Path(__file__).resolve().parents[2] / "data" / "logs"
 _INITIALIZED = False
+
+
+def _logs_dir() -> pathlib.Path:
+    """日志目录：跟随 config.DATA_DIR（打包态在应用数据目录，不写安装目录）。"""
+    try:
+        from src import config  # noqa: PLC0415
+
+        return pathlib.Path(config.DATA_DIR) / "logs"
+    except Exception:  # noqa: BLE001
+        return pathlib.Path(__file__).resolve().parents[2] / "data" / "logs"
 
 
 def _setup() -> None:
@@ -116,7 +125,8 @@ def _setup() -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
-    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    logs_dir = _logs_dir()
+    logs_dir.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)s [%(source)s][%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -131,7 +141,7 @@ def _setup() -> None:
     root.addHandler(console)
     # 滚动文件
     fh = logging.handlers.RotatingFileHandler(
-        _LOGS_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf8",
+        logs_dir / "app.log", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf8",
     )
     fh.setFormatter(fmt)
     fh.addFilter(flt)

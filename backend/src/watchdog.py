@@ -18,6 +18,7 @@
 """
 import os
 import subprocess
+import sys
 from datetime import datetime
 
 _WRITE_FD = -1  # 主进程持有的写端；进程无论怎么死，操作系统都会关闭它
@@ -32,11 +33,13 @@ def default_markers() -> list[str]:
     """
     marks: list[str] = []
     try:
+        from src.engine_types import cft_platform_dirname  # noqa: PLC0415
         from src.engine_pool import builtin_cft_candidates  # noqa: PLC0415
 
         cft = builtin_cft_candidates()
-        if cft and "chrome-mac-x64" in cft:
-            marks.append(cft.split("chrome-mac-x64")[0] + "chrome-mac-x64")
+        dirname = cft_platform_dirname()  # chrome-mac-x64 / chrome-win64
+        if cft and dirname in cft:
+            marks.append(cft.split(dirname)[0] + dirname)
     except Exception:  # noqa: BLE001（引擎模块不可用时退回目录特征）
         pass
     try:
@@ -120,7 +123,23 @@ def _watch_until_eof(fd: int) -> None:
 
 
 def _ps_table() -> str | None:
-    """一次取全量进程表（pid 命令行）。失败返回 None。"""
+    """一次取全量进程表（pid 命令行）。失败返回 None。
+
+    Windows 没有 `ps`：用 psutil 遍历进程，拼成与 `ps -ax -o pid=,command=` 同格式的行，
+    下游匹配逻辑（按命令行子串）完全复用。
+    """
+    if sys.platform == "win32":
+        try:
+            import psutil  # noqa: PLC0415（仅 Windows 需要）
+
+            rows = []
+            for p in psutil.process_iter(["pid", "cmdline"]):
+                cmd = " ".join(p.info["cmdline"] or [])
+                if cmd:
+                    rows.append(f"{p.info['pid']} {cmd}")
+            return "\n".join(rows)
+        except Exception:  # noqa: BLE001
+            return None
     try:
         return subprocess.run(  # noqa: S603,S607（固定参数、无 shell）
             ["ps", "-ax", "-o", "pid=,command="],
@@ -173,7 +192,12 @@ def _reap(markers: list[str], log_path: str = "") -> None:
         ok, fail = 0, []
         for pid in pids:
             try:
-                os.kill(pid, 9)
+                if sys.platform == "win32":
+                    import psutil  # noqa: PLC0415（仅 Windows）
+
+                    psutil.Process(pid).kill()
+                else:
+                    os.kill(pid, 9)
                 ok += 1
             except ProcessLookupError:
                 ok += 1  # 已自行退出，同样算清理完成

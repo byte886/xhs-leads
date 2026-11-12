@@ -19,17 +19,14 @@ NameError 被 try 吞掉静默降级）。本模块统一登记所有注入来�
 「每次新文档自动执行」，不走页面标记助手，但其 JS 来源同样在本注册表登记。
 """
 import asyncio
-import pathlib
-import sys
 
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 
-# 项目根定位（与 browser_client 原逻辑一致：打包态 _MEIPASS 旁 Resources）
-if getattr(sys, "_MEIPASS", None):
-    # 打包态（PyInstaller macOS）：资源随包进 Contents/Resources
-    _ROOT = pathlib.Path(sys._MEIPASS).parent / "Resources"
-else:
-    _ROOT = pathlib.Path(__file__).resolve().parents[2]  # backend/src -> 项目根
+# 资源根定位：macOS 在 _MEIPASS.parent/Resources，Windows onedir 在 _MEIPASS 本身，
+# 统一由 config.resource_root() 按实际存在性判定（不再硬编码 macOS 布局）。
+from src import config as _cfg  # noqa: E402
+
+_ROOT = _cfg.resource_root()
 
 # ---------------------------------------------------------------------------
 # 注册表：name → {"js": str, "kind": str, "note": str}

@@ -50,12 +50,23 @@ _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一�
 
 
 def _redirect_logs(data_dir: pathlib.Path) -> None:
-    """GUI 模式（console=False）下 print/日志默认丢弃；重定向到 data/logs/app.log。"""
+    """GUI 模式（console=False）下 print/日志默认丢弃；重定向到 data/logs/app.log。
+
+    Windows 的 windowed 打包里 sys.stdout/sys.stderr 是 None（没有控制台句柄），
+    os.dup2 会直接抛异常——此时只把 print 换成写文件句柄，不做 fd 级重定向。
+    """
     logs = data_dir / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     f = open(logs / "app.log", "a", encoding="utf-8")  # noqa: SIM115（进程级保持打开）
-    os.dup2(f.fileno(), sys.stdout.fileno())
-    os.dup2(f.fileno(), sys.stderr.fileno())
+    if sys.stdout is not None and sys.stderr is not None and hasattr(sys.stdout, "fileno"):
+        try:
+            os.dup2(f.fileno(), sys.stdout.fileno())
+            os.dup2(f.fileno(), sys.stderr.fileno())
+            return
+        except (OSError, ValueError):
+            pass
+    sys.stdout = f  # type: ignore[assignment]
+    sys.stderr = f  # type: ignore[assignment]
 
 
 def _migrate_legacy_data(target: pathlib.Path) -> None:
@@ -65,6 +76,8 @@ def _migrate_legacy_data(target: pathlib.Path) -> None:
     一次性复制（排除 logs 与私钥），保住登录态/数据库/授权不丢。
     """
     legacy = pathlib.Path.home() / "Library" / "Application Support" / "codex-zhuke" / "data"
+    if sys.platform != "darwin":  # 旧数据目录只在 macOS 存在
+        return
     if not legacy.exists() or target.exists():
         return
     if any(legacy.iterdir()):
@@ -96,6 +109,9 @@ def _data_dir() -> pathlib.Path:
     if os.environ.get("XHS_LEADS_DATA"):
         return pathlib.Path(os.environ["XHS_LEADS_DATA"]).expanduser()
     if getattr(sys, "_MEIPASS", None):  # PyInstaller 打包态
+        if sys.platform == "win32":
+            local = os.environ.get("LOCALAPPDATA") or str(pathlib.Path.home() / "AppData" / "Local")
+            return pathlib.Path(local) / "xhs-leads" / "data"
         return pathlib.Path.home() / "Library" / "Application Support" / "xhs-leads" / "data"
     # 开发态：项目根 data（scripts/launcher.py -> 项目根）
     return pathlib.Path(__file__).resolve().parents[2] / "data"
@@ -119,8 +135,40 @@ def _alert(title: str, body: str) -> None:
                 ["osascript", "-e", script],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
+        elif sys.platform == "win32":
+            import ctypes  # noqa: PLC0415
+
+            # MB_ICONWARNING | MB_SETFOREGROUND（）+ 阻塞式：进程退之前消息框必须留在屏幕上
+            ctypes.windll.user32.MessageBoxW(None, body, title, 0x30 | 0x1000)
     except Exception:  # noqa: BLE001（弹窗失败不影响退出流程）
         pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """探活：目标进程还在就 True。
+
+    注意 Windows 上 os.kill(pid, 0) 不是「探活」而是 TerminateProcess(pid, 0)——
+    会直接把正在运行的那个实例杀掉，必须换成 OpenProcess 查询句柄。
+    """
+    if sys.platform == "win32":
+        import ctypes  # noqa: PLC0415
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return code.value == 259  # STILL_ACTIVE
+            return True
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)  # 探活：进程还在就拒绝启动
+        return True
+    except OSError:
+        return False
 
 
 def _acquire_single_instance(data_dir: pathlib.Path) -> bool:
@@ -135,9 +183,7 @@ def _acquire_single_instance(data_dir: pathlib.Path) -> bool:
     except (OSError, ValueError):
         pid = 0
     if pid and pid != os.getpid():
-        try:
-            os.kill(pid, 0)  # 探活：进程还在就拒绝启动
-        except OSError:
+        if not _pid_alive(pid):
             pid = 0  # 上次崩溃残留，接管
         else:
             # 弹窗给的是终端用户：不要抛 pid / --data-dir 这类开发参数，

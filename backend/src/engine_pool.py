@@ -41,6 +41,22 @@ def probe_screen_size() -> tuple[int, int]:
     if _SCREEN:
         return _SCREEN
     w, h = 1920, 1200
+    if sys.platform == "win32":
+        # Windows：GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)。先声明 DPI 感知，
+        # 否则缩放 150% 的机器会拿到被系统缩放后的逻辑分辨率（窗口会偏小一半）。
+        try:
+            import ctypes  # noqa: PLC0415
+
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:  # noqa: BLE001（旧系统无 shcore）
+                ctypes.windll.user32.SetProcessDPIAware()
+            w = int(ctypes.windll.user32.GetSystemMetrics(0))
+            h = int(ctypes.windll.user32.GetSystemMetrics(1))
+        except Exception:  # noqa: BLE001（探测失败走回退）
+            pass
+        _SCREEN = (w, h)
+        return _SCREEN
     try:
         out = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
@@ -395,6 +411,9 @@ class AccountEngine:
         （force_release / 断开重建 / 启动前），不会误杀新实例。同步阻塞 ~2s 可接受
         （内存回收优先于登录判定瞬时延迟）。
         """
+        if sys.platform == "win32":
+            self._kill_stale_processes_win()
+            return
         try:
             out = subprocess.run(
                 ["pgrep", "-f", str(self.user_data_dir)],
@@ -415,6 +434,35 @@ class AccountEngine:
             try:
                 os.kill(int(pid), 9)  # SIGKILL：残留兜底
             except ProcessLookupError:
+                pass
+
+    def _kill_stale_processes_win(self) -> None:
+        """Windows 版残留清理：psutil 按命令行匹配本账号 profile，先 terminate 再 kill。"""
+        try:
+            import psutil  # noqa: PLC0415（仅 Windows 需要）
+
+            needle = str(self.user_data_dir).lower()
+            procs = []
+            for p in psutil.process_iter(["pid", "cmdline"]):
+                cmd = " ".join(p.info["cmdline"] or []).lower()
+                if needle and needle in cmd:
+                    procs.append(p)
+        except Exception:  # noqa: BLE001（枚举失败：跳过清理，交由启动失败路径暴露）
+            return
+        if not procs:
+            return
+        for p in procs:
+            try:
+                p.terminate()
+            except psutil.NoSuchProcess:
+                pass
+            except Exception:  # noqa: BLE001
+                pass
+        _gone, alive = psutil.wait_procs(procs, timeout=2.0)
+        for p in alive:
+            try:
+                p.kill()
+            except Exception:  # noqa: BLE001
                 pass
 
     async def _context_fake_dead_step(self):

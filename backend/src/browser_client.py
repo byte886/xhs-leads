@@ -25,11 +25,7 @@ from src.engine_pool import pool
 
 log = xlog.get("browser")
 
-if getattr(sys, "_MEIPASS", None):
-    # 打包态（PyInstaller macOS）：资源随包进 Contents/Resources
-    _ROOT = pathlib.Path(sys._MEIPASS).parent / "Resources"
-else:
-    _ROOT = pathlib.Path(__file__).resolve().parents[2]  # backend/src -> 项目根
+_ROOT = config.resource_root()  # 跨平台资源根（mac Resources / Windows onedir 同目录）
 _XHS = "https://www.xiaohongshu.com"
 
 

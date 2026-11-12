@@ -8,32 +8,60 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 import sys
 
 
+ENGINE_DIR_NAME = "engine"
+
+# 各平台 CFT 官方分发包的目录名 + 可执行文件相对路径（Chrome for Testing 按平台拆包：
+# mac 是 .app bundle，Windows 是 chrome-win64/chrome.exe）。
+_CFT_LAYOUT: dict[str, tuple[str, str]] = {
+    "darwin": ("chrome-mac-x64", "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
+    "win32": ("chrome-win64", "chrome.exe"),
+}
+
+
+def cft_platform_dirname() -> str:
+    """本平台引擎目录名（chrome-mac-x64 / chrome-win64）；未知平台按 darwin 处理。"""
+    layout = _CFT_LAYOUT.get(sys.platform) or _CFT_LAYOUT["darwin"]
+    return layout[0]
+
+
+def _app_engine_roots() -> list[pathlib.Path]:
+    """打包态引擎根目录候选（PyInstaller 各平台布局不同，两种都试）。"""
+    roots: list[pathlib.Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = pathlib.Path(meipass)
+        roots.append(mp / ENGINE_DIR_NAME)                      # Windows/onedir：datas 在 _MEIPASS 下
+        roots.append(mp.parent / ENGINE_DIR_NAME)                # onedir 外壳目录（EXE 同级）
+        roots.append(mp.parent / "Resources" / ENGINE_DIR_NAME)  # macOS BUNDLE：Resources 下
+    return roots
+
+
+def dev_engine_root() -> pathlib.Path:
+    """开发态引擎根：macOS = Application Support，Windows = %LOCALAPPDATA%。"""
+    if sys.platform == "win32":
+        base = pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home() / "AppData" / "Local")
+    else:
+        base = pathlib.Path.home() / "Library" / "Application Support"
+    return base / "xhs-leads" / ENGINE_DIR_NAME
+
+
 def builtin_cft_candidates() -> str | None:
-    """内置 Chrome for Testing 候选：打包态（.app 随包分发）优先，其次引擎数据目录
+    """内置 Chrome for Testing 候选：打包态（随包分发）优先，其次引擎数据目录
     旁的 CFT 副本（开发态）。引擎抽象层：CFT 独立身份
     （com.google.chrome.for.testing）不占用用户日常 Chrome 的 LaunchServices 单实例。
     注意 PyInstaller BUNDLE 布局差异：sys._MEIPASS = EXE 目录（Contents/MacOS），
     而 datas 落在 Contents/Resources——故两种布局都尝试（_MEIPASS/engine 与
     _MEIPASS.parent/Resources/engine）。"""
-    candidates: list[str] = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        mp = pathlib.Path(meipass)
-        candidates.append(
-            str(mp / "engine/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
-        )
-        candidates.append(
-            str(mp.parent / "Resources/engine/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
-        )
-    candidates.append(
-        str(pathlib.Path.home()
-            / "Library/Application Support/xhs-leads/engine/chrome-mac-x64"
-            / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
-    )
+    dirname, rel = _CFT_LAYOUT.get(sys.platform) or _CFT_LAYOUT["darwin"]
+    candidates: list[str] = [
+        str(root / dirname / rel) for root in _app_engine_roots()
+    ]
+    candidates.append(str(dev_engine_root() / dirname / rel))
     for c in candidates:
         if c and pathlib.Path(c).exists():
             return c
