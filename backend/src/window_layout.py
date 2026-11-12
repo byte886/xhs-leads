@@ -42,7 +42,7 @@ def load() -> dict[str, dict]:
 
 
 def clamp(bounds: dict, sw: int, sh: int) -> dict | None:
-    """把记录钳到可用范围：尺寸不小于 MIN_*、不超屏；坐标保证窗口主体在屏内。
+    """把记录钳到可用范围：尺寸不小于 MIN_*、不超屏；整窗（含右缘/下缘）留在屏内。
 
     负坐标（历史上把窗口挪到屏外的值）视为失效，由调用方回退默认布局。
     """
@@ -57,8 +57,11 @@ def clamp(bounds: dict, sw: int, sh: int) -> dict | None:
     height = max(MIN_H, min(sh, height))
     if left < 0 or top < 0:
         return None
-    left = min(left, max(0, sw - 320))
-    top = min(top, max(0, sh - 200))
+    # 右缘/下缘也必须在屏内：旧版只夹 left ≤ sw-320、top ≤ sh-200，
+    # 不校验 left+width / top+height，实测出现过 960 宽@left925（右缘 1885 > 1280）
+    # 与 1140 高@top75（下缘 1215 > 1200），窗口内容被屏幕边缘裁掉。
+    left = max(0, min(left, sw - width))
+    top = max(0, min(top, sh - height))
     return {"left": left, "top": top, "width": width, "height": height}
 
 
