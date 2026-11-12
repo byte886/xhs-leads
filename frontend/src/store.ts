@@ -52,6 +52,8 @@ export const appState = reactive({
   endedNeedLogin: false,
   // 搜索结果
   notes: [] as Note[],
+  // 榜单口径（两套评分并存）：lowfan=低粉潜力（默认）/ hot=综合热度
+  rankMode: 'lowfan' as 'lowfan' | 'hot',
   total: 0,
   count: 0,
   taskLabel: '',

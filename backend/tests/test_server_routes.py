@@ -419,6 +419,43 @@ class TestNotes:
         r = client.get("/api/notes", params={"order": "fetched_at"})
         assert r.status_code == 200
 
+    def test_notes_order_hot(self, client, tmp_path):
+        """order=hot：按第二口径「综合热度」降序，与 order=score 的结果可以不同。"""
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.row_factory = sqlite3.Row
+        server._init_tables(con)
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        server._rank_and_insert(con, {"feed_id": "hot1", "title": "绝对爆款",
+                                      "liked_count": 5000, "collected_count": 900,
+                                      "comment_count": 300, "shared_count": 120,
+                                      "fans_count": 0}, "翡翠", now)
+        server._rank_and_insert(con, {"feed_id": "cold1", "title": "低粉潜力",
+                                      "liked_count": 200, "collected_count": 20,
+                                      "comment_count": 5, "fans_count": 120}, "翡翠", now)
+        con.commit()
+        con.close()
+        r = client.get("/api/notes", params={"order": "hot"}).json()
+        ids = [n["feed_id"] for n in r["notes"]]
+        assert ids[0] == "hot1"
+        assert r["notes"][0]["hot_score"] > r["notes"][1]["hot_score"]
+        assert r["notes"][0]["hot_info"]["dimensions"]["like_scale"] > 0
+        # 低粉口径下排序是另一套（小号高赞粉比胜出），两套并存互不覆盖
+        r2 = client.get("/api/notes", params={"order": "score"}).json()
+        assert r2["notes"][0]["score"] >= r2["notes"][1]["score"]
+
+    def test_backfill_hot_scores_fills_legacy_rows(self, client, tmp_path):
+        """加列前的历史行（hot_score 为 NULL）要被回填，否则热度排序会把它排到最后。"""
+        con = sqlite3.connect(tmp_path / "test.db")
+        con.row_factory = sqlite3.Row
+        server._init_tables(con)
+        con.execute("UPDATE notes SET hot_score=NULL, hot_info=NULL")
+        con.commit()
+        assert server._backfill_hot_scores(con) == con.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+        rows = con.execute("SELECT hot_score FROM notes").fetchall()
+        assert all(x["hot_score"] is not None for x in rows)
+        assert server._backfill_hot_scores(con) == 0  # 幂等：无缺失行不再写
+        con.close()
+
     def test_notes_local_cover(self, client, tmp_path):
         _seed_notes(tmp_path)
         (tmp_path / "images" / "a1_cover.jpg").write_bytes(b"img")

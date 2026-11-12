@@ -131,7 +131,7 @@ async function finalizeCollect(pr: any) {
   toast(pr.note || (pr.status === 'stopped' ? '已停止采集' : '采集完成'))
   // 采集完成后拉评分排序结果，自动推进到"筛选结果"阶段
   sessionStorage.setItem('xhs_stage_restore', '1')
-  const list = await apiNotes('', 'score')
+  const list = await apiNotes('', appState.rankMode === 'hot' ? 'hot' : 'score')
   appState.notes = list.notes
   appState.total = list.total
   appState.count = list.total
@@ -292,7 +292,7 @@ onMounted(async () => {
   // 应用重启后 sessionStorage 清空，不恢复历史搜索（保持空白输入态）。
   if (sessionStorage.getItem('xhs_stage_restore')) {
     try {
-      const list = await apiNotes('', 'score')
+      const list = await apiNotes('', appState.rankMode === 'hot' ? 'hot' : 'score')
       if (list.total > 0) {
         appState.notes = list.notes
         appState.total = list.total

@@ -163,15 +163,32 @@ function startAuthorCollect() {
 // ============ 分数可解释：点击分数弹「评分说明」 ============
 const scoreModal = ref<Note | null>(null)
 const saveDialog = ref<{ open: (name: string) => Promise<string | null> } | null>(null)
-const DIMS = [
+// 两套评分口径（后端同时算好入库，这里只切换显示与排序）
+const DIMS_LOWFAN = [
   { key: 'like_fan_ratio', label: '点赞粉丝比', max: 40, weight: '权重 40%', hint: '赞/粉比越高，内容穿透粉丝圈层的能力越强（赞/粉 > 3 为爆款级）' },
   { key: 'low_fan', label: '低粉权重', max: 25, weight: '权重 25%', hint: '粉丝越少得分越高——专挖被低估的小博主（<500 满分，5000 归零）' },
   { key: 'interaction_health', label: '互动健康度', max: 20, weight: '权重 20%', hint: '收藏+评论+转发相对点赞越活跃越健康（对齐平台 CES：评论/转发权重高于点赞）' },
   { key: 'freshness', label: '时效性', max: 15, weight: '权重 15%', hint: '30 天内发布满分，90 天归零——追热点优先' },
 ]
+const DIMS_HOT = [
+  { key: 'like_scale', label: '点赞规模', max: 45, weight: '权重 45%', hint: '分段线性：300 赞内起步段，300-1000、1000-6000 两段递进，6000 赞以上满分——保证绝对大爆款稳在前列' },
+  { key: 'interaction', label: '互动质量', max: 25, weight: '权重 25%', hint: '收藏+评论×2+转发×3 相对点赞，比例 2.0 满分——衡量内容被收藏转发的强度' },
+  { key: 'reach', label: '破圈能力', max: 15, weight: '权重 15%', hint: '赞/粉比，粉丝数未知不计分（1.0 满分）——看这条内容有没有跑出粉丝圈' },
+  { key: 'freshness', label: '时效性', max: 15, weight: '权重 15%', hint: '30 天内发布满分，90 天归零——追热点优先' },
+]
+const isHot = computed(() => appState.rankMode === 'hot')
+function scoreOf(note: Note | null): number | null {
+  if (!note) return null
+  if (isHot.value) return note.hot_score ?? note.score_info?.score ?? null
+  return note.score ?? note.score_info?.score ?? null
+}
+function tagOf(note: Note | null): string | null {
+  if (!note) return null
+  return (isHot.value ? (note.hot_info?.tag ?? note.tag) : note.tag) ?? null
+}
 function dimsOf(note: Note) {
-  const dims = note.score_info?.dimensions || {}
-  return DIMS.map(d => ({ ...d, val: dims[d.key as keyof typeof dims] ?? 0 }))
+  const dims = ((isHot.value ? note.hot_info?.dimensions : note.score_info?.dimensions) || {}) as Record<string, number>
+  return (isHot.value ? DIMS_HOT : DIMS_LOWFAN).map(d => ({ ...d, val: dims[d.key] ?? 0 }))
 }
 function tagConclusion(tag: string | null): string {
   switch (tag) {
@@ -237,13 +254,13 @@ function fmtPub(ts: string | number | null): string {
         <span class="badge-note">{{ note.note_type === 'video' ? '视频' : '图文' }}</span>
         <span class="score-wrap">
           <span class="check">✓</span>
-          <span v-if="note.score != null" class="score-badge" :class="{ hot: note.score >= 90 }" @click.stop="openScore(note)">
+          <span v-if="scoreOf(note) != null" class="score-badge" :class="{ hot: (scoreOf(note) ?? 0) >= 90 }" @click.stop="openScore(note)">
             <svg class="score-ico" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <rect x="3" y="13" width="4" height="8" rx="1"/>
               <rect x="10" y="8" width="4" height="13" rx="1"/>
               <rect x="17" y="4" width="4" height="17" rx="1"/>
             </svg>
-            {{ note.score.toFixed(1) }}
+            {{ (scoreOf(note) ?? 0).toFixed(1) }}
           </span>
         </span>
         <button class="open-link" title="打开原作品（新窗口）" @click.stop="openOrigin(note)">
@@ -296,7 +313,7 @@ function fmtPub(ts: string | number | null): string {
             class="tag-only"
             title="这条笔记正文只有话题标签、没有文字内容：可评分选品，不适合克隆仿写"
           >正文仅标签</span>
-          <span class="tag" :class="{ hot: (note.score ?? 0) >= 90 }">{{ (note.score ?? 0) >= 90 ? '最值得模仿' : '高评分候选' }}</span>
+          <span class="tag" :class="{ hot: (scoreOf(note) ?? 0) >= 90 }">{{ (scoreOf(note) ?? 0) >= 90 ? (isHot ? '高热内容' : '最值得模仿') : (isHot ? '热度候选' : '高评分候选') }}</span>
         </div>
       </div>
     </div>
@@ -342,8 +359,8 @@ function fmtPub(ts: string | number | null): string {
   <div v-if="scoreModal" class="score-modal-mask" @click.self="closeScore">
     <div class="score-modal">
       <div class="sm-head">
-        <div class="sm-score">{{ (scoreModal.score ?? 0).toFixed(1) }}</div>
-        <div class="sm-tag">{{ scoreModal.tag || '未评分' }}</div>
+        <div class="sm-score">{{ (scoreOf(scoreModal) ?? 0).toFixed(1) }}</div>
+        <div class="sm-tag">{{ tagOf(scoreModal) || '未评分' }}<span class="sm-mode">{{ isHot ? '综合热度' : '低粉潜力' }}</span></div>
         <button class="sm-close" @click="closeScore">×</button>
       </div>
       <div class="sm-dim" v-for="d in dimsOf(scoreModal)" :key="d.key">
@@ -358,7 +375,7 @@ function fmtPub(ts: string | number | null): string {
       <div class="sm-raw">
         点赞 {{ fmt(scoreModal.liked_count) }} · 收藏 {{ fmt(scoreModal.collected_count) }} · 评论 {{ fmt(scoreModal.comment_count) }} · 转发 {{ fmt(scoreModal.shared_count) }} · 粉丝 {{ fmt(scoreModal.fans_count) }} · 发布 {{ fmtPub(scoreModal.publish_time) }}
       </div>
-      <div class="sm-concl">{{ tagConclusion(scoreModal.tag) }}</div>
+      <div class="sm-concl">{{ tagConclusion(tagOf(scoreModal) || '') }}</div>
     </div>
   </div>
 
@@ -376,7 +393,8 @@ function fmtPub(ts: string | number | null): string {
 .score-modal { width: 380px; max-width: 92vw; max-height: 86vh; overflow-y: auto; background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
 .sm-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
 .sm-score { font-size: 34px; font-weight: 700; color: #111; }
-.sm-tag { color: #9A6A2F; font-weight: 600; }
+.sm-tag { color: #9A6A2F; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.sm-mode { font-size: 11px; font-weight: 500; color: var(--ink-3); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 1px 8px; }
 .sm-close { margin-left: auto; border: none; background: none; font-size: 20px; cursor: pointer; color: #888; line-height: 1; }
 .sm-dim { margin-bottom: 12px; }
 .sm-row { display: flex; align-items: baseline; gap: 8px; }

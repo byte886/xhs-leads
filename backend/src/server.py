@@ -52,7 +52,7 @@ IMAGES_DIR = DATA_DIR / "images"
 
 _INTERVAL = (1.0, 1.8)
 
-from src.score import rank_notes, _to_int, passes_entry_gate  # noqa: E402
+from src.score import rank_notes, score_note_hot, _to_int, passes_entry_gate  # noqa: E402
 from src.jsonio import read_json_safe, write_json  # noqa: E402
 from src.browser_client import BrowserLoginRequiredError
 from src.collect_pipeline import (  # noqa: E402
@@ -206,6 +206,9 @@ def _init_tables(con):
         _add_column_if_missing(con, "clients", col, "TEXT")
     # 评分明细（score_info JSON：4 维度得分，卡片右上角分数可解释）；老库补列
     _add_column_if_missing(con, "notes", "score_info", "TEXT")
+    # 第二口径「综合热度」分数与明细：与低粉分同时入库，榜单切换时零重算
+    _add_column_if_missing(con, "notes", "hot_score", "REAL")
+    _add_column_if_missing(con, "notes", "hot_info", "TEXT")
     # 视频克隆：详情页原视频地址（extract.js 提取），供一键克隆下载原视频
     _add_column_if_missing(con, "notes", "video_url", "TEXT")
     # 存草稿（长期保留资产；区别于搜索/采集结果——用完即失效）
@@ -236,7 +239,26 @@ def _init_tables(con):
             pass  # 列已存在
     # 原作品链接（打开原作品跳转）：ALTER 补到末尾，保证新老库列序一致（INSERT 用全列 VALUES）
     _add_column_if_missing(con, "notes", "origin", "TEXT")
+    _backfill_hot_scores(con)
     con.commit()
+
+
+def _backfill_hot_scores(con) -> int:
+    """给入库时还没有第二口径的行补「综合热度」分（幂等，无缺失行时一次 SELECT 即返回）。
+
+    新数据在 _rank_and_insert 里两套分一起写；只有加列之前的历史行需要补，
+    否则按热度排序时这些行 hot_score 为 NULL 会全被排到最后。
+    """
+    rows = con.execute("SELECT * FROM notes WHERE hot_score IS NULL").fetchall()
+    if not rows:
+        return 0
+    for r in rows:
+        d = dict(r)
+        si = score_note_hot(d)
+        con.execute("UPDATE notes SET hot_score=?, hot_info=? WHERE feed_id=?",
+                    (si["score"], json.dumps(si, ensure_ascii=False), d["feed_id"]))
+    con.commit()
+    return len(rows)
 
 
 # ================= 登录 =================
@@ -882,8 +904,19 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
             si = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
                   "dimensions": {"like_fan_ratio": 0.0, "low_fan": 0.0,
                                  "interaction_health": 0.0, "freshness": 0.0}}
+        try:
+            hi = score_note_hot(n)  # 第二口径（综合热度），与低粉分同时入库
+        except Exception:  # noqa: BLE001
+            hi = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
+                  "dimensions": {"like_scale": 0.0, "interaction": 0.0,
+                                 "reach": 0.0, "freshness": 0.0}}
         con.execute(
-            "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO notes (feed_id, keyword, title, note_type, user_id,"
+            " nickname, avatar, cover_url, xsec_token, desc, ip_location, liked_count,"
+            " collected_count, comment_count, shared_count, fans_count, publish_time,"
+            " score, tag, fan_ratio, fetched_at, score_info, video_url, account_id, origin,"
+            " hot_score, hot_info)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
                 n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -895,6 +928,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 si["score"], si["tag"], si["fan_ratio"],
                 now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
                 account_id or "default", n.get("origin", ""),
+                hi["score"], json.dumps(hi, ensure_ascii=False),
             ),
         )
         return True
@@ -1753,6 +1787,9 @@ def _notes_query(keyword: str, tag: str, order: str) -> tuple:
         # 同分用点赞量兜底：粉丝数未知的笔记赞粉比不计分，同分时按绝对热度排，
         # 避免"同分时随机/插入序"看起来像没按分数排。
         sql += " ORDER BY score DESC, liked_count DESC"
+    elif order == "hot":
+        # 第二口径「综合热度」：点赞规模为主，同分仍按绝对点赞兜底。
+        sql += " ORDER BY hot_score DESC, liked_count DESC"
     elif order == "time_asc":
         sql += " ORDER BY fetched_at ASC"  # 过程中：新卡片只往后追加、旧卡不动
     else:
@@ -1762,11 +1799,31 @@ def _notes_query(keyword: str, tag: str, order: str) -> tuple:
 
 
 def _decorate_note(d: dict) -> dict:
-    """补评分明细（库值优先、老数据重算兜底）与本地封面路径。"""
+    """补两套评分明细（库值优先、老数据重算兜底）与本地封面路径。"""
     _attach_score_info(d)
+    _attach_hot_info(d)
     cf = IMAGES_DIR / _img_name(d["feed_id"])
     d["local_cover"] = f"/app/images/{_img_name(d['feed_id'])}" if cf.exists() else ""
     return d
+
+
+def _attach_hot_info(d: dict) -> None:
+    """综合热度明细：优先读库 hot_info JSON；老数据（列为空）用现有字段重算兜底。"""
+    si = None
+    raw = d.get("hot_info")
+    if raw:
+        try:
+            si = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            si = None
+    if not si:
+        try:
+            si = score_note_hot(d)
+        except Exception:  # noqa: BLE001
+            si = None
+    if si:
+        d["hot_info"] = si
+        d["hot_score"] = si["score"]
 
 
 def _attach_score_info(d: dict) -> None:

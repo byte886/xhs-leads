@@ -8,6 +8,7 @@ from src.score import (
     passes_entry_gate,
     rank_notes,
     score_note,
+    score_note_hot,
 )
 
 
@@ -193,3 +194,33 @@ class TestEntryGate:
     @pytest.mark.parametrize("liked", [0, 1, 300, None, ""])
     def test_gate_off_accepts_all(self, liked):
         assert passes_entry_gate(liked, 0) is True
+
+
+class TestHotScore:
+    """第二口径「综合热度」：与低粉潜力并存，面向"什么内容真的火"。"""
+
+    def test_hot_rewards_absolute_popularity(self):
+        # 5000 赞 vs 120 赞：低粉榜里 120 赞/2 万粉会垫底，热度榜里 5000 赞必须在前
+        hot = score_note_hot(_note(liked_count=5000, collected_count=800,
+                                   comment_count=200, shared_count=100, fans_count=0))
+        cold = score_note_hot(_note(liked_count=120, collected_count=10,
+                                    comment_count=2, shared_count=1, fans_count=20000))
+        assert hot["score"] > cold["score"]
+
+    def test_hot_unknown_fans_scores_no_reach(self):
+        # 粉丝数未知：破圈维度必须计 0（没有分母就没有赞粉比）
+        info = score_note_hot(_note(liked_count=1672, fans_count=0))
+        assert info["dimensions"]["reach"] == 0.0
+        assert info["score"] > 0  # 但点赞规模/互动/时效仍能得分，不会被打成 0
+
+    def test_hot_max_score_capped_at_100(self):
+        info = score_note_hot(_note(liked_count=999999, collected_count=99999,
+                                    comment_count=9999, shared_count=9999,
+                                    fans_count=1))
+        assert 0.0 <= info["score"] <= 100.0
+        assert sum(info["dimensions"].values()) == pytest.approx(info["score"], abs=0.3)
+
+    def test_hot_zero_likes_is_low(self):
+        info = score_note_hot(_note(liked_count=0, collected_count=0,
+                                    comment_count=0, shared_count=0, fans_count=100))
+        assert info["score"] < 20

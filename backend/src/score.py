@@ -194,3 +194,87 @@ def rank_notes(notes: list[dict], **kwargs) -> list[dict]:
         ranked.append({**note, "score_info": info})
     ranked.sort(key=lambda n: (-n["score_info"]["score"], -_to_int(n.get("liked_count"))))
     return ranked
+
+
+# ================= 第二口径：综合热度（榜单「按热度」切换用） =================
+# 与上面「低粉潜力」并列的第二套分数，同一批数据算两套，界面按口径切换显示与排序。
+# 面向的问题不同：低粉潜力榜找「值得模仿的小号」，热度榜找「什么内容真的火」。
+HOT_WEIGHTS = {
+    "like_scale": 45.0,     # 点赞规模（对数刻度，6000 赞满分）
+    "interaction": 25.0,    # 互动质量（藏/评/转 相对点赞）
+    "reach": 15.0,          # 破圈能力（赞粉比，粉丝未知不计）
+    "freshness": 15.0,      # 时效性
+}
+
+HOT_THRESHOLDS = {
+    "saturate_like": 6000,  # 点赞 ≥6000 → 点赞规模满分
+    "mid_like": 1000,       # 分段中点：1000 赞 = 30 分
+    "good_engage": 2.0,     # (藏+评×2+转×3)/赞 达到 2.0 → 互动质量满分
+    "reach_full": 1.0,      # 赞粉比达到 1.0 → 破圈满分
+}
+
+
+def _like_scale_score(liked: int, top: int, mid: int) -> float:
+    """点赞规模：分段线性（0-300 / 300-1000 / 1000-6000 / ≥6000 封顶）。
+
+    不用对数刻度：log 会把 700 赞和 6000 赞压得只差十来分，15 分的时效就能反转
+    榜单，用户看到的「热度榜」就不反映绝对规模了。分段线性保证大爆款稳在前列。
+    """
+    cap = HOT_WEIGHTS["like_scale"]
+    if liked <= 0:
+        return 0.0
+    if liked >= top:
+        return cap                                  # ≥6000 赞 → 45
+    if liked >= mid:
+        return cap * 2 / 3 + (cap / 3) * (liked - mid) / (top - mid)   # 1000→30, 6000→45
+    if liked >= 300:
+        return 12.0 + 18.0 * (liked - 300) / (mid - 300)               # 300→12, 1000→30
+    return 12.0 * liked / 300                                          # 0→0, 300→12
+
+
+def _engage_score(liked: int, collected: int, commented: int, shared: int, good: float) -> float:
+    """互动质量：藏+评×2+转×3 相对点赞的比例（评论/转发的平台 CES 权重更高）。"""
+    if liked <= 0:
+        return 0.0
+    engage = (collected + commented * 2 + shared * 3) / liked
+    return min(HOT_WEIGHTS["interaction"], HOT_WEIGHTS["interaction"] * engage / good)
+
+
+def _reach_score(fans: int, liked: int, full: float) -> float:
+    """破圈能力：赞粉比。粉丝数未知时不计分（没有分母就没有比值）。"""
+    if fans <= 0:
+        return 0.0
+    return min(HOT_WEIGHTS["reach"], HOT_WEIGHTS["reach"] * (liked / fans) / full)
+
+
+def score_note_hot(note: dict, now: datetime | None = None) -> dict:
+    """综合热度分（0-100）：点赞规模 45 + 互动质量 25 + 破圈 15 + 时效 15。
+
+    字段口径与 score_note 一致，便于同一套明细弹窗按口径渲染。
+    """
+    t = {**DEFAULT_THRESHOLDS}
+    ht = {**HOT_THRESHOLDS}
+    liked = _to_int(note.get("liked_count"))
+    collected = _to_int(note.get("collected_count"))
+    commented = _to_int(note.get("comment_count"))
+    shared = _to_int(note.get("shared_count"))
+    fans = _to_int(note.get("fans_count"))
+    publish_time = note.get("publish_time")
+
+    like_scale = _like_scale_score(liked, ht["saturate_like"], ht["mid_like"])
+    engage = _engage_score(liked, collected, commented, shared, ht["good_engage"])
+    reach = _reach_score(fans, liked, ht["reach_full"])
+    fresh = _fresh_score(_days_since(publish_time, now), t["fresh_days"])
+    fan_ratio = (liked / fans) if fans > 0 else 0.0
+
+    return {
+        "score": round(like_scale + engage + reach + fresh, 1),
+        "tag": _pick_tag(liked, fan_ratio, fans, t),
+        "fan_ratio": round(fan_ratio, 4),
+        "dimensions": {
+            "like_scale": round(like_scale, 1),
+            "interaction": round(engage, 1),
+            "reach": round(reach, 1),
+            "freshness": round(fresh, 1),
+        },
+    }

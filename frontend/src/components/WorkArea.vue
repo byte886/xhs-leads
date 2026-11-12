@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { appState, toast } from '../store'
 import type { Note, Author } from '../types'
-import { apiAuthors } from '../api'
+import { apiAuthors, apiNotes } from '../api'
 import CardGrid from './CardGrid.vue'
 
 const emit = defineEmits<{
@@ -45,6 +45,20 @@ async function showAuthors() {
 
 function showNotes() {
   view.value = 'notes'
+}
+
+/** 榜单口径切换：后端两套分数都已入库，这里只换排序并重载列表 */
+async function setRankMode(mode: 'lowfan' | 'hot') {
+  if (appState.rankMode === mode) return
+  appState.rankMode = mode
+  try {
+    const res = await apiNotes('', mode === 'hot' ? 'hot' : 'score')
+    appState.notes = res.notes
+    appState.total = res.total
+    appState.count = res.total
+  } catch {
+    toast('切换榜单口径失败：后端未就绪', 'error')
+  }
 }
 
 /** 点作者：切回笔记视图并按昵称过滤，只显示该作者的笔记（筛选提示防误导） */
@@ -106,6 +120,20 @@ function pickAuthor(a: Author) {
           <div class="view-switch">
             <button class="vs-btn" :class="{ on: view === 'notes' }" @click="showNotes">笔记 {{ appState.notes.length }}</button>
             <button class="vs-btn" :class="{ on: view === 'authors' }" @click="showAuthors">作者榜</button>
+          </div>
+          <div v-if="view === 'notes'" class="rank-switch" title="切换榜单口径">
+            <button
+              class="rs-btn"
+              :class="{ on: appState.rankMode === 'lowfan' }"
+              @click="setRankMode('lowfan')"
+              title="低粉潜力：找值得模仿的小号（赞粉比 + 低粉权重为主）"
+            >低粉潜力</button>
+            <button
+              class="rs-btn"
+              :class="{ on: appState.rankMode === 'hot' }"
+              @click="setRankMode('hot')"
+              title="综合热度：找什么内容真的火（点赞规模 + 互动质量为主）"
+            >综合热度</button>
           </div>
           <input v-model="filterText" placeholder="搜索标题或作者名，多个词用空格分隔" class="toolbar-filter" />
           <button v-if="filterText" class="vs-btn" style="white-space:nowrap" @click="filterText = ''" title="清除筛选">× 清除</button>
@@ -189,6 +217,25 @@ function pickAuthor(a: Author) {
   background: #fff;
   color: var(--ink-1, #111);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  font-weight: 600;
+}
+/* 榜单口径（低粉潜力 / 综合热度）：与视图切换并排，视觉上用描边区分，避免两个同款分段控件混淆 */
+.rank-switch { display: inline-flex; gap: 6px; flex: none; }
+.rs-btn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.rs-btn.on {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-soft);
   font-weight: 600;
 }
 .author-grid {

@@ -42,6 +42,19 @@ export interface Note {
       freshness: number
     }
   }
+  /** 第二口径「综合热度」：与低粉分同时入库，榜单切换时按它排序与显示 */
+  hot_score?: number
+  hot_info?: {
+    score: number
+    tag: string
+    fan_ratio: number
+    dimensions: {
+      like_scale: number
+      interaction: number
+      reach: number
+      freshness: number
+    }
+  }
 }
 
 export interface SearchParams {
