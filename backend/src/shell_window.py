@@ -256,7 +256,6 @@ async def _ensure_shell_title(page) -> None:
 # 注：`/website-login` 实测会跳到 oia.xiaohongshu.com/oia（营销页），不可用。
 XHS_LOGIN_URL = "https://www.xiaohongshu.com/login"
 
-#   waiting_overlay / remove_waiting_overlay（登录成功过渡遮罩/移除）
 #   active_close（主动重登「✕」，__BASE__ 占位符调用方替换）
 #   force_login / login_fit（原 login_guard 局部 JS，见函数体）
 
@@ -945,19 +944,15 @@ async def _guard_monitor_voluntary(win: "ShellWindow", base: str, cs, state) -> 
 
 
 async def _guard_handle_id_token(win, base, cs, state) -> bool | None:
-    """捕获到 id_token 分支（等待遮罩→导入验证→成功/回退）。"""
-    try:
-        await injections.inject_once(win.page, "waiting_overlay")
-    except Exception:  # noqa: BLE001
-        pass
+    """捕获到 id_token 分支：通知后端验证，成功返回 True，否则继续监视。
+
+    这里不再往登录页上盖任何过渡遮罩（用户拍板：不要「登录成功，正在进入
+    工作台…」这种提示框，登录成功的反馈由窗口自己跳转完成）。
+    """
     if await _guard_try_notify_login(win, base, cs, state):
         log.info("登录成功，Cookie 已注入引擎，返回 APP")
         return True
     log.info("已捕获登录 Cookie 但引擎验证未通过")
-    try:
-        await win.evaluate_js(injections.get("remove_waiting_overlay"))
-    except Exception:  # noqa: BLE001
-        pass
     return None
 
 

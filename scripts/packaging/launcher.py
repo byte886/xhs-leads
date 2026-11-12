@@ -45,7 +45,7 @@ _WINDOW_W, _WINDOW_H = 1280, 800  # 壳窗口初始尺寸（与引擎视口一�
 # R-6.31c：以下 JS 曾在此处维护死拷贝（_WAITING_OVERLAY_JS / _REMOVE_WAITING_OVERLAY_JS /
 # _ACTIVE_CLOSE_JS / XHS_LOGIN_URL），launcher 体内从未引用（grep 仅命中定义行）。
 # 单一事实源 = backend/src/injections.py 注册表：
-#   waiting_overlay / remove_waiting_overlay / active_close（login_guard 为唯一注入点）；
+#   active_close（login_guard 为唯一注入点）；
 #   登录 URL 由 shell_window.login_guard 持有。本文件不再保留副本，避免双写漂移。
 
 

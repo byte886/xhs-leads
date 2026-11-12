@@ -172,49 +172,6 @@ _register(
          "（含守卫导航到小红书登录页）自动生效。",
 )
 
-# ---- 4. 登录成功过渡遮罩（id_token 出现时注入） ----
-_WAITING_OVERLAY_JS = r"""(() => {
-  if (document.getElementById('xhs-leads-waiting')) return;
-  const d = document.createElement('div');
-  d.id = 'xhs-leads-waiting';
-  d.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;'
-    + 'background:rgba(255,255,255,.55);backdrop-filter:blur(2px);'
-    + 'z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;'
-    + 'font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;';
-  const st = document.createElement('style');
-  st.textContent = '@keyframes xhs-leads-spin{to{transform:rotate(360deg)}}';
-  const t = document.createElement('div');
-  t.textContent = '登录成功，正在进入工作台…';
-  t.style.cssText = 'font-size:18px;color:#333;background:rgba(255,255,255,.92);'
-    + 'padding:10px 20px;border-radius:10px;margin-bottom:16px;letter-spacing:1px;'
-    + 'box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  const s = document.createElement('div');
-  s.style.cssText = 'width:26px;height:26px;border:3px solid #ff2442;border-top-color:transparent;'
-    + 'border-radius:50%;animation:xhs-leads-spin 1s linear infinite;background:rgba(255,255,255,.92);'
-    + 'padding:4px;background-clip:content-box;box-shadow:0 2px 12px rgba(0,0,0,.12);';
-  d.appendChild(st); d.appendChild(t); d.appendChild(s);
-  document.body.appendChild(d);
-})()"""
-_register(
-    "waiting_overlay",
-    _WAITING_OVERLAY_JS,
-    kind="evaluate",
-    note="登录成功遮罩。JS 内部按 DOM id 防重；login_guard 监视循环每 0.3s 重复 evaluate，"
-         "现走 inject_once（window.__xhs_injected 标记）跳过重复注入——新文档（导航后）"
-         "标记自然重置，重新注入时机不变。",
-)
-
-# ---- 5. 移除登录成功过渡遮罩 ----
-_REMOVE_WAITING_OVERLAY_JS = (
-    "(() => { const e = document.getElementById('xhs-leads-waiting'); if (e) e.remove(); })()"
-)
-_register(
-    "remove_waiting_overlay",
-    _REMOVE_WAITING_OVERLAY_JS,
-    kind="evaluate",
-    note="一次性动作（按 id 移除），每次调用语义明确，不走 inject_once。",
-)
-
 # ---- 6. 主动重登「✕」关闭按钮（模板：__BASE__ 由调用方替换回 APP 地址） ----
 _ACTIVE_CLOSE_JS = (
     "(function(){if(window.__xhs_leads_active_close)return;window.__xhs_leads_active_close=true;"
