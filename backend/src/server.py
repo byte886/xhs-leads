@@ -1195,15 +1195,6 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
 # 「需要登录」与「采满」一样是终止条件；要接着采就重新发起一次采集。
 
 
-def _collect_seen_ids(con) -> set:
-    """已入库的笔记 ID 集合——同批候选去重用。"""
-    try:
-        rows = con.execute("SELECT feed_id FROM notes").fetchall()
-        return {r[0] for r in rows if r and r[0]}
-    except Exception:  # noqa: BLE001（表未建/查询失败：按空集处理）
-        return set()
-
-
 def _collect_begin_round(state: dict) -> None:
     """采集开始前的阶段重置。"""
     state["phase"] = "search"
@@ -1295,16 +1286,16 @@ async def _collect_round(state: dict, req, ctx: dict, account_id: str):
 
 
 async def _collect_enrich_candidates(state: dict, ctx: dict, candidates: list) -> None:
-    """逐条补详情 → 评分 → 入库：跳过续采已入库，用户停止即中断剩余。"""
-    seen = _collect_seen_ids(ctx["con"])
+    """逐条补详情 → 评分 → 入库；用户停止即中断剩余。
+
+    不做「已入库就跳过」的去重：点开始采集前 /api/collect_clear 已清空 notes，
+    每批都是全新一批，续采跳过在标准流程下永不命中（用户拍板删除）。
+    """
     state["phase"] = "enrich"
     emit_collect(state)  # 搜索转补全：立刻推一次，别让状态条卡在「已扫描 N 张」20 秒不动
     for item in candidates:
         if state["stop_event"]:
             break  # 停止：立即中断；已处理入库的保留，未处理的丢弃（所见即所得）
-        fid = item.get("feed_id")
-        if fid and fid in seen:
-            continue  # 续采：跳过已入库，只补中断后缺的那些
         await _collect_one(item, state, ctx)
 
 

@@ -4,7 +4,6 @@
 并立刻推事件让左窗知道，不再挂起等待、不再续采。
 """
 import asyncio
-import sqlite3
 from types import SimpleNamespace
 
 from src import server
@@ -27,20 +26,6 @@ def _state(saved: int = 0, limit: int = 3):
         "status": "running", "phase": "detail", "collected": saved, "saved": saved,
         "partial_items": [], "keyword": "翡翠", "limit": limit,
     }
-
-
-# --------------------------------------------------------- 断点事实源（保留）
-
-def test_seen_ids_reads_notes_table():
-    con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE notes (feed_id TEXT PRIMARY KEY)")
-    con.execute("INSERT INTO notes VALUES ('a')")
-    assert server._collect_seen_ids(con) == {"a"}
-
-
-def test_seen_ids_returns_empty_on_broken_table():
-    """表缺失/查询失败不得中断采集，按空集处理。"""
-    assert server._collect_seen_ids(sqlite3.connect(":memory:")) == set()
 
 
 # --------------------------------------------------------- 撞墙即结束
