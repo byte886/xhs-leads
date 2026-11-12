@@ -280,19 +280,28 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 /* Medium（600–839）：宽度不足以并排，转上下结构——上条件、下结果。
    min-height 兜底：窗口再矮也不把上面板压成一条 */
 @media (max-width: 839px) {
-  .workbench { flex-direction: column; }
+  /* 堆叠档的滚动分工（Windows 1280×800 实测 bug 修复）：
+     旧写法让 .panel 带 max-height:42vh 却保留全局 overflow:auto，矮窗口下面板
+     内容（343px）超过可视高（293px）→ 面板自己滚一条；.work 又 overflow:auto
+     滚一条，同一窗口出现两条竖滚动条，且「开始采集」按钮被面板滚动挤出可视区。
+     现在堆叠档只留**一条**滚动条：整块 workbench 作为唯一滚动容器，面板与结果区
+     都不自滚，面板按内容自然撑开（按钮始终完整可见），结果区随内容延展。 */
+  .workbench { flex-direction: column; overflow-y: auto; overflow-x: hidden; }
   .panel {
     width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--line);
-    height: auto; min-height: 132px; max-height: 42vh; flex: none;
+    height: auto; min-height: 132px; max-height: none; flex: none;
+    overflow: visible;
   }
+  .work { flex: none; min-height: 0; overflow: visible; }
   .publish { padding: 16px; }
 }
 
 /* Compact（<600）：窗口被拖到最小尺寸时的最后一道兜底。
-   压缩外层内边距，保住结果区至少一列卡片不溢出 */
+   压缩外层内边距，保住结果区至少一列卡片不溢出。
+   不再给面板 max-height —— 那会重新把面板变成第二个滚动区（同上） */
 @media (max-width: 599px) {
   .app-shell > .flow-wrap { padding: 8px 10px; }
-  .panel { padding: 10px; gap: 10px; max-height: 46vh; }
+  .panel { padding: 10px; gap: 10px; }
   .work { padding: 0 8px 8px; }
 }
 
