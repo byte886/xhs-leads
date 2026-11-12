@@ -24,51 +24,9 @@ const timeOptions = ['不限', '一天内', '一周内', '半年内']
 const scopeOptions = ['不限', '已看过', '未看过', '已关注']
 const distanceOptions = ['不限', '同城', '附近']
 
-/** 选项类筛选默认收起（常用输入置顶一行，选项展开后两行内选完） */
-const showFilters = ref(false)
-
 /**筛选没生效时的用户提示。位置距离组（同城/附近）依赖浏览器定位，
  *  失败必须让人看得见——否则结果不对却毫无反馈，比报错更难排查。 */
 const filterWarning = ref('')
-
-/** 已选 chips 折叠阈值：>3 个折叠为「+N」，保持面板高度可预测（参考 Marigold/TDesign） */
-const CHIP_LIMIT = 3
-const chipsExpanded = ref(false)
-
-/** 筛选条件结构化（维度 key + 展示文本），供 chips 渲染与单条件移除 */
-function filterItems(): { key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance'; label: string }[] {
-  const p = appState.params
-  const items: { key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance'; label: string }[] = []
-  if (p.sort && p.sort !== '综合') items.push({ key: 'sort', label: `排序·${p.sort}` })
-  if (p.noteType && p.noteType !== '全部') items.push({ key: 'noteType', label: `类型·${p.noteType}` })
-  if (p.timeRange && p.timeRange !== '不限') items.push({ key: 'timeRange', label: `时间·${p.timeRange}` })
-  if (p.scope && p.scope !== '不限') items.push({ key: 'scope', label: `范围·${p.scope}` })
-  if (p.distance && p.distance !== '不限') items.push({ key: 'distance', label: `距离·${p.distance}` })
-  return items
-}
-
-/** chips 展示子集：折叠时只显示前 CHIP_LIMIT 个 */
-function shownFilters() {
-  return chipsExpanded.value ? filterItems() : filterItems().slice(0, CHIP_LIMIT)
-}
-
-/** 各维度默认值（未选状态） */
-const filterDefaults: Record<'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance', string> = {
-  sort: '综合', noteType: '全部', timeRange: '不限', scope: '不限', distance: '不限'
-}
-
-/** 单个 chip ×：直接移除该条件，无需重开面板 */
-function removeFilter(key: 'sort' | 'noteType' | 'timeRange' | 'scope' | 'distance') {
-  appState.params[key] = filterDefaults[key]
-}
-
-/** 清除全部：一键重置所有筛选维度 */
-function clearFilters() {
-  for (const k of Object.keys(filterDefaults) as ('sort' | 'noteType' | 'timeRange' | 'scope' | 'distance')[]) {
-    appState.params[k] = filterDefaults[k]
-  }
-  chipsExpanded.value = false
-}
 
 /** 结果上限步进：±1，clamp 1–200（输入框仍可自由输入） */
 function stepLimit(d: number) {
@@ -315,71 +273,50 @@ onMounted(async () => {
       />
     </div>
 
-    <!-- 结果上限 + 筛选条件：同一行 -->
-    <div class="param-row">
+    <!-- 结果上限：独占一行，右侧标出合法区间 -->
+    <div class="limit-line">
       <div class="param param-num">
         <span class="num-label">上限</span>
         <button class="num-step" type="button" @click="stepLimit(-1)">−</button>
         <input v-model.number="appState.params.limit" type="number" min="1" max="200" />
         <button class="num-step" type="button" @click="stepLimit(1)">+</button>
       </div>
-
-      <!-- 筛选条件：独立按钮（展开/收起面板）+ 已选 chips 区（每项可单独 × 移除） -->
-      <div class="filters-line" :class="{ open: showFilters }" @click="showFilters = !showFilters">
-        <span class="fl-label">筛选条件</span>
-        <span class="fl-count">{{ filterItems().length ? `已选 ${filterItems().length} 项` : '未设置' }}</span>
-        <span class="fl-arrow">▾</span>
-      </div>
+      <span class="limit-hint">1–200 条</span>
     </div>
 
-      <!-- 已选条件 chips：浅金胶囊、尾部 × 单个移除；>3 个折叠为 +N；可一键清除全部 -->
-      <div v-if="filterItems().length" class="chips-area">
-        <button v-for="f in shownFilters()" :key="f.key" class="chip" type="button" @click.stop="removeFilter(f.key)">
-          <span class="chip-label">{{ f.label }}</span><span class="chip-x">×</span>
-        </button>
-        <button v-if="filterItems().length > CHIP_LIMIT && !chipsExpanded" class="chip chip-more" type="button" @click.stop="chipsExpanded = true">
-          +{{ filterItems().length - CHIP_LIMIT }}
-        </button>
-        <button v-else-if="filterItems().length > CHIP_LIMIT" class="chip chip-more" type="button" @click.stop="chipsExpanded = false">
-          收起
-        </button>
-        <button class="chip-clear" type="button" @click.stop="clearFilters()">清除全部</button>
+    <!-- 筛选条件：全部平铺不折叠（侧栏一行一个；面板变宽或上下排列时按列宽自动换行） -->
+    <div class="opt-grid">
+      <div class="param">
+        <label>搜索排序</label>
+        <select v-model="appState.params.sort" style="width:100%">
+          <option v-for="s in sortOptions" :key="s">{{ s }}</option>
+        </select>
       </div>
-
-      <div v-if="showFilters" class="opt-area">
-        <div class="opt-grid">
-          <div class="param">
-            <label>搜索排序</label>
-            <select v-model="appState.params.sort" style="width:100%">
-              <option v-for="s in sortOptions" :key="s">{{ s }}</option>
-            </select>
-          </div>
-          <div class="param">
-            <label>发布时间</label>
-            <select v-model="appState.params.timeRange" style="width:100%">
-              <option v-for="t in timeOptions" :key="t">{{ t }}</option>
-            </select>
-          </div>
-          <div class="param">
-            <label>笔记类型</label>
-            <select v-model="appState.params.noteType" style="width:100%">
-              <option v-for="t in typeOptions" :key="t">{{ t }}</option>
-            </select>
-          </div>
-          <div class="param">
-            <label>搜索范围</label>
-            <select v-model="appState.params.scope" style="width:100%">
-              <option v-for="t in scopeOptions" :key="t">{{ t }}</option>
-            </select>
-          </div>
-          <div class="param">
-            <label>位置距离</label>
-            <select v-model="appState.params.distance" style="width:100%">
-              <option v-for="t in distanceOptions" :key="t">{{ t }}</option>
-            </select>
-          </div>
-        </div>
+      <div class="param">
+        <label>发布时间</label>
+        <select v-model="appState.params.timeRange" style="width:100%">
+          <option v-for="t in timeOptions" :key="t">{{ t }}</option>
+        </select>
       </div>
+      <div class="param">
+        <label>笔记类型</label>
+        <select v-model="appState.params.noteType" style="width:100%">
+          <option v-for="t in typeOptions" :key="t">{{ t }}</option>
+        </select>
+      </div>
+      <div class="param">
+        <label>搜索范围</label>
+        <select v-model="appState.params.scope" style="width:100%">
+          <option v-for="t in scopeOptions" :key="t">{{ t }}</option>
+        </select>
+      </div>
+      <div class="param">
+        <label>位置距离</label>
+        <select v-model="appState.params.distance" style="width:100%">
+          <option v-for="t in distanceOptions" :key="t">{{ t }}</option>
+        </select>
+      </div>
+    </div>
 
       <!--筛选未生效提示（位置距离组依赖浏览器定位，失败不能静默） -->
       <div v-if="filterWarning" class="filter-warn" role="alert">
@@ -467,89 +404,9 @@ onMounted(async () => {
 .num-step:hover { background: #e8e8e8; color: #111; }
 .num-step:active { background: #ddd; }
 
-/* 筛选条件：与「上限」并排占满剩余宽度（点击整条区域展开/收起选项） */
-.filters-line {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #d9d9d9;
-  background: #fff;
-  border-radius: 7px;
-  padding: 6px 8px;
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
-  user-select: none;
-}
-.filters-line:hover { border-color: #e0b36b; box-shadow: 0 1px 4px rgba(224, 179, 107, .25); }
-.filters-line.open { border-color: #e0b36b; background: #fffaf0; }
-.fl-label { flex-shrink: 0; font-size: 12px; color: #666; font-weight: 600; }
-/* 已选数量/未设置提示：弹性占位，把箭头顶到右侧 */
-.fl-count { flex: 1; min-width: 0; text-align: left; font-size: 11px; color: #b08a4d; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 醒目倒三角：金色底胶囊按钮，一眼可点 */
-.fl-arrow {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #f6e6c8;
-  color: #a5651f;
-  border-radius: 5px;
-  font-size: 12px;
-  line-height: 1;
-  transition: background 0.15s, transform 0.15s;
-}
-.filters-line:hover .fl-arrow { background: #e0b36b; color: #fff; }
-.filters-line.open .fl-arrow { background: #e0b36b; color: #fff; transform: rotate(180deg); }
-
-/* 已选条件 chips 区：浅金胶囊、自动换行、每项可单独移除 */
-.chips-area {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  margin-top: 8px;
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: #8a6420;
-  background: #fdf3e0;
-  border: 1px solid #e8d5ac;
-  border-radius: 999px;
-  padding: 3px 8px;
-  cursor: default;
-  transition: border-color 0.15s, background 0.15s;
-}
-.chip:hover { border-color: #e0b36b; background: #fdecc9; }
-.chip-x {
-  cursor: pointer;
-  color: #a5651f;
-  font-weight: 700;
-  font-size: 13px;
-  line-height: 1;
-  padding: 0 1px;
-  border-radius: 50%;
-}
-.chip-x:hover { color: #c2410c; background: rgba(194, 65, 12, .12); }
-.chip-more { cursor: pointer; background: #fff; border: 1px dashed #d9c79a; color: #a5651f; font-weight: 600; }
-.chip-more:hover { border-color: #e0b36b; background: #fffaf0; }
-.chip-clear {
-  cursor: pointer;
-  font-size: 11px;
-  color: #999;
-  background: none;
-  border: none;
-  padding: 3px 2px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.chip-clear:hover { color: #c2410c; }
+/* 结果上限行：步进器靠左、右侧标出合法区间，避免整行只有一个小控件显得空 */
+.limit-line { display: flex; align-items: center; gap: 8px; }
+.limit-hint { margin-left: auto; font-size: 11px; color: #999; white-space: nowrap; }
 
 /* 开始采集：独立整行 */
 /*筛选未生效提示：琥珀底（区别于错误红与常规金），不抢主按钮 */
@@ -587,11 +444,10 @@ onMounted(async () => {
 .btn-search.stop { background: #333; }
 .btn-search.stop:hover { background: #111; }
 
-/* 选项区：两行内选完 */
-.opt-area { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+/* 筛选条件全部平铺：侧栏一行一个（每个下拉独占一行，选得清） */
 .opt-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 .opt-grid .param label { font-size: 11px; color: var(--ink-2); display: block; margin-bottom: 3px; }
@@ -626,8 +482,9 @@ onMounted(async () => {
 @keyframes btn-spin {
   to { transform: rotate(360deg); }
 }
-/* 极小视口（换小屏/窄窗口兜底）：筛选选项区改 2 列，避免过挤 */
-@media (max-width: 700px) {
-  .opt-grid { grid-template-columns: repeat(2, 1fr); }
+/* 上下排列（面板横跨整宽，见 style.css 的 839px 断点）：筛选按列宽自动换行，
+   一行排 2~3 个，窗口再窄自然回落到 1 个 */
+@media (max-width: 839px) {
+  .opt-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
 </style>
