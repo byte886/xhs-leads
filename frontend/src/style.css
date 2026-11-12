@@ -121,6 +121,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
   color: #fff; font-size: 26px; font-weight: 600;
 }
 .card .badge-note { position: absolute; top: 8px; left: 8px; font-size: 10px; background: rgba(0,0,0,.55); color: #fff; border-radius: 4px; padding: 2px 6px; }
+/* 实况图（动图）标记：与视频/普通图文区分开，但仍属图文链路（可克隆/可导出/可打包） */
+.card .badge-note.live { background: rgba(255,196,0,.92); color: #3d2c00; font-weight: 600; }
 .card .check {
   flex: none; width: 20px; height: 20px; border-radius: 5px;
   background: rgba(255,255,255,.9); border: 1.5px solid #BBB; display: none;

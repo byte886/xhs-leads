@@ -62,10 +62,10 @@ describe('saveTextToPath', () => {
 describe('saveZipToPath', () => {
   it('提交 feed_ids 与目标路径，回传缺失清单', async () => {
     const f = mockFetch(() => json({
-      ok: true, path: '/tmp/i.zip', bytes: 10, count: 2, missing: ['f3'], overwrote: false,
+      ok: true, path: '/tmp/i.zip', bytes: 10, count: 2, live: 0, missing: ['f3'], overwrote: false,
     }))
     await expect(saveZipToPath(['f1', 'f2', 'f3'], '/tmp/i.zip')).resolves.toEqual({
-      ok: true, path: '/tmp/i.zip', bytes: 10, count: 2, missing: ['f3'], overwrote: false,
+      ok: true, path: '/tmp/i.zip', bytes: 10, count: 2, live: 0, missing: ['f3'], overwrote: false,
     })
     expect(JSON.parse(String(f.mock.calls[0][1]?.body))).toEqual({
       feed_ids: ['f1', 'f2', 'f3'], save_path: '/tmp/i.zip',

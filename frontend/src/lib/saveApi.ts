@@ -50,6 +50,8 @@ export interface ZipSaveResult {
   path: string
   bytes: number
   count: number
+  /** 随包附带的动图原片段数（实况图才有，普通图文为 0） */
+  live: number
   missing: string[]
   overwrote: boolean
 }

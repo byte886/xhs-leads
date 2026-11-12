@@ -201,6 +201,10 @@ def _merge_detail_core(note: dict, d: dict) -> None:
     note["detail_imgs"] = d.get("imgs", [])
     # 视频原地址（视频克隆下载用；图文笔记恒空）
     note["video_url"] = d.get("video_url", "")
+    # 实况图（动图，页面上的 LIVE 角标）：类型仍是图文，单独记张数与原片地址，
+    # 供卡片标记「动图」、图片包/克隆附带那几段 3 秒 mp4。
+    note["live_photo"] = int(d.get("live_photo") or 0)
+    note["live_videos"] = d.get("live_videos") or []
 
 
 def _merge_detail_interactions(note: dict, d: dict) -> None:
@@ -284,14 +288,17 @@ def init_db(path: Path) -> sqlite3.Connection:
             fetched_at TEXT,
             score_info TEXT,
             video_url TEXT,
-            origin TEXT
+            origin TEXT,
+            live_photo INTEGER,
+            live_videos TEXT
         )
     """)
-    # 老库（23 列）幂等补 origin，保证全列 INSERT 列数一致
-    try:
-        con.execute("ALTER TABLE notes ADD COLUMN origin TEXT")
-    except sqlite3.OperationalError:
-        pass  # 列已存在
+    # 老库（23 列）幂等补列，保证全列 INSERT 列数一致
+    for _col, _typ in (("origin", "TEXT"), ("live_photo", "INTEGER"), ("live_videos", "TEXT")):
+        try:
+            con.execute(f"ALTER TABLE notes ADD COLUMN {_col} {_typ}")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
     return con
 
 
@@ -309,7 +316,7 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
     """CLI 落库单条（评分字段来自 n['score_info']）。"""
     si = n["score_info"]
     con.execute(
-        "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
             n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -320,6 +327,8 @@ def _upsert_note(con: sqlite3.Connection, n: dict, keyword: str, now: str) -> No
             si["score"], si["tag"], si["fan_ratio"],
             now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
             n.get("origin", ""),
+            int(n.get("live_photo") or 0),
+            json.dumps(n.get("live_videos") or [], ensure_ascii=False),
         ),
     )
     con.commit()

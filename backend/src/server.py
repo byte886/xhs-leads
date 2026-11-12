@@ -213,6 +213,9 @@ def _init_tables(con):
     _add_column_if_missing(con, "notes", "hot_info", "TEXT")
     # 视频克隆：详情页原视频地址（extract.js 提取），供一键克隆下载原视频
     _add_column_if_missing(con, "notes", "video_url", "TEXT")
+    # 实况图（动图，页面 LIVE 角标）：类型仍是图文，单独记张数与原片地址（JSON 数组）
+    _add_column_if_missing(con, "notes", "live_photo", "INTEGER")
+    _add_column_if_missing(con, "notes", "live_videos", "TEXT")
     # 存草稿（长期保留资产；区别于搜索/采集结果——用完即失效）
     con.execute("""
         CREATE TABLE IF NOT EXISTS drafts (
@@ -911,8 +914,8 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
             " nickname, avatar, cover_url, xsec_token, desc, ip_location, liked_count,"
             " collected_count, comment_count, shared_count, fans_count, publish_time,"
             " score, tag, fan_ratio, fetched_at, score_info, video_url, account_id, origin,"
-            " hot_score, hot_info)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " hot_score, hot_info, live_photo, live_videos)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
                 n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -925,6 +928,8 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
                 account_id or "default", n.get("origin", ""),
                 hi["score"], json.dumps(hi, ensure_ascii=False),
+                int(n.get("live_photo") or 0),
+                json.dumps(n.get("live_videos") or [], ensure_ascii=False),
             ),
         )
         return True
@@ -1935,6 +1940,40 @@ def _pack_feed_images(zf, con, fid: str, missing: list) -> None:
     missing.append(fid)
 
 
+def _pack_live_videos(zf, con, fid: str) -> int:
+    """实况图（动图）原片入包：按库内 live_videos 下载那几段 3 秒 mp4，与图片同包交付。
+
+    动图原片是 sns-video CDN 上的真实 mp4（详情页那个 blob: 只是本地播放地址，不可下载）。
+    本地已缓存则直接复用；单段失败跳过，不影响整包。返回成功入包段数。
+    """
+    try:
+        row = con.execute("SELECT live_videos FROM notes WHERE feed_id = ?", (fid,)).fetchone()
+        urls = json.loads((row["live_videos"] if row else "") or "[]")
+    except Exception:  # noqa: BLE001
+        return 0
+    if not isinstance(urls, list) or not urls:
+        return 0
+    prefix = fid.replace("#", "_")
+    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    packed = 0
+    for i, url in enumerate(urls[:9]):
+        dest = VIDEOS_DIR / f"{prefix}_live{i}.mp4"
+        try:
+            if not dest.exists():
+                reqh = urllib.request.Request(
+                    url,
+                    headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
+                )
+                with urllib.request.urlopen(reqh, timeout=30) as resp:
+                    dest.write_bytes(resp.read())
+            if dest.exists() and dest.stat().st_size >= 1024:
+                zf.write(dest, arcname=dest.name)
+                packed += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return packed
+
+
 @app.post("/api/download_images")
 def download_images(req: DownloadImgsReq):
     """打包选中笔记的本地图片为 zip，直接以文件流返回（不落盘）。
@@ -1948,11 +1987,13 @@ def download_images(req: DownloadImgsReq):
     if not req.feed_ids:
         raise HTTPException(400, "没有选中的笔记")
     missing: list[str] = []
+    live_packed = 0
     con = _db()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fid in req.feed_ids:
             _pack_feed_images(zf, con, fid, missing)
+            live_packed += _pack_live_videos(zf, con, fid)
     data = buf.getvalue()
     if not data:
         raise HTTPException(400, "所选笔记没有可打包的图片")
@@ -1970,6 +2011,7 @@ def download_images(req: DownloadImgsReq):
             "bytes": len(data),
             "missing": missing,
             "count": len(req.feed_ids) - len(missing),
+            "live": live_packed,
             "overwrote": existed,
         }
     headers = {"Content-Disposition": f'attachment; filename="{fname}"'}

@@ -47,8 +47,19 @@ function onImgError(note: Note) {
   }, 4000)
 }
 
-function phStyle(note: Note): Record<string, string> {
-  const palette = ['#9A6A2F', '#7B8C6B', '#B4553D', '#5A7D8C', '#8C6B7B']
+/** 动图原片地址：后端把 live_videos 存成 JSON 串，导出前统一解析成数组。 */
+function liveVideosOf(note: Note): string[] {
+  const raw = note.live_videos
+  if (Array.isArray(raw)) return raw
+  try {
+    const v = JSON.parse(raw || '[]')
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
+  }
+}
+
+function phStyle(note: Note): Record<string, string> {  const palette = ['#9A6A2F', '#7B8C6B', '#B4553D', '#5A7D8C', '#8C6B7B']
   let h = 0
   for (const ch of note.feed_id || '') h = (h * 31 + ch.charCodeAt(0)) % 997
   return { background: palette[h % palette.length] }
@@ -103,9 +114,12 @@ async function downloadImages() {
   if (!path) return
   try {
     const r = await saveZipToPath(ids, path)
-    const base = `已保存 ${r.count} 张图片到 ${shortPath(r.path)}`
-    const extra = [r.missing.length ? `${r.missing.length} 张缺失` : '', r.overwrote ? '覆盖了同名文件' : '']
-      .filter(Boolean).join('，')
+    const base = `已保存 ${r.count} 条笔记的图片到 ${shortPath(r.path)}`
+    const extra = [
+      r.live ? `含 ${r.live} 段动图原片` : '',
+      r.missing.length ? `${r.missing.length} 条缺失` : '',
+      r.overwrote ? '覆盖了同名文件' : '',
+    ].filter(Boolean).join('，')
     toast(extra ? `${base}（${extra}）` : base)
   } catch (e) {
     toast('打包失败：' + (e as Error).message, 'error')
@@ -115,6 +129,8 @@ async function downloadImages() {
 async function exportJSON() {
   const data = props.notes.map(n => ({
     feed_id: n.feed_id, title: n.title, nickname: n.nickname,
+    note_type: n.note_type, live_photo: n.live_photo || 0,
+    live_videos: liveVideosOf(n),
     liked_count: n.liked_count, collected_count: n.collected_count,
     comment_count: n.comment_count, desc: n.desc, cover_url: n.cover_url,
     origin: noteUrl(n.feed_id, n.xsec_token)
@@ -131,11 +147,13 @@ async function exportJSON() {
 
 async function exportCSV() {
   const rows = props.notes.map(n => [
-    n.title || '', n.nickname || '', n.liked_count || 0,
+    n.title || '', n.nickname || '',
+    n.note_type === 'video' ? '视频' : ((n.live_photo || 0) > 0 ? `图文·动图(${n.live_photo})` : '图文'),
+    n.liked_count || 0,
     n.collected_count || 0, n.comment_count || 0,
     n.desc ? n.desc.replace(/[\r\n]+/g, ' ') : ''
   ])
-  const csv = ['标题,作者,点赞,收藏,评论,正文摘要', ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
+  const csv = ['标题,作者,类型,点赞,收藏,评论,正文摘要', ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
   const path = await saveDialog.value?.open(`xhs_notes_${Date.now()}.csv`)
   if (!path) return
   try {
@@ -268,7 +286,11 @@ function fmtPub(ts: string | number | null): string {
           @error="onImgError(note)"
         />
         <div v-else class="ph" :style="phStyle(note)">{{ (note.title || '图')[0] }}</div>
-        <span class="badge-note">{{ note.note_type === 'video' ? '视频' : '图文' }}</span>
+        <!-- 类型角标：视频 / 图文；实况图（页面 LIVE 角标）额外标「动图」，它仍走图文链路 -->
+        <span
+          class="badge-note"
+          :class="{ live: note.note_type !== 'video' && (note.live_photo || 0) > 0 }"
+        >{{ note.note_type === 'video' ? '视频' : ((note.live_photo || 0) > 0 ? `图文 · 动图 ${note.live_photo}` : '图文') }}</span>
         <span class="score-wrap">
           <span class="check">✓</span>
           <span v-if="scoreOf(note) != null" class="score-badge" :class="{ hot: (scoreOf(note) ?? 0) >= 90 }" @click.stop="openScore(note)">

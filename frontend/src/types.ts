@@ -30,6 +30,10 @@ export interface Note {
   local_images?: string[]
   /** 后端返回：本地代理封面（/app/images/...），空则用 cover_url */
   local_cover?: string
+  /** 实况图（动图，页面 LIVE 角标）张数：类型仍是图文，只是图会动 */
+  live_photo?: number
+  /** 实况图原片地址（mp4，JSON 串；后端原样返回，读时解析） */
+  live_videos?: string | string[] | null
   /** 评分明细（4 维度得分），供分数可解释展示 */
   score_info?: {
     score: number

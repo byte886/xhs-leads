@@ -151,6 +151,21 @@ function xhsExtractNoteDetail(root = document) {
       .map((u) => (u || '').trim())
       .find((u) => u && !u.startsWith('blob:')) || '';
   }
+  // 实况图（动图，界面上那个 LIVE 角标）：SSR imageList[].livePhoto===true。
+  // 类型上它仍是图文（note.type=normal），这里只额外记录「几张动图 + 各自原片地址」，
+  // 原片在该图的 stream 变体里（实测 EF4 是 mp4，为 3 秒左右的循环片段）。
+  const livePhotoImgs = (ssrNote && Array.isArray(ssrNote.imageList) ? ssrNote.imageList : [])
+    .filter((it) => it && it.livePhoto === true);
+  const liveVideos = livePhotoImgs
+    .map((it) => {
+      const keys = it.stream ? Object.keys(it.stream) : [];
+      const cands = keys
+        .flatMap((k) => (Array.isArray(it.stream[k]) ? it.stream[k] : []))
+        .map((v) => (v && v.masterUrl) || '');
+      const url = cands.find((u) => /\.mp4/i.test(u)) || '';
+      return url ? url.replace(/^http:\/\/sns-/, 'https://sns-') : '';
+    })
+    .filter(Boolean);
   // 作者头像：优先 DOM 头像的完整 src（带 imageView2 query，裸路径会 404）；
   // DOM 缺失时用 SSR 裸路径并补标准 query。
   try {
@@ -179,6 +194,8 @@ function xhsExtractNoteDetail(root = document) {
     imgs,
     type: isVideo ? 'video' : 'note',
     video_url: videoUrl,
+    live_photo: livePhotoImgs.length,
+    live_videos: liveVideos,
     note_id: noteId,
     user_id: authorUserId,
     author_nick: authorNick,
