@@ -144,6 +144,14 @@ class TestLoginCleanSelectors:
         assert "xhs-leads-login-clean" in js
         assert "2147483645" in js and "2147483646" in js
 
+    def test_guard_limits_to_login_page(self):
+        """跨导航 BUG 回归：白底层只在 xiaohongshu 登录页执行，explore/笔记页直接 return。"""
+        js = injections.get("login_clean")
+        assert "xiaohongshu\\.com" in js
+        assert "login|website-login" in js
+        # 守卫必须排在创建遮罩元素之前，否则非登录页仍会先插入白底
+        assert js.index("login|website-login") < js.index("xhs-leads-login-clean")
+
 
 class TestJsSyntax:
     """注入 JS 语法与 48j 坑回归。"""

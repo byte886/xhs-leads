@@ -349,6 +349,12 @@ _register(
 _LOGIN_CLEAN_JS = (
     "(function(){"
     "if(window.__xhs_leads_login_clean)return;window.__xhs_leads_login_clean=true;"
+    # 域名 + 路径守卫：add_init_script 会作用于同 context 后续每个新文档（含扫码
+    # 成功后整页导航到 /explore、笔记详情页）。白底层只在登录页有意义，离开登录页
+    # 必须整个脚本不执行——否则全屏白底遮罩会盖住 explore，用户看到「扫码成功后
+    # 右窗空白」（实测 BUG）。守卫口径与 force_login 一致。
+    "if(!/(^|\\.)xiaohongshu\\.com$/.test(location.hostname))return;"
+    "if(!/\\/(login|website-login)(\\/|$)/.test(location.pathname))return;"
     "function ensure(){"
     "if(document.body){"
     "var bg=document.getElementById('xhs-leads-login-clean');"
@@ -373,7 +379,8 @@ _register(
     _LOGIN_CLEAN_JS,
     kind="evaluate",
     note="登录页净化：全屏白底遮罩+登录面板置顶+隐藏杂项。add_init_script 注入，"
-         "document 锚点 MutationObserver 事件驱动。",
+         "document 锚点 MutationObserver 事件驱动；域名+路径守卫确保只在登录页执行，"
+         "扫码后导航到 explore 不会残留白底遮罩。",
 )
 
 # ---------------------------------------------------------------------------
