@@ -267,11 +267,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
    四个 Tab（采集/创作/客户/设置）共用这套档位，改一处全局生效。
    采集窗口默认 960 宽落在 Expanded，旧版固定 272px 时右区只剩约 660。 */
 
-/* Large（≥1200）：左右分栏，左面板保持 272px 标准宽度 */
+/* Large（≥1200）：左右分栏，左面板用 344px 标准宽度 */
 
-/* Expanded（840–1199）：左右分栏保留，左面板让到 240px，把宽度还给结果区 */
+/* Expanded（840–1199）：左右分栏保留。这一段是壳窗默认 878px 所在的档位，
+   旧版把左面板压到 240px —— 关键词要和「上限」挤一行、筛选条件再占一行，
+   客户直接反馈"太窄、小里小气"。现在给到 320px：
+   878 - 320 - 28(结果区内边距) = 530 ≥ 3 列卡片所需的 519，结果区仍是三列不塌。 */
 @media (max-width: 1199px) {
-  .panel { flex-basis: 240px; width: 240px; padding: 14px 12px; gap: 14px; }
+  .panel { flex-basis: 320px; width: 320px; padding: 14px 14px; gap: 14px; }
 }
 
 /* Medium（600–839）：宽度不足以并排，转上下结构——上条件、下结果。

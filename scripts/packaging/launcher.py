@@ -140,12 +140,13 @@ def _acquire_single_instance(data_dir: pathlib.Path) -> bool:
         except OSError:
             pid = 0  # 上次崩溃残留，接管
         else:
-            msg = (
-                f"已经有一个实例在跑（pid={pid}），同一个数据目录只能开一个。\n"
-                f"请先退出它；确实要并行，请用不同的 --data-dir。"
-            )
-            print(f"[xhs-leads] {msg}", file=sys.stderr)
-            _alert("XHS Leads 已在运行", msg)
+            # 弹窗给的是终端用户：不要抛 pid / --data-dir 这类开发参数，
+            # 技术细节只写 stderr 供排查。正常双击同一份 App 由 LaunchServices 复用实例，
+            # 走到这里通常是又开了一份拷贝（或用 open -n 强开）。
+            msg = "XHS Leads 已经打开了，直接用它就行，不用再双击一次。\n如果窗口找不到了，先从程序坞退出它，再重新打开。"
+            print(f"[xhs-leads] 已有实例在跑 pid={pid}（同一数据目录只允许一个实例），"
+                  f"本次不再启动；确实需要并行请用不同的 --data-dir。", file=sys.stderr)
+            _alert("XHS Leads 已经打开了", msg)
             return False
     try:
         lock.write_text(str(os.getpid()))
