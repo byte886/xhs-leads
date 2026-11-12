@@ -32,6 +32,13 @@ DEFAULT_THRESHOLDS = {
     "fresh_days": 30,         # 30 天内 → 时效满分
 }
 
+# 入库门槛值由采集参数决定（面板可选：不限 / 行业默认 500 / 自定义），后端只执行判定。
+# 行业依据（多来源一致）：小红书「小爆文」= 点赞 500~3000；「低粉爆文」= 粉丝 < 5000 且 点赞 > 500。
+def passes_entry_gate(liked_count: int | str | None, min_like: int) -> bool:
+    """点赞 ≥ min_like 才入库；min_like ≤ 0 表示不设门槛（全部入库）。"""
+    return min_like <= 0 or _to_int(liked_count) >= min_like
+
+
 TAGS = {
     "low_fan_hit": "低粉爆款🔥",
     "low_fan": "低粉",

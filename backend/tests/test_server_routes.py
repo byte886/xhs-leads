@@ -53,7 +53,7 @@ def _seed_notes(tmp_path, rows=None):
     server._init_tables(con)
     now = datetime.datetime.now().isoformat(timespec="seconds")
     for r in rows or [("a1", "翡翠手镯", "翡翠"), ("b2", "和田玉", "玉")]:
-        _rank_and_insert(con, {"feed_id": r[0], "title": r[1], "liked_count": "100",
+        _rank_and_insert(con, {"feed_id": r[0], "title": r[1], "liked_count": "1000",
                                "fans_count": "1000"}, r[2], now)
     con.commit()
     con.close()
@@ -119,7 +119,7 @@ class TestCollect:
         return tid, pr
 
     def test_collect_done(self, client, monkeypatch):
-        _, pr = self._run_collect(client, monkeypatch, {"items": [{"feed_id": "a", "title": "t", "liked_count": "5"}], "stopped": False})
+        _, pr = self._run_collect(client, monkeypatch, {"items": [{"feed_id": "a", "title": "t", "liked_count": "1000"}], "stopped": False})
         assert pr["status"] == "done"
 
     def test_collect_stopped(self, client, monkeypatch):
@@ -151,7 +151,7 @@ class TestCollect:
 
         async def fake_search(*a, **k):
             got["filters"] = k.get("filters")
-            return {"items": [{"feed_id": "f1", "title": "t"}], "stopped": False}
+            return {"items": [{"feed_id": "f1", "title": "t", "liked_count": "1000"}], "stopped": False}
 
         async def fake_enrich_fast(n, cache, account_id):
             return None  # R-6.53z 流式：跳过真实浏览器详情补全
@@ -308,7 +308,7 @@ class TestCollect:
         """
         _, pr = self._run_collect(
             client, monkeypatch,
-            {"items": [{"feed_id": "f1", "title": "t", "liked_count": "5"}], "stopped": False},
+            {"items": [{"feed_id": "f1", "title": "t", "liked_count": "1000"}], "stopped": False},
             limit=1,
         )
         assert pr["status"] == "done"
@@ -323,7 +323,7 @@ class TestCollect:
         """
         _, pr = self._run_collect(
             client, monkeypatch,
-            {"items": [{"feed_id": "f2", "title": "t"}], "stopped": False},
+            {"items": [{"feed_id": "f2", "title": "t", "liked_count": "1000"}], "stopped": False},
         )
         assert pr["status"] == "done" and pr["collected"] == 1
         assert pr["note"] == "采集完成：平台仅加载 1 条（不足 3），已按评分排序"
@@ -336,7 +336,7 @@ class TestCollect:
         """
         _, pr = self._run_collect(
             client, monkeypatch,
-            {"items": [{"feed_id": "f3", "title": "t"}], "stopped": True},
+            {"items": [{"feed_id": "f3", "title": "t", "liked_count": "1000"}], "stopped": True},
             limit=3,
         )
         assert pr["status"] == "stopped"
@@ -360,7 +360,7 @@ class TestCollect:
         """
         _, pr = self._run_collect(
             client, monkeypatch,
-            {"items": [{"title": "无id1"}, {"title": "无id2"}], "stopped": False},
+            {"items": [{"title": "无id1", "liked_count": "1000"}, {"title": "无id2", "liked_count": "1000"}], "stopped": False},
         )
         assert pr["status"] == "done"
         assert pr["collected"] == 0
@@ -486,7 +486,7 @@ class TestClone:
         con = sqlite3.connect(tmp_path / "test.db")
         server._init_tables(con)
         now = datetime.datetime.now().isoformat(timespec="seconds")
-        _rank_and_insert(con, {"feed_id": "v1", "title": "视频笔记", "liked_count": "100",
+        _rank_and_insert(con, {"feed_id": "v1", "title": "视频笔记", "liked_count": "1000",
                                "fans_count": "1000", "type": "video",
                                "video_url": "https://sns-video-hw.xhscdn.com/v1.mp4"}, "翡翠", now)
         con.commit()
@@ -508,7 +508,7 @@ class TestClone:
         con = sqlite3.connect(tmp_path / "test.db")
         server._init_tables(con)
         now = datetime.datetime.now().isoformat(timespec="seconds")
-        _rank_and_insert(con, {"feed_id": "v1", "title": "视频笔记", "liked_count": "100",
+        _rank_and_insert(con, {"feed_id": "v1", "title": "视频笔记", "liked_count": "1000",
                                "fans_count": "1000", "type": "video"}, "翡翠", now)
         con.commit()
         con.close()
@@ -738,7 +738,7 @@ class TestRankInsertBranches:
             raise ValueError("评分失败")
 
         monkeypatch.setattr(server, "rank_notes", boom)
-        assert server._rank_and_insert(con, {"feed_id": "z", "title": "t"}, "k", "2026-01-01") is True
+        assert server._rank_and_insert(con, {"feed_id": "z", "title": "t", "liked_count": "1000"}, "k", "2026-01-01") is True
         row = con.execute("SELECT tag FROM notes WHERE feed_id='z'").fetchone()
         assert row[0] == "评分失败"
 
@@ -788,7 +788,7 @@ class TestFetchedAtSwap:
         con = self._db(tmp_path)
         now = datetime.datetime.now().isoformat(timespec="seconds")
         assert _rank_and_insert(con, {"feed_id": "f1", "title": "翡翠",
-                                     "liked_count": "100", "fans_count": "1000"},
+                                     "liked_count": "1000", "fans_count": "1000"},
                                 "翡翠", now)
         row = con.execute("SELECT fetched_at, score_info FROM notes WHERE feed_id='f1'").fetchone()
         assert row["fetched_at"] == now  # 时间列存时间
@@ -798,7 +798,7 @@ class TestFetchedAtSwap:
     def test_insert_persists_origin(self, tmp_path):
         con = self._db(tmp_path)
         origin = "https://www.xiaohongshu.com/explore/f9?xsec_token=tok"
-        assert _rank_and_insert(con, {"feed_id": "f9", "origin": origin},
+        assert _rank_and_insert(con, {"feed_id": "f9", "origin": origin, "liked_count": "1000"},
                                 "翡翠", datetime.datetime.now().isoformat(timespec="seconds"))
         row = con.execute("SELECT origin FROM notes WHERE feed_id='f9'").fetchone()
         assert row["origin"] == origin  # 原作品链接随入库持久化

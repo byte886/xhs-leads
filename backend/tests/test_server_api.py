@@ -104,11 +104,26 @@ class TestPersistNotes:
         monkeypatch.setattr(server, "_db", lambda: tmp_db)
         n1 = {"feed_id": "a1", "liked_count": 1000, "fans_count": 100,
               "collected_count": 0, "comment_count": 0, "shared_count": 0, "publish_time": None}
-        n2 = {"feed_id": "a2", "liked_count": 100, "fans_count": 2000,
+        n2 = {"feed_id": "a2", "liked_count": 600, "fans_count": 2000,
               "collected_count": 0, "comment_count": 0, "shared_count": 0, "publish_time": None}
         added, total, top = _persist_notes("翡翠", [n1, n2])
         assert added == 2 and total == 2 and len(top) == 2
         assert top[0]["feed_id"] == "a1"  # 高分在前
+
+    def test_below_entry_gate_not_persisted(self, tmp_db, monkeypatch):
+        """入库门槛：点赞 < 500 的笔记不进库（批量落库与逐条采集同一道门）。"""
+        monkeypatch.setattr(server, "_db", lambda: tmp_db)
+        low = {"feed_id": "lo", "liked_count": 499, "fans_count": 100,
+               "collected_count": 0, "comment_count": 0, "shared_count": 0, "publish_time": None}
+        high = {"feed_id": "hi", "liked_count": 500, "fans_count": 100,
+                "collected_count": 0, "comment_count": 0, "shared_count": 0, "publish_time": None}
+        # 门槛是采集参数（默认关），这里直接验写库层：显式传 500 才拦
+        assert server._rank_and_insert(tmp_db, low, "翡翠", "2026-01-01", min_like=500) is False
+        assert server._rank_and_insert(tmp_db, high, "翡翠", "2026-01-01", min_like=500) is True
+        rows = [r["feed_id"] for r in tmp_db.execute("SELECT feed_id FROM notes")]
+        assert rows == ["hi"], "499 赞被挡、500 赞恰好过门槛"
+        # 默认（门槛关）不限点赞，低赞也入库
+        assert server._rank_and_insert(tmp_db, {"feed_id": "lo2", "liked_count": 10}, "翡翠", "2026-01-01") is True
 
 
 

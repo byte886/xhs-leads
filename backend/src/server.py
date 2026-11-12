@@ -52,7 +52,7 @@ IMAGES_DIR = DATA_DIR / "images"
 
 _INTERVAL = (1.0, 1.8)
 
-from src.score import rank_notes, _to_int  # noqa: E402
+from src.score import rank_notes, _to_int, passes_entry_gate  # noqa: E402
 from src.jsonio import read_json_safe, write_json  # noqa: E402
 from src.browser_client import BrowserLoginRequiredError
 from src.collect_pipeline import (  # noqa: E402
@@ -650,6 +650,9 @@ class SearchReq(BaseModel):
     interval: int = Field(1000, ge=1000, le=10000)
     # 多账户（P1）：使用哪个账号引擎采集；空 = default（向后兼容）
     account_id: str = ""
+    # 入库门槛：点赞下限；0 = 不设门槛（默认关，用户在面板显式开启才过滤）。
+    # 行业口径参考值 500（小红书「小爆文」500~3000 赞、「低粉爆文」点赞>500）。
+    min_like: int = Field(0, ge=0, le=100000)
 
 _REAL_LOGIN_TIMEOUT_S = 3.0
 
@@ -834,6 +837,7 @@ def _state_snapshot(state: dict) -> dict:
         "phase": state.get("phase", ""),
         "collected": state.get("collected", 0),
         "saved": state.get("saved", 0),
+        "filtered": state.get("filtered", 0),
         "limit": state.get("limit", 0),
         "keyword": state.get("keyword", ""),
         "note": state.get("note", ""),
@@ -856,11 +860,18 @@ def emit_collect(state: dict) -> None:
     _emit_event("collect", _state_snapshot(state))
 
 
-def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default") -> bool:
-    """单条笔记评分 + 落库（带账号维度）。返回是否成功。"""
+def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default",
+                     min_like: int = 0) -> bool:
+    """单条笔记评分 + 落库（带账号维度）。返回是否成功。
+
+    唯一写库点，因此入库门槛也守在这里：缺 feed_id 或点赞未达 min_like 一律不落库，
+    保证任何调用路径（逐条采集 / 批量落库）口径一致。min_like=0 表示不设门槛。
+    """
     # apiNotes 图片名生成 500，前端收尾拉列表失败误判任务结束复位按钮
     # （「没点停止按钮却变开始采集，调试窗口还在采集」的状态错位）。
     if not n.get("feed_id"):
+        return False
+    if not passes_entry_gate(n.get("liked_count"), min_like):
         return False
     try:
         n["keyword"] = keyword
@@ -1166,6 +1177,12 @@ def _collect_finalize_empty(state: dict, res: dict) -> None:
     state["phase"] = "done"
 
 
+def _filtered_suffix(state: dict) -> str:
+    """收尾话术的过滤尾缀：被门槛挡掉的条数必须写进结果，用户才不会以为「采到的都进库了」。"""
+    n = state.get("filtered", 0)
+    return f"，另过滤 {n} 条（点赞不足 {state.get('min_like', 0)}）" if n else ""
+
+
 def _collect_finalize(state: dict, req, res: dict) -> None:
     """流水线按序入库后的统一收尾：停止 / 采满 / 不足 / 候选全被拒收 四分支。
 
@@ -1178,17 +1195,27 @@ def _collect_finalize(state: dict, req, res: dict) -> None:
     if state["stop_event"] or res.get("stopped"):
         state["status"] = "stopped"
         state["note"] = (
-            f"已停止：采集到 {state['saved']} 条" if state["saved"] else "已停止（未采到结果）"
+            f"已停止：采集到 {state['saved']} 条{_filtered_suffix(state)}"
+            if state["saved"] else f"已停止（未采到结果）{_filtered_suffix(state)}"
         )
     elif state["saved"] >= req.limit:
         state["status"] = "done"
-        state["note"] = f"采集完成：{state['saved']} 条已按评分排序"
+        state["note"] = f"采集完成：{state['saved']} 条已按评分排序{_filtered_suffix(state)}"
     elif state["saved"] > 0:
         state["status"] = "done"
-        state["note"] = f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），已按评分排序"
+        state["note"] = (
+            f"采集完成：平台仅加载 {state['saved']} 条（不足 {req.limit}），"
+            f"已按评分排序{_filtered_suffix(state)}"
+        )
     else:
         state["status"] = "done"
-        state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
+        if state.get("filtered"):
+            state["note"] = (
+                f"未采集到达标笔记：{state['filtered']} 条候选点赞均不足 "
+                f"{state.get('min_like', 0)}，未入库（可调低门槛或换关键词重试）"
+            )
+        else:
+            state["note"] = "未采集到有效数据（候选均缺少笔记 ID），请稍后重试"
     state["phase"] = "done"
 
 
@@ -1325,7 +1352,16 @@ async def _collect_one(item: dict, state: dict, ctx: dict) -> None:
         raise
     except Exception:  # noqa: BLE001 单条补全失败不阻断，保留搜索页粗数据评分入库
         pass
-    if _rank_and_insert(ctx["con"], item, ctx["req"].keyword, ctx["now"], ctx["account_id"]):
+    min_like = ctx["req"].min_like
+    if min_like > 0 and not passes_entry_gate(item.get("liked_count"), min_like):
+        # 未达门槛：不入库，但必须让用户看见被挡掉了几条，
+        # 否则「采集 5 条只进 2 条」会被当成 bug（用户口径：所见即所得）。
+        state["filtered"] = state.get("filtered", 0) + 1
+        state["note"] = f"已过滤 {state['filtered']} 条（点赞不足 {min_like}）"
+        emit_collect(state)
+        return
+    if _rank_and_insert(ctx["con"], item, ctx["req"].keyword, ctx["now"], ctx["account_id"],
+                        min_like):
         ctx["con"].commit()  # 逐条提交：停止/取消时已入库的立即可见（所见即所得）
         state["saved"] += 1
         state["collected"] = state["saved"]
@@ -1402,7 +1438,8 @@ async def collect_start(req: SearchReq):
     tid = uuid.uuid4().hex[:12]
     state = {
         "status": "running", "keyword": req.keyword, "limit": req.limit,
-        "collected": 0, "saved": 0, "note": "", "stop_event": False,
+        "collected": 0, "saved": 0, "filtered": 0, "min_like": req.min_like,
+        "note": "", "stop_event": False,
         "account_id": account_id, "dedup_key": f"{req.keyword.strip()}|{account_id}",
         "started_ts": time.time(),
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),

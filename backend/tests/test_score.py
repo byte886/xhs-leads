@@ -5,6 +5,7 @@ from src.score import (
     DEFAULT_THRESHOLDS,
     DEFAULT_WEIGHTS,
     TAGS,
+    passes_entry_gate,
     rank_notes,
     score_note,
 )
@@ -157,3 +158,18 @@ class TestChineseUnits:
         info = score_note(_note(liked_count="500", fans_count="6.1万"))
         # fan_ratio 输出 round(x, 4)：500/61000=0.0082（两位小数会舍成 0.01，看不出量级）
         assert info["fan_ratio"] == pytest.approx(round(500 / 61000, 4), abs=1e-9)
+
+
+class TestEntryGate:
+    """入库门槛：点赞 ≥ min_like 才入库；min_like=0 表示不设门槛（默认关）。"""
+
+    @pytest.mark.parametrize("liked,ok", [
+        (500, True), (1000, True), ("1597", True), ("1.2万", True),
+        (499, False), (0, False), (None, False), ("", False),
+    ])
+    def test_industry_threshold(self, liked, ok):
+        assert passes_entry_gate(liked, 500) is ok
+
+    @pytest.mark.parametrize("liked", [0, 1, 300, None, ""])
+    def test_gate_off_accepts_all(self, liked):
+        assert passes_entry_gate(liked, 0) is True

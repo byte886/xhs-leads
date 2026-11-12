@@ -55,6 +55,8 @@ export interface SearchParams {
   interval: number
   /** 快速档：后端同页连续导航补全，更快但节奏更密（默认关，拟人优先） */
   fast?: boolean
+  /** 入库门槛：点赞下限；0 = 不设门槛（默认关，面板显式开启才过滤） */
+  minLike?: number
 }
 
 export interface SearchResult {
