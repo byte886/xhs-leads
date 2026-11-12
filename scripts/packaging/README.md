@@ -1,14 +1,18 @@
-# macOS 壳（scripts/packaging）说明
+# 壳 + 打包（macOS / Windows）说明
 
 > 本目录集中「壳 + 打包」全部代码：入口、PyInstaller 配置、构建脚本。业务代码在 `backend/`，前端在 `frontend/`。
 
-## 构成（三件套）
+## 构成（三件套 + 两端共用层）
 
 | 文件 | 职责 |
 |---|---|
 | `launcher.py` | **应用壳入口**（PyInstaller 入口脚本，也是开发态 CLI） |
-| `xhs_leads.spec` | PyInstaller 打包配置（产物 `dist/XHSLeads.app`，bundle `com.xhsleads.app`） |
-| `build_mac.sh` | 一键构建：前端重建（可跳过）→ venv PyInstaller 打包 |
+| `spec_common.py` | **两端共用的单一来源**：`datas` / `hiddenimports` / `Analysis` / `EXE` / `COLLECT` 参数（改这里两端同时生效，避免漏拷文件） |
+| `xhs_leads.spec` | macOS 专属差异：`BUNDLE` + icns + Info.plist（bundle `com.xhsleads.app`） |
+| `xhs_leads_win.spec` | Windows 专属差异：ico + macOS 桥接模块 excludes |
+| `check_pack.py` | **两端共用产物自检**：扩展三件套 / 前端产物 / 内置引擎 / 主程序，缺一项就让构建失败 |
+| `build_mac.sh` | macOS 一键构建：前端重建（可跳过）→ PyInstaller → 自检 → zip |
+| `build_win.ps1` | Windows 一键构建（在 Windows 上跑，Mac 不能交叉编译）：venv/依赖 → PyInstaller → 自检 → zip |
 
 ## launcher.py 职责
 
@@ -54,10 +58,12 @@
 
 ## xhs_leads.spec 要点
 
+- **两端差异只在 spec 末尾**：公共参数全部来自 `spec_common.py`；改 `datas`/`hiddenimports` 请改该文件，不要在两端 spec 各写一份（那正是「打包版丢扩展」的历史成因）。
 - **pathex=[ROOT/backend]**：`src` 包父目录入 path（**不要**写成 `backend/src`——`import src` 需要父目录；写错会导致 `collect_submodules("src")` 静默返回 0、打包后启动 `ModuleNotFoundError: No module named 'src'`）。
-- **hiddenimports**：全量收集 `src` + `uvicorn` + `webview`（内嵌 UI 载体 pywebview，macOS cocoa 后端）子模块（防动态导入漏包）。
-- **datas**：`frontend/dist`（前端静态托管）、`extension/lib`（DOM 提取源）、`scripts/browser`（授权代点 AppleScript）+ playwright driver。
+- **hiddenimports**：全量收集 `src` + `uvicorn` 子模块；Windows 另追加 `psutil`/`multipart`/`python_multipart`（Mac venv 实测没有 psutil，故只在 Windows 侧追加）。
+- **datas**：`frontend/dist`（前端静态托管）+ **整个 `extension/` 目录**（`manifest.json` / `background.js` / `lib/extract.js` 三件套缺一不可——只拷 `lib` 会让打包版「扩展开关已开但未找到含 manifest 的扩展目录，跳过加载」，用户看到的现象就是采集窗少一个蓝色「采集窗口」标签组）。
 - **console=False**：GUI 应用；日志由 launcher 落盘。
+- **产物自检**：`check_pack.py` 接在两端构建脚本里，覆盖 PyInstaller 6 的 `_internal/` 布局与旧平铺布局，`--platform win32` 时额外查 `XHSLeads.exe`。
 
 ## 构建与冒烟
 
@@ -80,8 +86,29 @@ dist/XHSLeads.app/Contents/MacOS/XHSLeads
 backend/.venv/bin/python scripts/packaging/launcher.py
 ```
 
+## Windows 打包（在 Windows 机器上跑）
+
+Mac 不能交叉编译 Windows 程序（PyInstaller 只能打本平台包）；本项目在 Parallels Win11 虚拟机里用共享目录跑同一份仓库：
+
+```powershell
+# 在 Windows 里（共享路径 \\Mac\Home\Desktop\codex-zhuke）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\packaging\build_win.ps1            # 全量
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\packaging\build_win.ps1 -SkipDeps  # 引擎/前端已就位时约 40 秒
+```
+
+产物：`%LOCALAPPDATA%\xhs-leads-build\dist\XHSLeads\XHSLeads.exe`（onedir，`_internal/` 布局）+ 桌面 `XHSLeads-win64.zip`。
+启动自检：构建输出末尾必须出现 `PASS 6 项随包资产齐全`，否则 zip 不应生成。
+
+### 两个只在 Windows 才会犯的坑（都踩过，别再踩）
+
+1. **`build_win.ps1` 必须存为 UTF-8 *with BOM***。Windows PowerShell 5.1 把无 BOM 的 UTF-8 当 GBK 解析，中文注释行尾的 CJK 字符会吞掉换行，**下一行命令被并进注释**→ 静默不执行、不报错、产物照样 `BUILD_OK`。本文件已加 BOM，并在台头写明原因。同理：给 Windows 写 JSON（如 `config.json`）不要用 `Set-Content -Encoding utf8`（5.1 会带 BOM，Python `json.loads` 直接抛错），用 `[IO.File]::WriteAllText(path, text, (New-Object Text.UTF8Encoding $false))`。
+2. **扩展 ID 不能靠路径推导**。目录型扩展的 ID 来自安装路径 SHA256，但 Chromium 在 Windows 上的路径规范化口径与 `pathlib.resolve()` 不同（实测推导 `befemk...` vs 真实 `angbdp...`，大小写/分隔符/短路径/前缀十种变体均复现不了），导致 `chrome.runtime.sendMessage` 报 `Could not establish connection. Receiving end does not exist.`，原子建窗被静默降级成命令行建窗（蓝组靠 background.js 兜底才出现）。`shell_window._runtime_ext_ids/_pick_ext_id` 现在**优先取运行时真值**（`ctx.service_workers` 的 `chrome-extension://` URL），路径推导仅作兜底。
+
+判断是否真跑通：Windows 日志里应出现 `扩展 ID 以运行时为准：路径推导=... 实际=...` 与 `采集窗由扩展原子创建 windowId=... groupId=...`，两条缺一就说明走了降级路径。
+
 ## 已知边界
 
 - **前端产物不入库**：`frontend/dist/` 在 .gitignore，交付物为本地构建；克隆仓库后需 `cd frontend && npm install && npm run build`。
 - **迁移不覆盖已存在数据**：新数据目录已存在则跳过迁移（幂等）。
-- Windows（C 批）未开工：当前壳仅 macOS（`uname -s` 为 Darwin 时可用）。
+- **采集窗默认不建**：`config.json` 的 `collect_tab_visible` 默认 `false`（「采集后台完成、不抢前台」口径）。想让启动即出现右采集窗（含蓝色「采集窗口」组），需在设置里打开，或在该数据目录的 `config.json` 里写 `{"collect_tab_visible": true}`——两端行为一致，差异只来自数据目录里的这份配置。
+- **`Start-Transcript` 不记录子进程 stdout**：`build-win.log` 里看不到 PyInstaller 的 INFO 与 `check_pack` 输出，判断某步是否执行要看 `prlctl exec` 的 stdout 或产物本身。
