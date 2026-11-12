@@ -661,7 +661,8 @@ async def mirror_close(account_id: str = "default"):
 
 class SearchReq(BaseModel):
     keyword: str
-    limit: int = 20
+    # 上限硬约束：1~200 条，防止脚本/手动传入超大值导致无限采集（pydantic 直接 422 拒绝）
+    limit: int = Field(20, ge=1, le=200)
     # 搜索筛选（对应小红书「筛选」弹层，中文选项；默认值=不筛选）
     sort: str = ""
     note_type: str = ""

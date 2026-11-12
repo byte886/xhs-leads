@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { appState, setStage, toast } from '../store'
 import { apiCollectClear, apiCollectProgress, apiCollectStart, apiCollectStop, apiLoginStatus, apiNotes, apiStatusNow } from '../api'
 import { onAppEvent } from '../events'
@@ -75,6 +75,17 @@ function stepLimit(d: number) {
   const cur = Number(appState.params.limit) || 20
   appState.params.limit = Math.min(200, Math.max(1, cur + d))
 }
+
+/** 手动输入也钳到 1–200：HTML max 只拦表单提交、不拦输入，必须在值变化时 clamp
+ *  （事件驱动，非轮询）。非法值回退默认 20。 */
+watch(
+  () => appState.params.limit,
+  (v) => {
+    const n = Number(v)
+    if (!Number.isFinite(n)) appState.params.limit = 20
+    else appState.params.limit = Math.min(200, Math.max(1, Math.round(n)))
+  },
+)
 
 /** 已选筛选条件汇总：跳过默认值（综合/全部/不限），返回“非默认”条件列表 */
 function activeFilters(): string[] {
