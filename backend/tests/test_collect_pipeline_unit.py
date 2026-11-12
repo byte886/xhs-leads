@@ -43,7 +43,7 @@ class TestMergeDetailCore:
     def test_title_desc_type_override(self):
         note = {"title": "old"}
         cp._merge_detail_core(note, {"title": "new", "desc": "d", "type": "video"})
-        assert note["title"] == "new" and note["note_type"] == "video"
+        assert note["title"] == "new" and note["type"] == "video"
 
     def test_fallback_title_from_desc(self):
         note = {}

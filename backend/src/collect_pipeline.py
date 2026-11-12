@@ -182,8 +182,9 @@ def _merge_detail_core(note: dict, d: dict) -> None:
     if d.get("desc"):
         note["desc"] = html.unescape(d["desc"])
     if d.get("type"):
-        # 详情页视频判断更准：二次修正 note_type（搜索卡片 play-icon 可能漏判）
-        note["note_type"] = d["type"]
+        # 详情页视频判断更准：直接覆盖 type（搜索卡片 play-icon 可能漏判）。
+        # 内存对象全链路只用 type 一个字段；DB 列名 note_type 由 _rank_and_insert 映射。
+        note["type"] = d["type"]
     # 无标题笔记兜底：取正文去掉话题标记后的首段前 20 字
     if not note.get("title") and note.get("desc"):
         dd = note["desc"].strip().lstrip("#").strip()
