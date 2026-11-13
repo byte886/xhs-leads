@@ -104,7 +104,8 @@ export interface ClientUser {
   nickname: string
   comment_count: number
   note_count: number
-  sample_comment: string
+  /** 该用户在本篇下的全部评论（一人可多条，作者本人已排除） */
+  comments: string[]
   profile: string
   created_at: string
   /** O1-3 意向分级：high/upper/middle/low */

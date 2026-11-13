@@ -31,10 +31,15 @@ async function loadClients() {
     let intent = ''
     if (clTab.value === 'high') intent = 'high'
     const res = await apiClientsList(props.feedId || '', intent)
-    // 兜底：关注动作记录不是评论（后端查询已过滤，这里再挡一层老数据）
-    clients.value = (res.clients || []).filter(
-      (c) => !((c.sample_comment || '').trim().endsWith('关注') && (c.sample_comment || '').trim().length <= 24),
-    )
+    // 一人可有多条评论，逐条展示；「XX关注」这类动作记录老数据里可能还在，逐条挡掉
+    clients.value = (res.clients || [])
+      .map((c) => ({
+        ...c,
+        comments: (c.comments || []).filter(
+          (cm) => !(cm.trim().endsWith('关注') && cm.trim().length <= 24),
+        ),
+      }))
+      .filter((c) => c.comments.length > 0)
   } catch {
     clients.value = []
   }
@@ -178,7 +183,7 @@ defineExpose({ refresh, count })
               <span v-if="c.ip_location" class="cl-ip">📍 {{ c.ip_location }}</span>
               <span v-if="c.comment_time" class="cl-time">{{ c.comment_time }}</span>
             </div>
-            <div class="cl-cmt">“{{ (c.sample_comment || '—').slice(0, 90) }}”</div>
+            <div v-for="(cm, ci) in c.comments" :key="ci" class="cl-cmt">“{{ cm.slice(0, 90) }}”</div>
             <div class="cl-foot">足迹 {{ c.comment_count }} 次 · 关联 {{ c.note_count }} 篇 · 采集于 {{ (c.created_at || '').slice(0, 10) }}</div>
           </div>
           <div class="cl-act">

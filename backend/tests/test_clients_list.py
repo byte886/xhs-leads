@@ -112,3 +112,38 @@ def test_dedupe_clients_by_uid_keeps_highest_intent():
 
 def test_dedupe_clients_by_uid_empty():
     assert server._dedupe_clients_by_uid([]) == []
+
+
+def test_collect_clients_excludes_author(tmp_path, monkeypatch):
+    """作者本人评论不算线索（真机验证：488 条样本采到 465 条、作者 0 行）。
+
+    入库前按 notes.user_id 过滤；作者回复/顶帖会虚增客户数。
+    """
+    import asyncio
+
+    from src import browser_client  # noqa: E402
+
+    _iso_db(tmp_path, monkeypatch)
+    con = server._db()
+    con.execute(
+        "INSERT OR REPLACE INTO notes (feed_id, user_id, xsec_token) VALUES (?,?,?)",
+        ("f1", "author-uid", "tok"),
+    )
+    con.commit()
+
+    async def fake_clients(feed_id, token, keyword="", filters=None):
+        return [
+            {"uid": "author-uid", "nickname": "作者", "comment": "谢谢大家", "intent": "low"},
+            {"uid": "u1", "nickname": "路人", "comment": "多少钱", "intent": "high"},
+            {"uid": "u1", "nickname": "路人", "comment": "能便宜吗", "intent": "high"},
+        ]
+
+    async def ok_login():
+        return None
+
+    monkeypatch.setattr(browser_client, "clients", fake_clients)
+    monkeypatch.setattr(server, "_require_login", ok_login)
+    res = asyncio.run(server.collect_clients(server.ClientsReq(feed_id="f1")))
+    assert res["total"] == 2          # 两条评论都留（同一人的不同内容）
+    assert res["people"] == 1         # 人数按 uid 去重
+    assert all(u["uid"] != "author-uid" for u in res["users"])

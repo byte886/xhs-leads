@@ -169,6 +169,30 @@ def _add_column_if_missing(con, table: str, col: str, coltype: str) -> None:
         pass  # 列已存在
 
 
+def _migrate_clients_pk(con) -> None:
+    """老库 clients 主键是 (uid, feed_id)，一人多条评论只存 1 条会被压掉。
+
+    改成 (uid, feed_id, comment)：同一人的不同评论都保留（作者本人的评论在入库前
+    就排除了，不靠主键过滤）。迁移保留原有数据；同一人只有一条评论时结果不变。
+    """
+    row = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='clients'"
+    ).fetchone()
+    if not row or not row[0] or "PRIMARY KEY (uid, feed_id, comment)" in row[0]:
+        return
+    con.execute("ALTER TABLE clients RENAME TO clients_old_pk")
+    con.execute("""
+        CREATE TABLE clients (
+            uid TEXT, feed_id TEXT, nickname TEXT, comment TEXT, profile TEXT, created_at TEXT,
+            intent TEXT, matched_word TEXT, ip_location TEXT, comment_time TEXT,
+            PRIMARY KEY (uid, feed_id, comment)
+        )
+    """)
+    con.execute("INSERT OR IGNORE INTO clients SELECT * FROM clients_old_pk")
+    con.execute("DROP TABLE clients_old_pk")
+    con.commit()
+
+
 def _init_tables(con):
     con.execute("""
         CREATE TABLE IF NOT EXISTS notes (
@@ -196,13 +220,16 @@ def _init_tables(con):
     # 不依赖标题是否存在、也不依赖发布日期
     _add_column_if_missing(con, "publish_logs", "note_id", "TEXT")
     # P4 采集客户：互动用户名单（评论用户）
+    # 主键含 comment：同一个人在不同时间发的多条评论都要留着（「多少钱」→「能便宜吗」
+    # 是两条需求信号，压成一条会丢掉后一条）。人数口径在查询时按 uid 去重，存储不压。
     con.execute("""
         CREATE TABLE IF NOT EXISTS clients (
             uid TEXT, feed_id TEXT, nickname TEXT, comment TEXT, profile TEXT, created_at TEXT,
             intent TEXT, matched_word TEXT, ip_location TEXT, comment_time TEXT,
-            PRIMARY KEY (uid, feed_id)
+            PRIMARY KEY (uid, feed_id, comment)
         )
     """)
+    _migrate_clients_pk(con)
     # O1-3：老库补意向/属地/时间列（幂等）
     for col in ("intent", "matched_word", "ip_location", "comment_time"):
         _add_column_if_missing(con, "clients", col, "TEXT")
@@ -2204,12 +2231,16 @@ async def collect_clients(req: ClientsReq):
         # 必须带 token）；keyword 供无活动搜索页时按原关键词重开搜索页。
         token = req.xsec_token
         keyword = ""
+        author_uid = ""
         filters: dict = {}
         con = _db()
-        row = con.execute("SELECT xsec_token, keyword FROM notes WHERE feed_id=?", (req.feed_id,)).fetchone()
+        row = con.execute(
+            "SELECT xsec_token, keyword, user_id FROM notes WHERE feed_id=?", (req.feed_id,)
+        ).fetchone()
         if row:
             token = token or (row[0] or "")
             keyword = row[1] or ""
+            author_uid = row[2] or ""
         ctx = con.execute("SELECT params FROM collect_ctx WHERE keyword=?", (keyword,)).fetchone()
         con.close()
         if ctx and ctx[0]:
@@ -2231,7 +2262,13 @@ async def collect_clients(req: ClientsReq):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"浏览器采集失败：{e}") from e
     from src.intent import grade_batch
-    users = [u for u in users if not _is_noise_comment(u.get("comment", ""))]
+    # 作者本人的评论不是线索：笔记作者会在自己评论区回复、顶帖，算进来会虚增客户数。
+    # 作者 uid 来自 notes.user_id（采集时入库的作者主页 uid）。
+    users = [
+        u for u in users
+        if not _is_noise_comment(u.get("comment", ""))
+        and (u.get("uid") or "") != author_uid
+    ]
     grade_batch(users)
     con = _db()
     ts = datetime.datetime.now().isoformat(timespec="seconds")
@@ -2250,12 +2287,21 @@ async def collect_clients(req: ClientsReq):
         added += cur.rowcount
     con.commit()
     from src.intent import INTENT_LABEL
-    users = _dedupe_clients_by_uid(users)
+    # 存储不压：同一人的多条评论都入库（主键含 comment），明细 users 也全量下发。
+    # 人数口径单独算：people 按 uid 去重，意向分布也按人去重（同一人保留最高档），
+    # 否则「5 个人发了 40 条」会把界面撑成一个很虚的高意向数。
+    people_users = _dedupe_clients_by_uid(users)
     summary = {}
-    for u in users:
+    for u in people_users:
         label = INTENT_LABEL.get(u.get("intent"), "低意向")
         summary[label] = summary.get(label, 0) + 1
-    return {"total": len(users), "new": added, "users": users, "summary": summary}
+    return {
+        "total": len(users),          # 评论条数（一人可多条）
+        "people": len(people_users),  # 去重人数（界面「本篇线索」用这个）
+        "new": added,
+        "users": users,
+        "summary": summary,
+    }
 
 
 # ================= 客户库（P4 价值视图）：已采集互动用户按足迹聚合 =================
@@ -2284,7 +2330,8 @@ def clients_list(feed_id: str = "", intent: str = ""):
     sql = (
         "SELECT uid, MAX(nickname) AS nickname, COUNT(*) AS comment_count, "
         "COUNT(DISTINCT feed_id) AS note_count, "
-        "(SELECT comment FROM clients c2 WHERE c2.uid = clients.uid ORDER BY created_at DESC LIMIT 1) AS sample_comment, "
+        # 一人多条评论全部带出去（用户拍板：有几条就写几条，只留一条会丢掉后一条需求信号）
+        "GROUP_CONCAT(comment, char(31)) AS comments_raw, "
         "MAX(profile) AS profile, MAX(created_at) AS created_at, "
         "(SELECT intent FROM clients c6 WHERE c6.uid = clients.uid "
         " ORDER BY " + intent_rank_sql + " DESC, c6.created_at DESC LIMIT 1) AS intent, "
@@ -2301,7 +2348,13 @@ def clients_list(feed_id: str = "", intent: str = ""):
     )
     # 不再按 200 截断：total 必须是真实去重人数，列表也全量下发——
     # 截断会让「本篇 N 位客户」在超过 200 人时变成假的 200。
-    return {"total": len(ordered), "clients": [dict(r) for r in ordered]}
+    out = []
+    for r in ordered:
+        d = dict(r)
+        raw = d.pop("comments_raw", "") or ""
+        d["comments"] = [c for c in raw.split(chr(31)) if c]
+        out.append(d)
+    return {"total": len(out), "clients": out}
 
 
 class ContactOpenReq(BaseModel):
