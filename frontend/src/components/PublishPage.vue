@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { coverProxy, toast } from '../store'
-import { apiClone, apiFillXhs, apiUploadImage, apiAiGenerate } from '../api'
+import { apiClone, apiFillXhs, apiUploadImage } from '../api'
 import AiWizard from './AiWizard.vue'
 import type { Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -203,12 +203,10 @@ async function fillXhs() {
 }
 
 
-// ---- O1 AI 文稿（本阶段 UI 先行：入口不读配置状态，一律当已接通） ----
-const aiBusy = ref('')
+// ---- AI 生成：来源笔记的关键词，按品类/行业对齐 ----
 const aiKeyword = ref('')  // 来源笔记的搜索关键词（openFor 记录），AI 生成时按品类/行业对齐
 
 // ---- AI 一键生成图文（三步向导：设定 → 大纲 → 配图） ----
-const aiToolsOpen = ref(true)
 const wizardOpen = ref(false)
 
 function openWizard() {
@@ -221,19 +219,6 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
   if (v.images?.length) images.value = dedupe(v.images)
 }
 
-async function aiRun(action: string) {
-  aiBusy.value = action
-  try {
-    const r = await apiAiGenerate(action, { title: title.value, desc: body.value, keyword: aiKeyword.value })
-    if (action === 'title_summarize' || action === 'title_rewrite') title.value = (r.result || '').slice(0, 50)
-    else body.value = (r.result || '').slice(0, 1000)
-    toast('已生成，可继续编辑')
-  } catch (e) {
-    toast(`AI 生成失败：${(e as Error).message}`, 'error')
-  } finally {
-    aiBusy.value = ''
-  }
-}
 </script>
 
 <template>
@@ -246,18 +231,9 @@ async function aiRun(action: string) {
             <span class="ai-tag">AI</span>
             <div class="ai-copy">
               <b>一键生成图文</b>
-              <p>按账号档案 + 内容结构，一次出标题 / 正文 / 标签 / 配图；大纲中间可改</p>
+              <p>按账号档案 + 内容结构，一次出标题与正文；大纲中间可改</p>
             </div>
             <button class="ai-primary" @click="openWizard">生成</button>
-          </div>
-          <div class="ai-sub">
-            <button class="ai-toggle" @click="aiToolsOpen = !aiToolsOpen">单步改写 {{ aiToolsOpen ? '▾' : '▸' }}</button>
-          </div>
-          <div v-if="aiToolsOpen" class="ai-actions">
-            <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('title_summarize')">{{ aiBusy === 'title_summarize' ? '…' : '提炼标题' }}</button>
-            <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('title_rewrite')">{{ aiBusy === 'title_rewrite' ? '…' : '改写标题' }}</button>
-            <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('body_create')">{{ aiBusy === 'body_create' ? '…' : '创作正文' }}</button>
-            <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('body_rewrite')">{{ aiBusy === 'body_rewrite' ? '…' : '改写正文' }}</button>
           </div>
         </div>
         <div class="pub-field">

@@ -219,15 +219,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
 
 /* O1 AI 文稿工具条（Key 门控：未配置灰态） */
-.ai-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0 14px; flex-wrap: wrap; }
 .ai-tag { font-size: 11px; font-weight: 700; color: #fff; background: var(--red); border-radius: 4px; padding: 2px 6px; }
-.ai-btn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--ink); cursor: pointer; }
-.ai-btn:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
-.ai-btn:disabled { opacity: .45; cursor: not-allowed; }
-.ai-btn.ghost { color: var(--ink-2); }
-.ai-btn.primary { background: var(--red); color: #fff; border-color: var(--red); }
 
-/* AI 一键生成面板：主按钮 + 折叠的单步工具（层级：一键为主，单步为辅） */
+/* AI 一键生成面板：标题 + 正文，一个生成入口 */
 .ai-panel {
   border: 1px solid #f0e2d2; background: linear-gradient(180deg, #fffaf4 0%, #fff 100%);
   border-radius: 12px; padding: 12px 14px; margin: 4px 0 16px;
@@ -241,12 +235,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
   padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
 }
 .ai-primary:disabled { background: #e6e6e8; color: #a5a5a5; cursor: not-allowed; }
-.ai-sub { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.ai-toggle {
-  border: 0; background: transparent; color: #b05a1f; font-size: 12px;
-  padding: 0; cursor: pointer;
-}
-.ai-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #f0e2d2; }
 
 /* 弹层 */
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 80; display: flex; align-items: center; justify-content: center; }
