@@ -2866,6 +2866,34 @@ async def test_llm(req: LLMConfigReq):
     return await llm_service.test_with_saved(req.api_key, req.openai_base_url, req.default_model)
 
 
+# ---- 分析图片（vision）：与生文、生图各自独立的第三套配置 ----
+# 三种能力依赖的模型完全不同（文本模型不认图、图像模型只出图），故配置必须分开存。
+@app.get("/api/vision_config")
+def get_vision_config():
+    """读取「分析图片」配置（key 掩码）。"""
+    return llm_service.public_config("vision")
+
+
+@app.post("/api/vision_config")
+def set_vision_config(req: LLMConfigReq):
+    """保存「分析图片」配置。api_key 为空时保留旧 key。"""
+    if not req.openai_base_url or not req.default_model:
+        raise HTTPException(400, "请填写 Base URL 与模型名称")
+    return llm_service.save_config(req.api_key, req.openai_base_url, req.default_model, "vision")
+
+
+@app.post("/api/vision_config/clear")
+def clear_vision_config():
+    """清除「分析图片」配置。"""
+    return llm_service.clear_config("vision")
+
+
+@app.post("/api/vision_test")
+async def test_vision(req: LLMConfigReq):
+    """测试「分析图片」供应商连通性（GET /models）。"""
+    return await llm_service.test_with_saved(req.api_key, req.openai_base_url, req.default_model, "vision")
+
+
 # ================= O1 账号人设（AI 生成口吻；v1.5 设置页三卡之一） =================
 # 存储：data/persona.json（本地明文，与 llm_config.json 同级信任域）。
 PERSONA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data" / "persona.json"

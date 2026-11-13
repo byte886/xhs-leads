@@ -4,6 +4,7 @@ import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { appState, refreshSysStatus, toast } from '../store'
 import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
+  apiGetVisionConfig, apiSetVisionConfig, apiClearVisionConfig, apiTestVision,
   apiGetImageConfig, apiSetImageConfig, apiClearImageConfig, apiTestImageConfig,
   apiLicenseStatus, apiLicenseActivate,
   apiMirrorOpen, apiMirrorClose,
@@ -11,7 +12,7 @@ import {
   apiRefreshIdentity, apiScanLogin,
 } from '../api'
 import type { AccountItem } from '../types'
-import type { ImageConfig, ImageProvider } from '../api'
+import type { ImageConfig, LlmConfig } from '../api'
 
 // ---- 左侧分类导航 ----
 // 只留 AI 可进入：其余分类置灰、不可点击也不可切入。
@@ -228,74 +229,175 @@ async function activateLicense() {
   }
 }
 
-// ---- AI · 生文（DeepSeek / OpenAI 兼容；与生图配置完全分离） ----
-const TEXT_PROVIDERS = [
-  { id: 'deepseek', label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', models: ['deepseek-flash', 'deepseek-v4-pro'] },
-  { id: 'openai_compat', label: 'OpenAI 兼容（自定义 / 中转站）', base_url: '', models: [] },
-]
-const aiCfg = ref<{ configured: boolean; openai_base_url: string; default_model: string; llm_api_key_masked: string }>()
-const aiForm = reactive({
-  provider: 'deepseek',
-  api_key: '',
-  openai_base_url: 'https://api.deepseek.com/v1',
-  default_model: 'deepseek-flash',
-})
-const aiSaving = ref(false)
-const textModels = computed(() => TEXT_PROVIDERS.find(p => p.id === aiForm.provider)?.models || [])
+// ---- AI · 三种能力：生成文章 / 分析图片 / 生成图片 ----
+// 三种能力依赖的模型完全不同：文本模型只出字、视觉模型必须能读图、图像模型只出图，
+// 所以每张能力卡各存一套 Key / Base URL / 模型，互不影响。
+// 供应商目录用 models 声明这家能干什么，每个能力的下拉只列支持它的供应商。
 
-async function loadAi() {
-  try {
-    aiCfg.value = await apiGetLLMConfig()
-  } catch {
-    aiCfg.value = { configured: false, openai_base_url: '', default_model: '', llm_api_key_masked: '' }
-  }
-  refreshSysStatus({ aiKey: !!aiCfg.value.configured })
+type AiCap = 'text' | 'vision' | 'image'
+
+interface CapForm { provider: string; api_key: string; base_url: string; model: string }
+
+// base_url 按能力分开：同一家供应商的「文本/读图」端点和「出图」端点经常不是同一个
+// （例如阿里云百炼，通义千问走 compatible-mode/v1，通义万相走 api/v1）。
+const AI_PROVIDERS: {
+  id: string; label: string; note: string
+  base_urls: Partial<Record<AiCap, string>>
+  models: Partial<Record<AiCap, string[]>>
+}[] = [
+  {
+    id: 'deepseek', label: 'DeepSeek', note: '只有文本模型，不能读图、不能出图',
+    base_urls: { text: 'https://api.deepseek.com/v1' },
+    models: { text: ['deepseek-flash', 'deepseek-v4-pro'] },
+  },
+  {
+    id: 'dashscope', label: '阿里云百炼', note: '文本 / 读图 / 出图都有，国内直连不用代理',
+    base_urls: {
+      text: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      vision: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      image: 'https://dashscope.aliyuncs.com/api/v1',
+    },
+    models: {
+      text: ['qwen-max'],
+      vision: ['qwen-vl-max', 'qwen-vl-plus'],
+      image: ['wan2.7-image', 'wan2.7-image-pro'],
+    },
+  },
+  {
+    id: 'gemini', label: 'Google · Nano Banana', note: '只能出图，版式与画质强，需代理',
+    base_urls: { image: 'https://generativelanguage.googleapis.com/v1beta' },
+    models: { image: ['gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'] },
+  },
+  {
+    id: 'openai_compat', label: 'OpenAI 兼容 · 自定义地址',
+    note: '官方、中转站、聚合网关是同一套接口，填它给的地址与模型名',
+    base_urls: {},
+    models: {},
+  },
+]
+
+/** 这家支持哪些能力：目录里列了该能力的候选模型即支持；自定义地址三种都支持。 */
+function capsOf(p: (typeof AI_PROVIDERS)[number]): AiCap[] {
+  return p.id === 'openai_compat' ? ['text', 'vision', 'image'] : (Object.keys(p.models) as AiCap[])
 }
-function fillAiForm() {
-  aiForm.api_key = ''
-  aiForm.openai_base_url = aiCfg.value?.openai_base_url || 'https://api.deepseek.com/v1'
-  aiForm.default_model = aiCfg.value?.default_model || 'deepseek-flash'
-  aiForm.provider = (aiForm.openai_base_url.includes('deepseek') || !aiForm.openai_base_url) ? 'deepseek' : 'openai_compat'
+function providersFor(cap: AiCap) {
+  return AI_PROVIDERS.filter((p) => capsOf(p).includes(cap))
 }
-function onTextProvider() {
-  const p = TEXT_PROVIDERS.find(x => x.id === aiForm.provider)
+function modelsFor(cap: AiCap, pid: string): string[] {
+  return AI_PROVIDERS.find((p) => p.id === pid)?.models[cap] || []
+}
+/** 反查供应商：已存配置的 Base URL 命中哪家，命中不了就当自定义地址。 */
+function detectProvider(base: string): string {
+  if (!base) return 'openai_compat'
+  const hit = AI_PROVIDERS.find((p) =>
+    Object.values(p.base_urls).some((u) => u && base.startsWith(u.replace(/\/v1$/i, ''))),
+  )
+  return hit?.id || 'openai_compat'
+}
+function baseUrlFor(cap: AiCap, pid: string): string {
+  return AI_PROVIDERS.find((p) => p.id === pid)?.base_urls[cap] || ''
+}
+function capForm(cap: AiCap, provider: string, model = ''): CapForm {
+  const p = AI_PROVIDERS.find((x) => x.id === provider) || AI_PROVIDERS[0]
+  return { provider, api_key: '', base_url: baseUrlFor(cap, provider), model: model || modelsFor(cap, provider)[0] || '' }
+}
+function onProvider(cap: AiCap, form: CapForm) {
+  const p = AI_PROVIDERS.find((x) => x.id === form.provider)
   if (!p) return
-  if (p.base_url) aiForm.openai_base_url = p.base_url
-  if (p.models.length) aiForm.default_model = p.models[0]
+  const u = p.base_urls[cap]
+  if (u) form.base_url = u
+  const m = modelsFor(cap, form.provider)
+  if (m.length) form.model = m[0]
 }
-async function saveAi() {
-  if (!aiForm.openai_base_url || !aiForm.default_model) {
+
+const textForm = reactive<CapForm>(capForm('text', 'deepseek', 'deepseek-flash'))
+const visForm = reactive<CapForm>(capForm('vision', 'dashscope', 'qwen-vl-max'))
+const imgForm = reactive<CapForm>(capForm('image', 'dashscope', 'wan2.7-image'))
+const textCfg = ref<LlmConfig>()
+const visCfg = ref<LlmConfig>()
+const imgCfg = ref<ImageConfig>()
+const textSaving = ref(false)
+const visSaving = ref(false)
+const imgSaving = ref(false)
+
+// 生成文章 / 分析图片走同一套 OpenAI 兼容配置接口，只有路径不同（profile: text / vision）
+const LLM_API = {
+  text: { get: apiGetLLMConfig, set: apiSetLLMConfig, clear: apiClearLLMConfig, test: apiTestLLM },
+  vision: { get: apiGetVisionConfig, set: apiSetVisionConfig, clear: apiClearVisionConfig, test: apiTestVision },
+}
+
+function capState(cap: 'text' | 'vision') {
+  return {
+    form: cap === 'text' ? textForm : visForm,
+    saving: cap === 'text' ? textSaving : visSaving,
+    cfg: cap === 'text' ? textCfg : visCfg,
+  }
+}
+
+async function loadLlmCap(cap: 'text' | 'vision') {
+  const st = capState(cap)
+  try {
+    st.cfg.value = await LLM_API[cap].get()
+  } catch {
+    st.cfg.value = undefined
+  }
+  if (cap === 'text') refreshSysStatus({ aiKey: !!st.cfg.value?.configured })
+}
+
+function fillLlmCap(cap: 'text' | 'vision') {
+  const st = capState(cap)
+  st.form.api_key = ''
+  if (st.cfg.value?.configured) {
+    st.form.provider = detectProvider(st.cfg.value.openai_base_url)
+    st.form.base_url = st.cfg.value.openai_base_url
+    st.form.model = st.cfg.value.default_model
+  }
+}
+
+async function saveLlmCap(cap: 'text' | 'vision') {
+  const st = capState(cap)
+  if (!st.form.base_url || !st.form.model) {
     toast('请填写 Base URL 与模型名称', 'error')
     return
   }
-  aiSaving.value = true
+  st.saving.value = true
   try {
-    await apiSetLLMConfig({ api_key: aiForm.api_key, openai_base_url: aiForm.openai_base_url, default_model: aiForm.default_model })
-    await loadAi()
-    fillAiForm()
-    toast('生文配置已保存')
+    st.cfg.value = await LLM_API[cap].set({
+      api_key: st.form.api_key,
+      openai_base_url: st.form.base_url,
+      default_model: st.form.model,
+    })
+    fillLlmCap(cap)
+    toast(`${cap === 'text' ? '生成文章' : '分析图片'}配置已保存`)
   } catch (e) {
     toast(`保存失败：${(e as Error).message}`, 'error')
   } finally {
-    aiSaving.value = false
+    st.saving.value = false
   }
 }
-async function clearAi() {
-  aiSaving.value = true
+
+async function clearLlmCap(cap: 'text' | 'vision') {
+  const st = capState(cap)
+  st.saving.value = true
   try {
-    await apiClearLLMConfig()
-    await loadAi()
-    fillAiForm()
-    toast('生文配置已清除')
+    st.cfg.value = await LLM_API[cap].clear()
+    fillLlmCap(cap)
+    toast(`${cap === 'text' ? '生成文章' : '分析图片'}配置已清除`)
   } catch (e) {
     toast(`清除失败：${(e as Error).message}`, 'error')
   } finally {
-    aiSaving.value = false
+    st.saving.value = false
   }
 }
-async function testAi() {
+
+async function testLlmCap(cap: 'text' | 'vision') {
+  const st = capState(cap)
   try {
-    const r = await apiTestLLM({ api_key: aiForm.api_key, openai_base_url: aiForm.openai_base_url, default_model: aiForm.default_model })
+    const r = await LLM_API[cap].test({
+      api_key: st.form.api_key,
+      openai_base_url: st.form.base_url,
+      default_model: st.form.model,
+    })
     if (r.ok) {
       const extra = r.model_available === false ? '（模型不在清单，可忽略）' : ''
       toast(`连接成功：可用模型 ${r.count ?? 0} 个${extra}`)
@@ -307,13 +409,7 @@ async function testAi() {
   }
 }
 
-// ---- AI · 生图（独立 Key；下拉只列能出图的模型） ----
-const imgCfg = ref<ImageConfig>()
-const imgForm = reactive({ provider: 'dashscope', api_key: '', base_url: '', model: 'wan2.7-image' })
-const imgSaving = ref(false)
-const imgProviders = computed<ImageProvider[]>(() => imgCfg.value?.providers || [])
-const imgModels = computed(() => imgProviders.value.find(p => p.id === imgForm.provider)?.models || [])
-
+// ---- 生成图片（独立配置，接口与生文/识图不同：走 /images 出图）----
 async function loadImg() {
   try {
     imgCfg.value = await apiGetImageConfig()
@@ -321,19 +417,13 @@ async function loadImg() {
     imgCfg.value = undefined
   }
 }
-function fillImgForm() {
+function fillImg() {
   imgForm.api_key = ''
   if (imgCfg.value?.configured) {
     imgForm.provider = imgCfg.value.provider || 'dashscope'
     imgForm.base_url = imgCfg.value.base_url || ''
     imgForm.model = imgCfg.value.model || ''
   }
-}
-function onImgProvider() {
-  const p = imgProviders.value.find(x => x.id === imgForm.provider)
-  if (!p) return
-  if (p.base_url) imgForm.base_url = p.base_url
-  imgForm.model = p.models[0] || ''
 }
 async function saveImg() {
   if (!imgForm.model) {
@@ -342,9 +432,14 @@ async function saveImg() {
   }
   imgSaving.value = true
   try {
-    imgCfg.value = await apiSetImageConfig({ ...imgForm })
-    fillImgForm()
-    toast('生图配置已保存')
+    imgCfg.value = await apiSetImageConfig({
+      provider: imgForm.provider,
+      api_key: imgForm.api_key,
+      base_url: imgForm.base_url,
+      model: imgForm.model,
+    })
+    fillImg()
+    toast('生成图片配置已保存')
   } catch (e) {
     toast(`保存失败：${(e as Error).message}`, 'error')
   } finally {
@@ -355,8 +450,8 @@ async function clearImg() {
   imgSaving.value = true
   try {
     imgCfg.value = await apiClearImageConfig()
-    fillImgForm()
-    toast('生图配置已清除')
+    fillImg()
+    toast('生成图片配置已清除')
   } catch (e) {
     toast(`清除失败：${(e as Error).message}`, 'error')
   } finally {
@@ -365,8 +460,13 @@ async function clearImg() {
 }
 async function testImg() {
   try {
-    const r = await apiTestImageConfig({ ...imgForm })
-    if (r.ok) toast(r.note || `连接成功：可列举模型 ${r.count ?? 0} 个`)
+    const r = await apiTestImageConfig({
+      provider: imgForm.provider,
+      api_key: imgForm.api_key,
+      base_url: imgForm.base_url,
+      model: imgForm.model,
+    })
+    if (r.ok) toast('连接成功')
     else toast(`测试失败：${r.error || '未知原因'}`, 'error')
   } catch (e) {
     toast(`测试失败：${(e as Error).message}`, 'error')
@@ -376,9 +476,10 @@ async function testImg() {
 // ---- 档案已拆成独立 Tab（ProfilePanel.vue），设置页不再承载档案 ----
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAccounts()])
-  fillAiForm()
-  fillImgForm()
+  await Promise.all([loadLlmCap('text'), loadLlmCap('vision'), loadImg(), loadLicense(), loadAccounts()])
+  fillLlmCap('text')
+  fillLlmCap('vision')
+  fillImg()
 })
 </script>
 
@@ -544,99 +645,132 @@ onMounted(async () => {
           </div>
         </section>
 
-        <!-- AI：生文 / 生图 两条独立链路（供应商 + Key 各自独立） -->
+                <!-- AI：三种能力各存一套配置（生成文章 / 分析图片 / 生成图片） -->
         <section v-if="activeCat === 'ai'">
-          <!-- 生文 -->
+          <!-- 生成文章 -->
           <div class="ai-block">
             <div class="blk-head">
               <div>
-                <h3>生文</h3>
-                <p>标题 / 正文 / 标签 / 分页文案（OpenAI 兼容 chat/completions）</p>
+                <h3>生成文章</h3>
+                <p>标题 / 正文 / 标签 / 分页文案，要文本模型</p>
               </div>
-              <span class="blk-badge" :class="{ on: aiCfg?.configured }">{{ aiCfg?.configured ? '✓ 可用' : '未配置' }}</span>
+              <span class="blk-badge" :class="{ on: textCfg?.configured }">{{ textCfg?.configured ? '✓ 可用' : '未配置' }}</span>
             </div>
             <div class="set-row">
-              <div class="row-main">
-                <span class="row-label">供应商</span>
-                <select v-model="aiForm.provider" class="full-input" @change="onTextProvider">
-                  <option v-for="p in TEXT_PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}</option>
-                </select>
-              </div>
+              <div class="row-main"><span class="row-label">供应商</span></div>
+              <select v-model="textForm.provider" class="full-input" @change="onProvider('text', textForm)">
+                <option v-for="p in providersFor('text')" :key="p.id" :value="p.id">{{ p.label }}</option>
+              </select>
+              <p class="set-hint">{{ AI_PROVIDERS.find(p => p.id === textForm.provider)?.note }}</p>
             </div>
             <div class="set-row">
               <div class="row-main">
                 <span class="row-label">API Key</span>
-                <span class="limit">{{ aiCfg?.llm_api_key_masked ? '已配置 ' + aiCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
+                <span class="limit">{{ textCfg?.llm_api_key_masked ? '已配置 ' + textCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
               </div>
-              <input v-model="aiForm.api_key" type="password" placeholder="sk-..." class="full-input" />
+              <input v-model="textForm.api_key" type="password" placeholder="sk-..." class="full-input" />
             </div>
             <div class="set-row">
-              <div class="row-main">
-                <span class="row-label">Base URL</span>
-              </div>
-              <input v-model="aiForm.openai_base_url" placeholder="https://api.deepseek.com/v1" class="full-input" />
+              <div class="row-main"><span class="row-label">Base URL</span></div>
+              <input v-model="textForm.base_url" class="full-input" placeholder="https://api.deepseek.com/v1" />
             </div>
             <div class="set-row">
               <div class="row-main">
                 <span class="row-label">模型</span>
-                <span class="limit">可手填，下拉为已验证候选</span>
+                <span class="limit">可手填，下拉是候选</span>
               </div>
-              <input v-model="aiForm.default_model" class="full-input" list="text-model-list" placeholder="deepseek-flash / deepseek-v4-pro" />
-              <datalist id="text-model-list">
-                <option v-for="m in textModels" :key="m" :value="m" />
+              <input v-model="textForm.model" class="full-input" list="text-models" placeholder="deepseek-flash" />
+              <datalist id="text-models">
+                <option v-for="m in modelsFor('text', textForm.provider)" :key="m" :value="m" />
               </datalist>
               <div class="set-actions">
-                <button class="btn" @click="testAi">测试连接</button>
-                <button class="btn primary" :disabled="aiSaving" @click="saveAi">{{ aiSaving ? '保存中…' : '保存配置' }}</button>
-                <button v-if="aiCfg?.configured" class="btn danger" :disabled="aiSaving" @click="clearAi">清除</button>
+                <button class="btn" @click="testLlmCap('text')">测试连接</button>
+                <button class="btn primary" :disabled="textSaving" @click="saveLlmCap('text')">{{ textSaving ? '保存中…' : '保存配置' }}</button>
+                <button v-if="textCfg?.configured" class="btn danger" :disabled="textSaving" @click="clearLlmCap('text')">清除</button>
               </div>
             </div>
           </div>
 
-          <!-- 生图 -->
+          <!-- 分析图片 -->
           <div class="ai-block">
             <div class="blk-head">
               <div>
-                <h3>生图</h3>
-                <p>封面 / 内容页配图。下拉只列已验证能出图的模型</p>
+                <h3>分析图片</h3>
+                <p>读图片内容，判断品类 / 卖点 / 是否合规，要视觉模型（能吃图）</p>
+              </div>
+              <span class="blk-badge" :class="{ on: visCfg?.configured }">{{ visCfg?.configured ? '✓ 可用' : '未配置' }}</span>
+            </div>
+            <div class="set-row">
+              <div class="row-main"><span class="row-label">供应商</span></div>
+              <select v-model="visForm.provider" class="full-input" @change="onProvider('vision', visForm)">
+                <option v-for="p in providersFor('vision')" :key="p.id" :value="p.id">{{ p.label }}</option>
+              </select>
+              <p class="set-hint">{{ AI_PROVIDERS.find(p => p.id === visForm.provider)?.note }}</p>
+            </div>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">API Key</span>
+                <span class="limit">{{ visCfg?.llm_api_key_masked ? '已配置 ' + visCfg.llm_api_key_masked + '（留空保留）' : '必填' }}</span>
+              </div>
+              <input v-model="visForm.api_key" type="password" placeholder="视觉模型的 Key（与生文可不同）" class="full-input" />
+            </div>
+            <div class="set-row">
+              <div class="row-main"><span class="row-label">Base URL</span></div>
+              <input v-model="visForm.base_url" class="full-input" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+            </div>
+            <div class="set-row">
+              <div class="row-main">
+                <span class="row-label">模型</span>
+                <span class="limit">必须支持图片输入</span>
+              </div>
+              <input v-model="visForm.model" class="full-input" list="vision-models" placeholder="qwen-vl-max" />
+              <datalist id="vision-models">
+                <option v-for="m in modelsFor('vision', visForm.provider)" :key="m" :value="m" />
+              </datalist>
+              <div class="set-actions">
+                <button class="btn" @click="testLlmCap('vision')">测试连接</button>
+                <button class="btn primary" :disabled="visSaving" @click="saveLlmCap('vision')">{{ visSaving ? '保存中…' : '保存配置' }}</button>
+                <button v-if="visCfg?.configured" class="btn danger" :disabled="visSaving" @click="clearLlmCap('vision')">清除</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 生成图片 -->
+          <div class="ai-block">
+            <div class="blk-head">
+              <div>
+                <h3>生成图片</h3>
+                <p>封面 / 内容页配图，要图像模型，按张计费</p>
               </div>
               <span class="blk-badge" :class="{ on: imgCfg?.configured }">{{ imgCfg?.configured ? '✓ 可用' : '未配置' }}</span>
             </div>
             <div class="set-row">
-              <div class="row-main">
-                <span class="row-label">供应商</span>
-              </div>
-              <select v-model="imgForm.provider" class="full-input" @change="onImgProvider">
-                <option v-for="p in imgProviders" :key="p.id" :value="p.id">{{ p.label }}</option>
+              <div class="row-main"><span class="row-label">供应商</span></div>
+              <select v-model="imgForm.provider" class="full-input" @change="onProvider('image', imgForm)">
+                <option v-for="p in providersFor('image')" :key="p.id" :value="p.id">{{ p.label }}</option>
               </select>
-              <p class="set-hint">{{ imgProviders.find(p => p.id === imgForm.provider)?.note || '' }}</p>
+              <p class="set-hint">{{ AI_PROVIDERS.find(p => p.id === imgForm.provider)?.note }}</p>
             </div>
             <div class="set-row">
               <div class="row-main">
                 <span class="row-label">API Key</span>
                 <span class="limit">{{ imgCfg?.api_key_masked ? '已配置 ' + imgCfg.api_key_masked + '（留空保留）' : '必填' }}</span>
               </div>
-              <input v-model="imgForm.api_key" type="password" placeholder="生图供应商的 Key（与生文可不同）" class="full-input" />
+              <input v-model="imgForm.api_key" type="password" placeholder="图像模型的 Key（与生文可不同）" class="full-input" />
             </div>
             <div class="set-row">
-              <div class="row-main">
-                <span class="row-label">Base URL</span>
-              </div>
-              <input v-model="imgForm.base_url" placeholder="https://dashscope.aliyuncs.com/api/v1" class="full-input" />
+              <div class="row-main"><span class="row-label">Base URL</span></div>
+              <input v-model="imgForm.base_url" class="full-input" placeholder="https://dashscope.aliyuncs.com/api/v1" />
             </div>
             <div class="set-row">
               <div class="row-main">
                 <span class="row-label">模型</span>
-                <span class="limit">仅可出图的模型</span>
+                <span class="limit">只能填能出图的模型</span>
               </div>
-              <select v-if="imgModels.length" v-model="imgForm.model" class="full-input">
-                <option v-for="m in imgModels" :key="m" :value="m">{{ m }}</option>
-              </select>
-              <input v-else v-model="imgForm.model" class="full-input" placeholder="中转站的生图模型名" />
-              <p class="set-hint">
-                DeepSeek 的 flash / pro 只输出文字，不会出现在这里——这是能力差异，不是配置问题。
-                生图与生文可以不是同一家供应商。
-              </p>
+              <input v-model="imgForm.model" class="full-input" list="image-models" placeholder="wan2.7-image" />
+              <datalist id="image-models">
+                <option v-for="m in modelsFor('image', imgForm.provider)" :key="m" :value="m" />
+              </datalist>
               <div class="set-actions">
                 <button class="btn" @click="testImg">测试连接</button>
                 <button class="btn primary" :disabled="imgSaving" @click="saveImg">{{ imgSaving ? '保存中…' : '保存配置' }}</button>
@@ -646,8 +780,7 @@ onMounted(async () => {
           </div>
         </section>
 
-
-        <!-- 关于与授权 -->
+<!-- 关于与授权 -->
         <section v-if="activeCat === 'about'">
           <div class="set-row" v-if="lic">
             <div class="row-main">

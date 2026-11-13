@@ -17,15 +17,21 @@ from .jsonio import read_json_safe, write_json
 # 与 server.py 同基准：~/Desktop/xhs-leads
 _ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = _ROOT / "data" / "llm_config.json"
+# 按能力分文件：生成文章（text）沿用 llm_config.json 保持存量兼容；
+# 分析图片（vision）单独一份，两者模型完全不同，不能共用一份配置。
+VISION_CONFIG_PATH = _ROOT / "data" / "llm_vision_config.json"
+def _path(profile: str = "text") -> Path:
+    # 直接引用模块级常量（不缓存进字典），测试 monkeypatch 才能生效。
+    return VISION_CONFIG_PATH if profile == "vision" else CONFIG_PATH
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 
 
-def _load() -> dict:
-    return read_json_safe(CONFIG_PATH)
+def _load(profile: str = "text") -> dict:
+    return read_json_safe(_path(profile))
 
 
-def _save(cfg: dict) -> dict:
-    write_json(CONFIG_PATH, cfg)
+def _save(cfg: dict, profile: str = "text") -> dict:
+    write_json(_path(profile), cfg)
     return cfg
 
 
@@ -38,9 +44,9 @@ def _mask(key: str) -> str:
     return f"{key[:4]}{'*' * (len(key) - 8)}{key[-4:]}"
 
 
-def public_config() -> dict:
-    """前端可见配置（key 掩码，不泄露明文）。"""
-    cfg = _load()
+def public_config(profile: str = "text") -> dict:
+    """前端可见配置（key 掩码，不泄露明文）。profile: text 生成文章 / vision 分析图片。"""
+    cfg = _load(profile)
     return {
         "configured": bool(cfg.get("llm_api_key") and cfg.get("openai_base_url") and cfg.get("default_model")),
         "openai_base_url": cfg.get("openai_base_url", ""),
@@ -50,20 +56,20 @@ def public_config() -> dict:
     }
 
 
-def save_config(api_key: str, base_url: str, model: str) -> dict:
+def save_config(api_key: str, base_url: str, model: str, profile: str = "text") -> dict:
     """保存配置：key 为空时保留旧 key（前端可不回传），base/model 直接覆盖。"""
-    cfg = _load()
+    cfg = _load(profile)
     new_key = api_key.strip()
     if new_key:
         cfg["llm_api_key"] = new_key
     cfg["openai_base_url"] = base_url.strip().rstrip("/")
     cfg["default_model"] = model.strip()
     cfg["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    _save(cfg)
-    return public_config()
+    _save(cfg, profile)
+    return public_config(profile)
 
 
-def clear_config() -> dict:
+def clear_config(profile: str = "text") -> dict:
     """清除 AI 配置（Key/Base/模型全清），回到未配置态。
 
     背景：save_config 空 key 保留是保护设计（前端不持久回显明文），
@@ -75,8 +81,8 @@ def clear_config() -> dict:
         "default_model": "",
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    _save(cfg)
-    return public_config()
+    _save(cfg, profile)
+    return public_config(profile)
 
 
 def enabled() -> bool:
@@ -115,9 +121,9 @@ async def test_connection(base_url: str, api_key: str, model: str) -> dict:
         return {"ok": False, "error": f"连接失败：{e}"}
 
 
-async def test_with_saved(api_key: str, base_url: str, model: str) -> dict:
+async def test_with_saved(api_key: str, base_url: str, model: str, profile: str = "text") -> dict:
     """测试连接（表单值缺省时回退已存配置）：前端可不回传 key，缺空则提示未填写完整。"""
-    cfg = _load()
+    cfg = _load(profile)
     api_key = api_key.strip() or cfg.get("llm_api_key", "")
     base_url = base_url.strip().rstrip("/") or cfg.get("openai_base_url", "")
     model = model.strip() or cfg.get("default_model", "")

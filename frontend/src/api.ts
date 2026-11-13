@@ -326,6 +326,31 @@ export async function apiTestLLM(p: LlmConfigInput): Promise<{ ok: boolean; erro
   }))
 }
 
+// ---- AI 分析图片（视觉模型；与生文、生图各自独立配置）----
+export async function apiGetVisionConfig(): Promise<LlmConfig> {
+  return j(await fetch(`${BASE}/api/vision_config`))
+}
+
+export async function apiSetVisionConfig(p: LlmConfigInput): Promise<LlmConfig> {
+  return j(await fetch(`${BASE}/api/vision_config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }))
+}
+
+export async function apiClearVisionConfig(): Promise<LlmConfig> {
+  return j(await fetch(`${BASE}/api/vision_config/clear`, { method: 'POST' }))
+}
+
+export async function apiTestVision(p: LlmConfigInput): Promise<{ ok: boolean; error?: string; count?: number; models?: string[]; model_available?: boolean | null }> {
+  return j(await fetch(`${BASE}/api/vision_test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  }))
+}
+
 export async function apiAiGenerate(action: string, note: Record<string, string>): Promise<{ ok: boolean; action: string; result: string }> {
   return j(await fetch(`${BASE}/api/ai_generate`, {
     method: 'POST',

@@ -294,3 +294,27 @@ def test_status_now_detail_phase(client):
     r = client.get("/api/status_now").json()
     assert r["collecting"] is True and "action" in r
     server._COLLECT_TASKS.clear()
+
+
+def test_vision_config_roundtrip(client, tmp_path, monkeypatch):
+    """分析图片配置独立存储：与生文互不影响，保存后能读回且 key 不打明文。"""
+    from src import llm_service
+
+    monkeypatch.setattr(llm_service, "VISION_CONFIG_PATH", tmp_path / "vision.json")
+    monkeypatch.setattr(llm_service, "CONFIG_PATH", tmp_path / "llm.json")
+
+    r = client.post("/api/vision_config", json={
+        "api_key": "sk-vision-1234567890", "openai_base_url": "https://example.com/v1",
+        "default_model": "qwen-vl-max",
+    }).json()
+    assert r["configured"] is True
+    assert r["default_model"] == "qwen-vl-max"
+    assert "sk-vision-1234567890" not in r["llm_api_key_masked"]
+    # 生文配置不能被写进去
+    assert client.get("/api/llm_config").json()["configured"] is False
+
+
+def test_vision_config_rejects_incomplete(client):
+    """缺 Base URL 或模型必须 400，不能存半套配置。"""
+    r = client.post("/api/vision_config", json={"api_key": "sk", "openai_base_url": "", "default_model": "x"})
+    assert r.status_code == 400
