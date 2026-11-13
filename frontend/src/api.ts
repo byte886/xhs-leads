@@ -128,7 +128,6 @@ export async function apiClone(feedId: string): Promise<ClonePayload> {
 export async function apiFillXhs(payload: {
   title: string
   desc: string
-  tags: string[]
   images: string[]
 }): Promise<{ ok: boolean; note?: string; [k: string]: unknown }> {
   return j(await fetch(`${BASE}/api/fill_xhs`, {
@@ -520,7 +519,6 @@ export interface OutlinePage {
 export interface AiOutline {
   title: string
   body: string
-  tags: string
   pages: OutlinePage[]
 }
 

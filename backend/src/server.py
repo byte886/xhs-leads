@@ -2280,7 +2280,6 @@ class ContactOpenReq(BaseModel):
 class FillXhsReq(BaseModel):
     title: str = ""
     desc: str = ""
-    tags: list[str] = []
     images: list[str] = []
 
 
@@ -2295,9 +2294,6 @@ async def fill_xhs(req: FillXhsReq):
     from src import browser_client
 
     body = (req.desc or "").strip()
-    tags = [t.lstrip("#").strip() for t in (req.tags or []) if t.strip()]
-    if tags:
-        body = (body + "\n" + " ".join("#" + t for t in tags)).strip()
     files = [_local_image_path(u) for u in (req.images or [])]
     files = [f for f in files if f]
     try:

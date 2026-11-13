@@ -17,7 +17,7 @@ const props = defineProps<{
   open: boolean
   source: { title: string; desc: string; keyword: string; images: string[] }
 }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'apply', v: { title: string; body: string; tags: string; images: string[] }): void }>()
+const emit = defineEmits<{ (e: 'close'): void; (e: 'apply', v: { title: string; body: string; images: string[] }): void }>()
 
 const step = ref(1)
 const busy = ref(false)
@@ -35,7 +35,7 @@ const WORD_COUNTS = [
   { id: 'long', label: '长', desc: '600 字内', target: 600 },
 ]
 const wordCount = ref('medium')
-const outline = ref<AiOutline>({ title: '', body: '', tags: '', pages: [] })
+const outline = ref<AiOutline>({ title: '', body: '', pages: [] })
 
 /**
  * 第 3 步配图方式（互斥二选一，一次只显示一套，避免三套方案同屏打架）：
@@ -55,7 +55,7 @@ const activeTemplate = computed(() => textTemplates.value.find(t => t.id === str
 
 function reset() {
   step.value = 1
-  outline.value = { title: '', body: '', tags: '', pages: [] }
+  outline.value = { title: '', body: '', pages: [] }
   direction.value = ''
   wordCount.value = 'medium'
   imageMode.value = 'ai'
@@ -354,7 +354,6 @@ async function genOutline() {
     outline.value = {
       title: r.outline?.title || '',
       body: r.outline?.body || '',
-      tags: r.outline?.tags || '',
       pages: (r.outline?.pages || []).slice(0, 4),
     }
     step.value = 2
@@ -474,7 +473,6 @@ async function apply() {
   emit('apply', {
     title: outline.value.title.slice(0, 20),
     body: outline.value.body,
-    tags: outline.value.tags,
     images: imgs,
   })
   emit('close')
@@ -599,10 +597,6 @@ const totalChars = computed(() => (outline.value.body || '').length)
             <label class="fld">
               <span>正文 <em class="cnt">{{ totalChars }}/1000</em></span>
               <textarea v-model="outline.body" rows="8" class="wz-input" />
-            </label>
-            <label class="fld">
-              <span>话题标签 <em class="cnt">空格分隔，3–8 个</em></span>
-              <input v-model="outline.tags" class="wz-input" />
             </label>
           </div>
 

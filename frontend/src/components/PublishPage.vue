@@ -10,7 +10,6 @@ const emit = defineEmits<{ (e: 'open-login'): void }>()
 
 const title = ref('')
 const body = ref('')
-const tags = ref('')
 const images = ref<string[]>([])
 const feedId = ref('')
 const videoFile = ref('')  // 视频克隆：原视频本地路径（/videos/...）；空=图文
@@ -77,7 +76,6 @@ async function openFor(note: CloneTarget) {
         })
       return
     }
-    tags.value = ''
   } catch (e) {
     toast(`克隆失败：${(e as Error).message}`, 'error')
   } finally {
@@ -159,11 +157,10 @@ const qcResult = ref<{ checked: boolean; abs: string[]; drain: string[]; structu
 function runQC() {
   const titleText = title.value || ''
   const bodyText = body.value || ''
-  const tagText = tags.value || ''
   const abs: string[] = []
   const drain: string[] = []
   const structure: string[] = []
-  const all = titleText + ' ' + bodyText + ' ' + tagText
+  const all = titleText + ' ' + bodyText
   for (const w of Q_ABS_WORDS) if (all.includes(w)) abs.push(w)
   for (const w of Q_DRAIN_WORDS) if (all.toLowerCase().includes(w.toLowerCase())) drain.push(w)
   if (titleText.trim().length < 4) structure.push('标题过短（建议 ≥4 字，前 12 字抓眼球）')
@@ -193,7 +190,6 @@ async function fillXhs() {
     const r = await apiFillXhs({
       title: title.value,
       desc: body.value,
-      tags: tags.value.split(/[\s,，]+/).filter(Boolean),
       images: dedupe(images.value),
     })
     toast(r.ok ? (r.note || '已填入小红书发布页，确认后手动点发布') : `填入失败：${r.note || '未知原因'}`, r.ok ? 'ok' : 'error')
@@ -219,10 +215,9 @@ function openWizard() {
   wizardOpen.value = true
 }
 
-function onWizardApply(v: { title: string; body: string; tags: string; images: string[] }) {
+function onWizardApply(v: { title: string; body: string; images: string[] }) {
   title.value = (v.title || '').slice(0, 50)
   body.value = (v.body || '').slice(0, 1000)
-  tags.value = v.tags || ''
   if (v.images?.length) images.value = dedupe(v.images)
 }
 
@@ -231,7 +226,6 @@ async function aiRun(action: string) {
   try {
     const r = await apiAiGenerate(action, { title: title.value, desc: body.value, keyword: aiKeyword.value })
     if (action === 'title_summarize' || action === 'title_rewrite') title.value = (r.result || '').slice(0, 50)
-    else if (action === 'tags') tags.value = r.result || ''
     else body.value = (r.result || '').slice(0, 1000)
     toast('已生成，可继续编辑')
   } catch (e) {
@@ -264,7 +258,6 @@ async function aiRun(action: string) {
             <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('title_rewrite')">{{ aiBusy === 'title_rewrite' ? '…' : '改写标题' }}</button>
             <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('body_create')">{{ aiBusy === 'body_create' ? '…' : '创作正文' }}</button>
             <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('body_rewrite')">{{ aiBusy === 'body_rewrite' ? '…' : '改写正文' }}</button>
-            <button class="ai-btn" :disabled="!!aiBusy" @click="aiRun('tags')">{{ aiBusy === 'tags' ? '…' : '提取标签' }}</button>
           </div>
         </div>
         <div class="pub-field">
@@ -274,10 +267,6 @@ async function aiRun(action: string) {
         <div class="pub-field">
           <label>正文 <span class="limit">{{ bCount }}/1000</span></label>
           <textarea v-model="body" rows="5" maxlength="1000" style="width:100%;resize:vertical"></textarea>
-        </div>
-        <div class="pub-field">
-          <label>话题标签 <span class="limit">空格分隔</span></label>
-          <input v-model="tags" placeholder="#翡翠 #手镯 #珠宝" style="width:100%" />
         </div>
         <!-- F9 发布前质检（折叠；发布按钮自动跑 + 高风险强确认） -->
         <div class="qc-card">
