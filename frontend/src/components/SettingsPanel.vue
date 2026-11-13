@@ -546,18 +546,6 @@ onMounted(async () => {
 
         <!-- AI：生文 / 生图 两条独立链路（供应商 + Key 各自独立） -->
         <section v-if="activeCat === 'ai'">
-          <div class="ai-status">
-            <div class="ai-st" :class="{ on: aiCfg?.configured }">
-              <i class="dot" />生文<b>{{ aiCfg?.configured ? '已配置' : '未配置' }}</b>
-              <em>{{ aiCfg?.default_model || '—' }}</em>
-            </div>
-            <div class="ai-st" :class="{ on: imgCfg?.configured }">
-              <i class="dot" />生图<b>{{ imgCfg?.configured ? '已配置' : '未配置' }}</b>
-              <em>{{ imgCfg?.model || '—' }}</em>
-            </div>
-            <span class="ai-st-tip">两条链路独立配置、互不影响。生文未配置时生成按钮灰态。</span>
-          </div>
-
           <!-- 生文 -->
           <div class="ai-block">
             <div class="blk-head">
@@ -820,24 +808,6 @@ input:not([type="checkbox"]) {
 .gate-msg.ok { background: #F2FBF5; border-color: #BFE8D0; color: #1a7f4c; }
 
 /* ---- AI 分区：生文 / 生图 两条独立链路（供应商 + Key 各自独立）---- */
-.ai-status {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--r-card); padding: 12px 14px; margin-bottom: 12px;
-}
-.ai-st {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-size: 12.5px; color: var(--ink-3); background: var(--panel-2);
-  border-radius: var(--r-pill); padding: 5px 12px;
-}
-.ai-st .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(43, 30, 24, .28); display: inline-block; flex-shrink: 0; }
-.ai-st b { font-weight: 700; color: var(--ink-2); }
-.ai-st em { font-style: normal; color: var(--ink-3); font-size: 11.5px; font-family: ui-monospace, Menlo, monospace; }
-.ai-st.on { background: rgba(47, 122, 85, .09); color: var(--green); }
-.ai-st.on .dot { background: var(--green); }
-.ai-st.on b { color: var(--green); }
-.ai-st-tip { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
-
 .ai-block {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r-card); padding: 17px 18px; margin-bottom: 12px;
