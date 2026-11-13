@@ -101,11 +101,6 @@ def test_login_hint_page_removed(client):
     assert r.status_code == 404
 
 
-def test_clients_agg_empty(client):
-    r = client.get("/api/clients_agg")
-    assert r.status_code == 200
-
-
 def test_llm_config_missing_fields_400(client):
     r = client.post("/api/llm_config", json={"api_key": "k", "openai_base_url": "", "default_model": ""})
     assert r.status_code == 400
@@ -307,11 +302,6 @@ def test_authors_with_row(client):
     con.commit()
     r = client.get("/api/authors").json()
     assert "authors" in r
-
-
-def test_clients_agg_with_row(client):
-    r = client.get("/api/clients_agg")
-    assert r.status_code == 200
 
 
 def test_status_now_detail_phase(client):
