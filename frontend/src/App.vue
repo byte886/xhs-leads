@@ -17,6 +17,7 @@ import { isLoginAbnormal } from './lib/auth'
 // 4 个常驻 Tab：采集 / 客户 / 档案 / 设置；「一键克隆」不占 Tab，改为弹出层
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
 const publishOpen = ref(false)
+const clientsOpen = ref(false)
 const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 
 
@@ -44,7 +45,10 @@ async function openPublish(note: Note) {
 
 // 弹层 Esc 关闭（不监听遮罩点击，避免误触关掉正在编辑的内容）
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && publishOpen.value) publishOpen.value = false
+  if (e.key === 'Escape') {
+    if (publishOpen.value) publishOpen.value = false
+    else if (clientsOpen.value) clientsOpen.value = false
+  }
 }
 
 // 单条克隆（对齐视频：克隆走卡片单条，不批量）
@@ -84,7 +88,7 @@ async function collectClients(note: Note) {
       ? `采集到 ${data.total} 位互动用户（新增 ${data.new}）${hi}，已入库`
       : '未采集到互动用户（可能无评论或需登录）')
     if (data.total > 0) {
-      setTab('clients')
+      clientsOpen.value = true
       await nextTick()
       await clientsRef.value?.refresh()
     }
@@ -181,10 +185,18 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->
-    <div v-show="appState.tab === 'clients'" class="work">
-      <div style="max-width:1100px;margin:0 auto;padding:36px 26px 22px">
-        <ClientsPanel ref="clientsRef" />
+    <!-- 采集客户弹层：不占 Tab，采集完成即弹出；关闭回采集页 -->
+    <div v-show="clientsOpen" class="publish-modal">
+      <div class="publish-dialog">
+        <div class="publish-bar">
+          <span class="publish-bar-t">采集客户</span>
+          <button class="btn publish-bar-close" @click="clientsOpen = false">关闭</button>
+        </div>
+        <div class="publish-body">
+          <div style="max-width:1100px;margin:0 auto">
+            <ClientsPanel ref="clientsRef" />
+          </div>
+        </div>
       </div>
     </div>
 
