@@ -374,7 +374,12 @@ async def _open_filter_panel(page) -> None:
 
 
 async def _pick_filter_point(page, val: str):
-    """轮询等选项渲染出来，再等平滑滚动停稳后重取一次坐标。"""
+    """轮询等选项渲染出来，再等平滑滚动停稳后重取一次坐标。
+
+    坐标必须落在视口内：页面停在列表底部、或面板残留着 opacity>0 但已被裁掉的标签时，
+    取到的 y 会远超 innerHeight，鼠标事件落到视口外 —— 表现为「筛选没生效」却查不出
+    原因（Windows 连续第二次采集出现过）。越界时先把页面滚回筛选栏再重取一次。
+    """
     pt = None
     for _ in range(4):
         pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
@@ -384,7 +389,21 @@ async def _pick_filter_point(page, val: str):
     if not pt:
         return None
     await asyncio.sleep(0.8)
-    return await page.evaluate(_FILTER_TAG_POINT_JS, val) or pt
+    pt = await page.evaluate(_FILTER_TAG_POINT_JS, val) or pt
+    vp = await page.evaluate(_VIEWPORT_JS)
+    if not (0 <= pt["x"] <= vp["w"] and 0 <= pt["y"] <= vp["h"]):
+        log.info("筛选选项 %s 坐标 (%s,%s) 超出视口 %sx%s，滚回筛选栏后重取",
+                 val, pt["x"], pt["y"], vp["w"], vp["h"])
+        await page.evaluate(_FILTER_SCROLL_BACK_JS)
+        await asyncio.sleep(0.7)
+        pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
+        if not pt:
+            return None
+        vp = await page.evaluate(_VIEWPORT_JS)
+        if not (0 <= pt["x"] <= vp["w"] and 0 <= pt["y"] <= vp["h"]):
+            log.info("筛选选项 %s 仍超出视口 (%sx%s)，放弃该项", val, vp["w"], vp["h"])
+            return None
+    return pt
 
 
 async def _close_filter_panel(page) -> None:
@@ -396,6 +415,36 @@ async def _close_filter_panel(page) -> None:
 
 
 _LOCATION_FILTER_LABEL = "位置距离"
+
+_VIEWPORT_JS = "() => ({w: innerWidth, h: innerHeight})"
+
+# 坐标越界时把筛选栏滚回视口中央（优先滚筛选按钮，退化到页面顶部）。
+_FILTER_SCROLL_BACK_JS = """() => {
+  const el = document.querySelector('div.filter')
+    || [...document.querySelectorAll('div, span, button')].find(x => {
+      const t = (x.innerText || '').trim();
+      return t.length <= 4 && t.includes('筛选');
+    });
+  if (el) { el.scrollIntoView({block: 'center', inline: 'nearest'}); return 'filter'; }
+  window.scrollTo(0, 0);
+  return 'top';
+}"""
+
+# 坐标点击未命中时的兜底：页面内直接点标签（不依赖滚动位置与遮挡）。
+_FILTER_TAG_CLICK_JS = """(val) => {
+  const want = 'xhs-filter-tag-' + val;
+  let el = [...document.querySelectorAll('[data-hp-kind]')]
+    .find(e => e.getAttribute('data-hp-kind') === want);
+  if (!el) {
+    el = [...document.querySelectorAll('div.tags')].find(x => {
+      const t = ((x.innerText || '').trim().split(/\\s+/)[0] || '');
+      return t === val && Number(getComputedStyle(x).opacity) > 0.01;
+    });
+  }
+  if (!el) return false;
+  el.click();
+  return true;
+}"""
 
 
 def _filter_warn(label: str, val: str) -> dict:
@@ -429,11 +478,16 @@ async def _filter_is_active(page, val: str) -> bool:
     await asyncio.sleep(1.0)
     if await _active_contains(page, val):
         return True
+    first = await page.evaluate(_ACTIVE_TAGS_JS)
+    log.info("筛选校验 %s：点击后 1s 未读到 active（当前 active=%s），重开面板复核", val, first)
     await _open_filter_panel(page)
     for _ in range(3):
         if await _active_contains(page, val):
             return True
         await asyncio.sleep(0.5)
+    last = await page.evaluate(_ACTIVE_TAGS_JS)
+    vis = await page.evaluate(_VIS_TAGS_JS)
+    log.info("筛选校验 %s 判定未生效：复核 active=%s 可见项=%s", val, last, vis)
     return False
 
 
@@ -462,8 +516,15 @@ async def _apply_filters(page, filters: dict):
             if await _filter_is_active(page, val):
                 log.info("筛选已选 %s=%s", label, val)
             else:
-                log.warning("筛选未生效 %s=%s", label, val)
-                warns.append(_filter_warn(label, val))
+                # 兜底：坐标链路没命中（滚动位置/遮挡/坐标越界）时，改用页面内点击。
+                # 这不是主路径，主路径仍是真鼠标事件；两种都失败才判未生效。
+                await _open_filter_panel(page)
+                hit = await page.evaluate(_FILTER_TAG_CLICK_JS, val)
+                if hit and await _filter_is_active(page, val):
+                    log.info("筛选已选 %s=%s（坐标点击未命中，页面内点击补上）", label, val)
+                else:
+                    log.warning("筛选未生效 %s=%s", label, val)
+                    warns.append(_filter_warn(label, val))
         else:
             log.info("筛选选项未找到 %s=%s，跳过该项", label, val)
             warns.append(_filter_warn(label, val))
