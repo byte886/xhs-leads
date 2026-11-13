@@ -407,14 +407,43 @@ async def _pick_filter_point(page, val: str):
 
 
 async def _close_filter_panel(page) -> None:
-    """收起筛选面板，等结果重新加载。"""
-    closer = await page.evaluate(_FILTER_CLOSE_JS)
-    if isinstance(closer, dict) and closer.get("x") is not None:
-        await page.mouse.click(closer["x"], closer["y"])
+    """收起筛选面板，等结果重新加载。
+
+    （2026-11-13 Windows 真机）：这一步原来按坐标 `mouse.click(收起)`。面板在点击
+    选项后已经重渲染，收起按钮的位置和取坐标时不一致，坐标就落到下面的笔记卡片上，
+    页面直接跳进作者主页（`/user/profile/...`），搜索结果列表没了 —— 采集返回 0 条，
+    前端提示「已完成 · 未采集到数据」，日志里连「搜索结束」都不会出现。Mac 900 宽的
+    窗口下面板下方是空白，所以一直没暴露。改为页面内点击（与展开同一条通道），
+    按钮找不到时才退回坐标点击。
+    """
+    closed = await page.evaluate(_FILTER_CLOSE_CLICK_JS)
+    if not closed:
+        closer = await page.evaluate(_FILTER_CLOSE_JS)
+        if isinstance(closer, dict) and closer.get("x") is not None:
+            log.debug("筛选面板找不到收起按钮，退回坐标点击 (%s,%s)",
+                      closer["x"], closer["y"])
+            await page.mouse.click(closer["x"], closer["y"])
     await asyncio.sleep(1.2)
+    url = _page_url_now(page)
+    if "search_result" not in (url or ""):
+        log.warning("收起筛选面板后页面已漂离搜索页：%s", url)
 
 
 _LOCATION_FILTER_LABEL = "位置距离"
+
+# 收起面板：页面内点击（与展开同一条通道）。坐标点击会落到下方笔记卡片上，
+# 页面跳作者主页后搜索结果全丢（Windows 640 窄窗实测）。
+_FILTER_CLOSE_CLICK_JS = """() => {
+    const el = [...document.querySelectorAll('[data-hp-kind]')]
+        .find(e => e.getAttribute('data-hp-kind') === 'xhs-filter-op-收起')
+        || [...document.querySelectorAll('div, span, button')].find(x => {
+            const t = (x.innerText || '').trim();
+            return t.length <= 4 && t.includes('收起');
+        });
+    if (!el) return false;
+    el.click();
+    return true;
+}"""
 
 _VIEWPORT_JS = "() => ({w: innerWidth, h: innerHeight})"
 
@@ -694,6 +723,12 @@ async def _open_login_page(page, timeout_s: float = 30) -> bool:
         try:
             url = page.url or ""
         except Exception:  # noqa: BLE001（页面已毁：交给上层重试）
+            return False
+        if "captcha" in url or "website-login" in url:
+            # 平台把 /login 直接跳人机验证时会一直停在这里，等满 30s 再报「限流」
+            # 会让用户以为是自己操作问题。立即结束并说清要去做什么。
+            log.warning("登录页停在人机验证：%s（需人工在采集窗完成验证后重试）",
+                        url[:120])
             return False
         if "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url:
             return True

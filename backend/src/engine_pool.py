@@ -167,6 +167,33 @@ _HEADLESS_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
 )
 
+# Playwright 默认注入的「自动化专用」参数，2026-11-13 在 Win11 采集窗用进程命令行取证
+# 确认其造成两类问题和现象一一对应：
+# 1) 风控指纹：`--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding`
+#    让被遮挡的窗口仍满帧跑 rAF（实测采集窗被黑窗盖住时 1.2s 仍 73 帧）。真人浏览器窗口
+#    被遮挡会降频/暂停，风控据此判定自动化，把人机验证页做成「僵尸页」——画面正常、渲染
+#    在跑，但 CDP 合成点击、JS dispatchEvent、真实驱动级鼠标点击全都不响应。
+# 2) 功能冲突：默认的 `--disable-extensions` 会压掉我们自己 `--load-extension` 的扩展，
+#    表现为「打包版没有扩展注入、采集窗缺蓝色高亮」。
+# 网页读不到自身命令行，但这些参数产生的行为特征可观测，故从默认参数里逐项摘掉。
+# 只摘独立的、可精确匹配的项（Playwright 按完整字符串匹配，合并型
+# `--disable-features=a,b,c` 摘不掉也不强摘），且都不影响单账号单标签的实际需求。
+_IGNORE_DEFAULT_ARGS = [
+    "--no-first-run",
+    "--disable-extensions",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-popup-blocking",
+    "--disable-hang-monitor",
+    "--disable-ipc-flooding-protection",
+    "--disable-prompt-on-repost",
+    "--disable-search-engine-choice-screen",
+    "--disable-breakpad",
+    "--allow-pre-commit-input",
+    "--unsafely-disable-devtools-self-xss-warnings",
+    "--metrics-recording-only",
+]
+
 # injections.get("stealth")——引擎 context add_init_script 启动时注入一次。
 
 
@@ -617,9 +644,11 @@ class AccountEngine:
     def _launch_apply_binary(self, launch_kwargs: dict, headless: bool) -> None:
         """选二进制并处理 UA / Playwright 默认参数。
 
-        CFT 独立应用身份（com.google.chrome.for.testing）→ 不再占用用户日常 Chrome
-        的 LaunchServices 单实例（根除「APP 开着时日常 Chrome 无法新建窗口」）；
-        缺失时回退 channel=chrome。CFT 为自动化专用 build，无 first-run 向导。
+        双端统一用 CFT：Mac 同 CFT 采集正常（2026-11-13 实测），且 CFT 独立身份
+        （com.google.chrome.for.testing）不占用用户日常 Chrome 的单实例，产品独立分发
+        也不能依赖用户机器预装 Chrome。Windows 侧的拦截经对照实验确认是「登录会话」
+        被打标（同机游客态空 profile 正常、登录态被拦），不是 CFT 二进制问题，
+        故清 profile 重扫即可，不换二进制。
         """
         cft = builtin_cft_candidates()
         if cft:
@@ -628,7 +657,7 @@ class AccountEngine:
         log.info("引擎二进制: %s", cft or "channel=chrome（系统 Chrome）")
         if headless:
             launch_kwargs["user_agent"] = _HEADLESS_UA
-        launch_kwargs["ignore_default_args"] = ["--no-first-run"]
+        launch_kwargs["ignore_default_args"] = _IGNORE_DEFAULT_ARGS
 
     def _launch_apply_extension(self, launch_kwargs: dict) -> None:
         """可选自动加载未打包扩展（默认关闭，由 config.extension_enabled 控制）。

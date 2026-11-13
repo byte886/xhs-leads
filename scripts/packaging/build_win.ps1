@@ -26,11 +26,6 @@ param(
     [string]$Format = "all"
 )
 
-param(
-    [switch]$SkipDeps,
-    [string]$CftVersion = "158.0.8127.18"
-)
-
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = (Resolve-Path (Join-Path $ScriptDir "..\..")).ProviderPath
