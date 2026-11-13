@@ -65,8 +65,12 @@ backend/.venv/bin/python -m PyInstaller --noconfirm --clean scripts/packaging/xh
 # 4) post-copy：内置引擎 CFT 直拷进 .app（PyInstaller datas 无法处理签名 app bundle
 # 二进制，故打包完成后绕过其管线直接拷入 Resources/engine/）
 echo ">> 内置引擎 CFT 写入 .app"
-mkdir -p dist/XHSLeads.app/Contents/Resources/engine
-rsync -a --delete build_resources/engine/ dist/XHSLeads.app/Contents/Resources/engine/
+# 只同步本平台引擎：build_resources/engine 下同时放着 chrome-win64（Windows 打包经共享路径
+# 在 guest 里读取，不能删），整个目录同步会把 451MB 的 Windows 引擎塞进 Mac 包 ——
+# 实测让 .app 从约 550MB 虚涨到 1.0GB。
+mkdir -p dist/XHSLeads.app/Contents/Resources/engine/chrome-mac-x64
+rsync -a --delete build_resources/engine/chrome-mac-x64/ \
+  dist/XHSLeads.app/Contents/Resources/engine/chrome-mac-x64/
 
 # 4.1) 引擎 CFT 应用图标替换为品牌图标（Dock/窗口图标）
 echo ">> 内置引擎 CFT 图标替换为品牌图标"
