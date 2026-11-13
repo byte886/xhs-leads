@@ -2172,6 +2172,23 @@ def _is_noise_comment(text: str) -> bool:
     return bool(t) and len(t) <= 24 and t.endswith("关注")
 
 
+def _dedupe_clients_by_uid(users: list) -> list:
+    """把评论记录按 uid 收敛成「人」：一人可发多条评论，库里只存一行。
+
+    实测口径差：平台声明 488 条评论 → 浏览器抓到 465 条评论记录 → 实际 376 人。
+    若按评论条数返回，界面「本篇线索」和意向分布都会把同一个人算成很多人。
+    同一人保留意向最高的那条（high > upper > middle > low）。
+    """
+    order = {"high": 0, "upper": 1, "middle": 2, "low": 3}
+    by_uid: dict = {}
+    for u in users:
+        k = u.get("uid") or ""
+        cur = by_uid.get(k)
+        if cur is None or order.get(u.get("intent", "low"), 9) < order.get(cur.get("intent", "low"), 9):
+            by_uid[k] = u
+    return list(by_uid.values())
+
+
 @app.post("/api/clients")
 async def collect_clients(req: ClientsReq):
     """采集笔记评论区互动用户名单（O1-3）：真实浏览器打开原作品页提取评论用户（含属地/时间），
@@ -2205,6 +2222,9 @@ async def collect_clients(req: ClientsReq):
     except HTTPException as e:
         # 风控风险页：已采部分保留（历史入库记录不动），明确提示停用窗口，不自动重试
         raise HTTPException(429, "触发平台风险拦截，建议停用 ≥24h，人工确认后再恢复采集") from e
+    except browser_client.BrowserLoginRequiredError as e:
+        # 被平台判异常访问时已自动退登，前端据此提示"重新扫码登录"
+        raise HTTPException(409, str(e)) from e
     except browser_client.ClientCollectError as e:
         # 前置条件不满足（无搜索页 / 卡片已不在结果里）：409 让界面照原话提示，不伪装成"没人评论"
         raise HTTPException(409, str(e)) from e
@@ -2230,6 +2250,7 @@ async def collect_clients(req: ClientsReq):
         added += cur.rowcount
     con.commit()
     from src.intent import INTENT_LABEL
+    users = _dedupe_clients_by_uid(users)
     summary = {}
     for u in users:
         label = INTENT_LABEL.get(u.get("intent"), "低意向")
@@ -2278,7 +2299,8 @@ def clients_list(feed_id: str = "", intent: str = ""):
     ordered = sorted(
         rows, key=lambda r: (intent_rank(r["intent"]), r["comment_count"], r["note_count"]), reverse=True
     )
-    ordered = ordered[:200]
+    # 不再按 200 截断：total 必须是真实去重人数，列表也全量下发——
+    # 截断会让「本篇 N 位客户」在超过 200 人时变成假的 200。
     return {"total": len(ordered), "clients": [dict(r) for r in ordered]}
 
 

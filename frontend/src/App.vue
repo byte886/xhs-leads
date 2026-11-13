@@ -87,12 +87,17 @@ async function collectClients(note: Note) {
   collectClock = setInterval(() => { collectState.value.elapsed += 1 }, 1000)
 
   const ac = new AbortController()
-  const capTimer = setTimeout(() => ac.abort(), 120_000)
+  // 评论须滚到底再提取，评论多的笔记本身就要几十秒，超时给足余量
+  const capTimer = setTimeout(() => ac.abort(), 420_000)
   const fail = (msg: string, ms = 120) => {
     stopCollectClock()
-    collectState.value = { running: false, text: `采集失败：${msg.slice(0, ms)}`, err: '1', elapsed: collectState.value.elapsed }
-    toast('采集失败：' + msg.slice(0, ms), 'error')
-    if (isLoginAbnormal(msg)) ensureRightLogin()
+    // 被平台判异常访问（300013）时后端已自动退登 → 左窗直接提示重新扫码，不铺平台长文案
+    const needLogin = isLoginAbnormal(msg)
+    const tip = needLogin ? '需要重新登录：请在右侧窗口重新扫码' : `采集失败：${msg.slice(0, ms)}`
+    collectState.value = { running: false, text: tip, err: '1', elapsed: collectState.value.elapsed }
+    toast(tip, 'error')
+    // 不再调 ensureRightLogin：后端被限时已经把右窗清 cookie 并停在 /login，
+    // 这里再发 login_begin 会让守卫再导航一次，与"停在登录页"来回抢页面 → 视觉上闪烁。
   }
 
   try {
@@ -123,7 +128,7 @@ async function collectClients(note: Note) {
   } catch (e) {
     clearTimeout(capTimer)
     const aborted = (e as { name?: string })?.name === 'AbortError'
-    fail(aborted ? '采集超时（120 秒），已停止' : '网络错误，已停止')
+    fail(aborted ? '采集超时（420 秒），已停止' : '网络错误，已停止')
   }
 }
 

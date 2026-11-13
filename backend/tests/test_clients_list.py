@@ -90,3 +90,25 @@ def test_max_intent_picks_highest(tmp_path, monkeypatch):
 def _call_clients_list(feed_id: str = "", intent: str = ""):
     """直接调用路由函数（避免起真实 HTTP 服务）。"""
     return server.clients_list(feed_id=feed_id, intent=intent)["clients"]
+
+
+def test_dedupe_clients_by_uid_keeps_highest_intent():
+    """一人多条评论必须收敛成一个人（界面「本篇线索」是人数，不是评论条数）。
+
+    实测口径差：488 条评论声明 → 465 条评论记录 → 实际 376 人。
+    """
+    users = [
+        {"uid": "u1", "intent": "low", "comment": "好看"},
+        {"uid": "u1", "intent": "high", "comment": "多少钱", "matched_word": "多少钱"},
+        {"uid": "u2", "intent": "middle", "comment": "在哪买"},
+    ]
+    out = server._dedupe_clients_by_uid(users)
+    assert len(out) == 2
+    by = {u["uid"]: u for u in out}
+    assert by["u1"]["intent"] == "high"
+    assert by["u1"]["matched_word"] == "多少钱"
+    assert by["u2"]["intent"] == "middle"
+
+
+def test_dedupe_clients_by_uid_empty():
+    assert server._dedupe_clients_by_uid([]) == []

@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import pathlib
+import random
 import re
 import subprocess
 import sys
@@ -1292,6 +1293,8 @@ def _page_position(page) -> str:
         url = page.url or ""
     except Exception:  # noqa: BLE001
         return "other"
+    if "website-login/error" in url or "error_code=300013" in url:
+        return "error"          # 必须排在 /explore/ 之前：redirectPath 里带着 /explore/xx
     if "/user/profile/" in url:
         return "author"
     if "search_result" in url:
@@ -1345,32 +1348,102 @@ def _detail_url(feed_id: str, xsec_token: str) -> str:
             f"?xsec_token={xsec_token}&xsec_source=pc_search")
 
 
-async def _open_detail_page(feed_id: str, xsec_token: str, account_id: str = "default"):
-    """凭库里的 token 新开独立详情页；打不开则关页返回 None（调用方回退搜索页）。
+# 详情页复用槽：account_id → 上一次采集用的详情页标签。
+# （2026-11-13 实测）：风控点不在"页面内滚动"，而在"反复打开新页面"——同一篇笔记
+# 短时间内被开了四五次独立 tab 后，页面被平台跳到 website-login/error。连续采多篇
+# 时改成同一标签内切地址，只开一次页，行为特征接近真人翻页。
+_DETAIL_PAGE: dict[str, object] = {}
 
-    （2026-11-08 实测）：旧结论"详情页只能真鼠标点卡片、直链必 404"只对手工
-    拼的 URL 成立。用库里 xsec_token 拼回 feed_id 直开，新开 tab 实测正常——落地 URL
+
+_RELIMIT_MSG = ("平台判定本次访问异常（300013）已限制采集，已自动退出登录。"
+                 "请在右侧窗口重新扫码登录，登录后重新点「采集客户」即可。")
+
+
+async def _risk_relogin(page, account_id: str, note_id: str = ""):
+    """被平台判异常访问（300013）时的唯一处置：退出登录 + 回登录页 → 抛登录要求。
+
+    实测（2026-11-13）：换新标签 / 跳首页 / 在正常首页点卡片三条路径都照拦，
+    只有「登出（清 cookie）→ 重新扫码登录」能立刻恢复，故这里只做这一条。
+    """
+    log.info("平台判定异常访问，退出登录并回登录页 note_id=%s", note_id)
+    await _force_relogin(page, account_id)
+    _handle_login_wall(account_id, "平台判定异常访问（300013），已退出登录")
+    raise BrowserLoginRequiredError(_RELIMIT_MSG)
+
+
+async def _open_detail_page(feed_id: str, xsec_token: str, account_id: str = "default"):
+    """打开目标笔记详情页：优先复用上次那个标签，同页导航到新地址。
+
+    （2026-11-08 实测）：用库里 xsec_token 拼回 feed_id 直开详情页可行——落地 URL
     未被重定向、`.note-scroller` 在、评论已渲染、无「当前笔记暂时无法浏览」。
     因此「采评论」不必再依赖采集留下的搜索页：开始采集与采集客户彻底解耦。
     """
     if not xsec_token:
         return None
+    url = _detail_url(feed_id, xsec_token)
+
+    page = _DETAIL_PAGE.get(account_id)
+    if page is not None:
+        try:
+            if page.is_closed():
+                page = None
+        except Exception:  # noqa: BLE001
+            page = None
+        if page is not None:
+            try:
+                await cdp_call(page.goto(url, wait_until="domcontentloaded"),
+                               timeout=CDP_NAV, label="detail.reuse", skip=True)
+                await asyncio.sleep(5)
+                pos = _page_position(page)
+                if pos == "error":
+                    await _risk_relogin(page, account_id, feed_id)
+                if pos == "detail":
+                    return page
+                log.info("复用详情页未进详情 url=%s", _page_url_now(page))
+            except Exception as exc:  # noqa: BLE001
+                log.info("复用详情页失败 %s", str(exc)[:80])
+            _DETAIL_PAGE.pop(account_id, None)
+
     try:
         page = await (await _ctx(account_id)).new_page()
     except Exception:  # noqa: BLE001
         return None
     try:
-        await cdp_call(page.goto(_detail_url(feed_id, xsec_token),
-                                 wait_until="domcontentloaded"),
+        await cdp_call(page.goto(url, wait_until="domcontentloaded"),
                        timeout=CDP_NAV, label="detail.direct", skip=True)
-        await asyncio.sleep(5)  # 等 SPA 渲染出评论区
-        if _page_position(page) == "detail":
+        await asyncio.sleep(5)
+        pos = _page_position(page)
+        if pos == "error":
+            _DETAIL_PAGE[account_id] = page
+            await _risk_relogin(page, account_id, feed_id)
+        if pos == "detail":
+            _DETAIL_PAGE[account_id] = page
             return page
         log.info("token 直开未进详情页 url=%s", _page_url_now(page))
     except Exception as exc:  # noqa: BLE001
         log.info("token 直开失败 %s", str(exc)[:80])
     await _close_page_safe(page, account_id)
     return None
+
+
+async def _force_relogin(page, account_id: str = "default") -> None:
+    """平台判异常访问（300013 / rejectUrl=comment/page）时，主动退出登录并停在登录页。
+
+    （2026-11-13 用户实测）：登出 → 重新扫码登录后限制立刻解除；而换新标签、跳首页、
+    在正常首页用真鼠标点卡片这三条路径全部无效。故这里直接清会话 cookie、回 /login。
+    """
+    try:
+        page.context.clear_cookies()
+        log.info("已清除会话 cookie（主动退出登录）account=%s", account_id)
+    except Exception as exc:  # noqa: BLE001
+        log.info("清除 cookie 失败 %s", str(exc)[:60])
+    try:
+        await cdp_call(page.goto(LOGIN_URL, wait_until="domcontentloaded"),
+                       timeout=CDP_NAV, label="relogin", skip=True)
+        await asyncio.sleep(2)
+        log.info("已回到登录页等待重新扫码 url=%s", _page_url_now(page))
+    except Exception as exc:  # noqa: BLE001
+        log.info("回登录页失败 %s", str(exc)[:60])
 
 
 async def _open_note_card(page, note_id: str) -> bool:
@@ -1767,6 +1840,16 @@ class ClientCollectError(RuntimeError):
     """
 
 
+class _RiskLimited(RuntimeError):
+    """当前标签被平台判为异常访问（落到 website-login/error）。
+
+    2026-11-13 实测：被拦的参数里 `rejectUrl` 指向 `v2/comment/page`，
+    `error_code=300013`、提示「检测到异常访问…本次访问已被限制」。
+    这种拦截绑在当前标签上——换一个新标签重新进详情页即可恢复（实测有效），
+    所以上层捕获它之后要「关掉这个页、新开一页重来」，不要原地重试。
+    """
+
+
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default",
                   keyword: str = "", filters: dict | None = None) -> dict:
     """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。
@@ -1781,18 +1864,9 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     不带条件重开得到的是综合排序的混合结果，原卡片多半不在里面，于是误报"笔记已不在
     搜索结果里"（2026-11-08 真机踩到：采集用「图文+最新」，重开无筛选 → 卡片未命中）。
 
-    首选凭入库 token **新开独立详情页**（不碰采集页，两个功能解耦）；
-    直开失败才回退到"活动搜索页点卡片 / 按关键词重开"的老路径。
+    主路径：**在活动搜索页上用真鼠标点开那张卡片**（用户拍板：能点的就别拼 URL 直开，
+    URL 只允许开 /login）。点开失败、且手里有 xsec_token 时才兜底直开一次。
     """
-    if xsec_token:
-        direct = await _open_detail_page(note_id, xsec_token, account_id)
-        if direct is not None:
-            try:
-                return await _drain_comments(direct)
-            finally:
-                await _close_page_safe(direct, account_id)
-        log.info("token 直开未成功，回退搜索页 note_id=%s", note_id)
-
     page = _active_page(account_id)
     if page is None and keyword:
         log.info("无活动搜索页，按关键词重开 note_id=%s kw=%s filters=%s", note_id, keyword, filters)
@@ -1810,6 +1884,14 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
             if await _open_note_card(page, note_id):
                 break
         else:
+            # 兜底：卡片点不开（搜索批次已漂走）但手里有 token 时才直开一次。
+            if xsec_token:
+                direct = await _open_detail_page(note_id, xsec_token, account_id)
+                if direct is not None:
+                    try:
+                        return await _drain_comments(direct)
+                    except _RiskLimited:
+                        await _risk_relogin(direct, account_id, note_id)
             log.info("评论卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
             raise ClientCollectError(
                 "这条笔记已不在当前搜索结果里（平台每次搜索结果会变化，尤其按「最新」排序）。"
@@ -1835,67 +1917,133 @@ def _ensure_detail_page(page) -> None:
             "本次未采到评论用户——请重试，或重新采集一批笔记后再点「采集客户」。")
 
 
-async def _drain_comments(page) -> dict:
-    """评论区懒加载：滚到底 + 展开折叠回复，再提取。
+_COMMENT_MAX_ROUNDS = 70      # 滚动保险上限（防死循环），不是采集配额
+_COMMENT_IDLE_STOP = 4        # 连续 4 轮没有新批就判定到底
+_COMMENT_WHEEL_STEP = 850     # 每次滚轮位移≈一屏（真人一屏的量，不是一次跳到底）
+_COMMENT_WHEEL_GAP = (1.2, 1.8)   # 两次滚轮之间停顿（秒），带抖动
+_COMMENT_ROUND_GAP = (1.6, 2.4)   # 每轮之间停顿（秒），看内容的时间
 
-    （2026-11-08 真机取证）：详情页评论在 `.note-scroller` 内部滚动
-    （clientHeight 606 / scrollHeight 2931 起）。旧实现只把评论容器
-    `scrollIntoView` 挪进视口、从不滚内部，懒加载永不触发——首屏仅渲染 20 条，
-    66 条评论的笔记点「采集客户」只采到 4 个新人，用户看到的是"这篇没人评论"。
-    实测滚 .note-scroller 到底：评论条 20→40→58→62、profile 链接 68→152。
+
+async def _drain_comments(page) -> list:
+    """评论区互动用户：真实滚轮滚到底 + 展开折叠回复 + 边滚边抓。
+
+    （2026-11-13 真机取证，替换旧实现）两条硬事实：
+    1. 评论容器 `.note-scroller` 自身 scrollHeight == clientHeight（4581/4581），
+       JS 写 scrollTop 完全无效——scrollTop 恒 0、评论恒 19 条，575 条评论的
+       笔记因此只采到 19 位用户。必须用 page.mouse.wheel 派发真实滚轮事件，
+       实测 25 秒内主评论 10 → 457 条（每批 10 条）。
+    2. 滚到后面评论区会整块从 DOM 卸载（457 条后 .comment-item 归零），
+       只在最后提取一次必然拿到空列表（实测 total=0）。所以每加载一批就
+       抓一次、按 uid+评论去重累积，滚过头也不丢已抓到的用户。
+
+    有多少采多少：判定到底靠"连续 4 轮没有新批"，不设人为条数上限。
     """
-    if await page.evaluate(_COMMENT_EXPAND_JS):      # 先展开「查看更多评论」类入口
-        await asyncio.sleep(1.5)
-    await _scroll_comments_to_end(page)
-    if await page.evaluate(_COMMENT_EXPAND_JS):      # 到底后再展开一轮折叠回复
-        await asyncio.sleep(1.5)
-        await _scroll_comments_to_end(page, max_rounds=4)
-    await injections.inject_once(page, "extract")  # 导航后旧注入失效，提取前重新注入
-    return await page.evaluate("() => xhsExtractComments()")
+    if "website-login/error" in (_page_url_now(page) or ""):
+        raise _RiskLimited("详情页被平台判为异常访问")
+    await _expand_comment_folds(page)          # 先展开「查看更多评论」类入口
 
+    # 鼠标必须落在评论区里，滚轮才会滚评论列表而不是笔记正文
+    try:
+        await page.locator(".comment-item").first.hover(timeout=5000)
+    except Exception:                          # noqa: BLE001
+        box = await cdp_call(page.evaluate(_COMMENT_BOX_JS), timeout=CDP_EVAL,
+                             label="comment.box", skip=True)
+        if box:
+            await page.mouse.move(box["x"], box["y"])
 
-async def _scroll_comments_to_end(page, max_rounds: int = 10) -> int:
-    """把评论容器滚到底；连续两轮高度不变即判定到底（返回最终 scrollHeight）。"""
+    acc: dict[str, dict] = {}
     prev = -1
-    same = 0
-    for _ in range(max_rounds):
-        h = await cdp_call(page.evaluate(_COMMENT_SCROLL_JS),
-                           timeout=CDP_EVAL, label="comment.scroll", skip=True)
-        await asyncio.sleep(2.2)
-        cur = (h or {}).get("height", 0)
-        if cur and cur == prev:
-            same += 1
-            if same >= 2:
-                return cur
-        else:
-            same = 0
-            prev = cur
-    return prev
+    idle = 0
+    for _ in range(_COMMENT_MAX_ROUNDS):
+        # 真人节奏：一次滚一屏、停一下再看，别 4 连跳、也别 0.2s 一拍
+        for k in range(2):
+            await page.mouse.wheel(0, _COMMENT_WHEEL_STEP)
+            if k == 0:
+                await asyncio.sleep(random.uniform(*_COMMENT_WHEEL_GAP))
+        await asyncio.sleep(random.uniform(*_COMMENT_ROUND_GAP))
+
+        cur = await cdp_call(page.evaluate(_COMMENT_COUNT_JS), timeout=CDP_EVAL,
+                             label="comment.count", skip=True)
+        n = (cur or {}).get("items", 0)
+
+        if n == 0 and prev > 0:                # 滚过头，评论区被卸载 → 回滚找回
+            for _ in range(6):                 # 回滚也按真人节奏，别瞬间弹回
+                await page.mouse.wheel(0, -_COMMENT_WHEEL_STEP)
+                await asyncio.sleep(random.uniform(0.9, 1.4))
+            await asyncio.sleep(random.uniform(1.2, 1.8))
+            continue
+
+        if n != prev and n > 0:                # 来了新一批，立刻抓一次并累积
+            await injections.inject_once(page, "extract")
+            batch = await page.evaluate("() => xhsExtractComments()") or []
+            for u in batch:
+                acc.setdefault(str(u.get("uid", "")) + "|" + (u.get("comment") or "")[:24], u)
+            prev = n
+            idle = 0
+            continue
+
+        idle += 1
+        if idle >= _COMMENT_IDLE_STOP:
+            break
+
+    clicked = await _expand_comment_folds(page)  # 到底后再展开折叠的二级回复
+    if clicked:                                 # 真展开出新回复 → 补抓一次
+        await injections.inject_once(page, "extract")
+        batch = await page.evaluate("() => xhsExtractComments()") or []
+        for u in batch:
+            acc.setdefault(str(u.get("uid", "")) + "|" + (u.get("comment") or "")[:24], u)
+    return list(acc.values())
 
 
-# 评论容器滚动：.note-scroller 是详情页真实滚动体；缺失时退回把评论区挪进视口
-_COMMENT_SCROLL_JS = """() => {
-  const s = document.querySelector('.note-scroller');
-  if (!s) {
-    const c = document.querySelector('.interaction-container') || [...document.querySelectorAll('[class*="comment"]')].pop();
-    if (c) c.scrollIntoView({ block: "end" });
-    return { height: 0, top: 0 };
-  }
-  s.scrollTop = s.scrollHeight;
-  return { height: s.scrollHeight, top: s.scrollTop };
+async def _expand_comment_folds(page, batch: int = 15, max_batches: int = 8) -> int:
+    """反复点开折叠入口（「展开 N 条回复」「查看更多评论」）。
+
+    每次最多点 batch 个、最多 max_batches 批：一次全点几百个折叠会瞬间拉起
+    大量渲染和请求，既卡页面也踩风控。返回累计点击数。
+    """
+    total = 0
+    for _ in range(max_batches):
+        n = await cdp_call(page.evaluate(_COMMENT_EXPAND_JS, {"batch": batch}),
+                           timeout=CDP_EVAL, label="comment.expand", skip=True)
+        n = int(n or 0)
+        await asyncio.sleep(1.2)
+        total += n
+        if n < batch:
+            break
+    return total
+
+
+# 评论区中心坐标（hover 失败时的兜底）：钳制在可视区内
+_COMMENT_BOX_JS = """() => {
+  const c = document.querySelector('.interaction-container') || document.querySelector('.comment-item');
+  if (!c) return null;
+  c.scrollIntoView({ block: 'center' });
+  const r = c.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  const x = Math.round(Math.min(Math.max(r.x + r.width / 2, 20), innerWidth - 20));
+  const y = Math.round(Math.min(Math.max(r.y + r.height / 2, 60), innerHeight - 60));
+  return { x, y };
 }"""
 
-_COMMENT_EXPAND_JS = """() => {
-  const btns = [...document.querySelectorAll('button, [role="button"], div, span')].filter(e => {
+_COMMENT_COUNT_JS = """() => ({
+  items: document.querySelectorAll('.comment-item').length,
+  parents: document.querySelectorAll('.parent-comment').length,
+})"""
+
+_COMMENT_EXPAND_JS = """(args) => {
+  const batch = (args && args.batch) || 15;
+  const cands = [];
+  document.querySelectorAll('.show-more').forEach(e => { if (!e.dataset.xhsHopped) cands.push(e); });
+  document.querySelectorAll('button, [role="button"]').forEach(e => {
     const t = (e.innerText || '').trim();
-    return t.length < 20 && /(展开|查看)?全部评论|查看更多评论/.test(t);
+    if (t.length < 20 && /(展开|查看)?全部评论|查看更多评论/.test(t) && !e.dataset.xhsHopped) cands.push(e);
   });
-  for (const b of btns) {
-    if (b.tagName === 'BUTTON' || b.getAttribute('role') === 'button' || b.childElementCount === 0) {
-      try { b.click(); return true; } catch (e) { return false; }
-    }
+  let clicked = 0;
+  for (const e of cands) {
+    if (clicked >= batch) break;
+    try { e.dataset.xhsHopped = '1'; e.click(); clicked++; } catch (_) {}
   }
-  return false;
+  return clicked;
 }"""
 
 
