@@ -206,7 +206,7 @@ async function fillXhs() {
 // ---- AI 生成：来源笔记的关键词，按品类/行业对齐 ----
 const aiKeyword = ref('')  // 来源笔记的搜索关键词（openFor 记录），AI 生成时按品类/行业对齐
 
-// ---- AI 一键生成图文（三步向导：设定 → 大纲 → 配图） ----
+// ---- AI 一键生成标题与正文（三步向导：设定 → 大纲 → 配图） ----
 const wizardOpen = ref(false)
 
 function openWizard() {
@@ -230,7 +230,7 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
           <div class="ai-main">
             <span class="ai-tag">AI</span>
             <div class="ai-copy">
-              <b>一键生成图文</b>
+              <b>一键生成标题与正文</b>
               <p>按账号档案 + 内容结构，一次出标题与正文；大纲中间可改</p>
             </div>
             <button class="ai-primary" @click="openWizard">生成</button>

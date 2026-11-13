@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * AI 一键生成图文 · 三步向导
+ * AI 一键生成标题与正文 · 三步向导（配图暂只走模板路径）
  * ① 设定（选档案 + 选内容结构 + 目标字数） → ② 大纲（可编辑，先改再花钱） → ③ 配图（二选一：整篇 AI 生图 / 封面实拍 + 内页模板）
  *
  * 数据来源：档案与模板都取自「档案」Tab（账号档案 / 内容模板），向导只做消费，不自带一套
@@ -42,7 +42,7 @@ const outline = ref<AiOutline>({ title: '', body: '', pages: [] })
  *  - ai：整篇 AI 生图（封面 + 内页），图内不含文字
  *  - template：封面用真实素材，内页套档案里的图片模板版式
  */
-const imageMode = ref<'ai' | 'template'>('ai')
+const imageMode = ref<'ai' | 'template'>('template')
 const generatedImages = ref<string[]>([])
 const generating = ref(false)
 const applying = ref(false)
@@ -58,7 +58,7 @@ function reset() {
   outline.value = { title: '', body: '', pages: [] }
   direction.value = ''
   wordCount.value = 'medium'
-  imageMode.value = 'ai'
+  imageMode.value = 'template'
   coverImage.value = ''
   generatedImages.value = []
   contentLayouts[0] = ''
@@ -489,8 +489,8 @@ const totalChars = computed(() => (outline.value.body || '').length)
         <div class="wz-title">
           <span class="ai-dot">AI</span>
           <div>
-            <h2>一键生成图文</h2>
-            <p>{{ source.title || '未命名原笔记' }} · 依据账号档案重写标题 / 正文 / 标签 / 配图</p>
+            <h2>一键生成标题与正文</h2>
+            <p>{{ source.title || '未命名原笔记' }} · 依据账号档案重写标题 / 正文</p>
           </div>
         </div>
         <button class="wz-close" @click="emit('close')">×</button>
@@ -623,9 +623,9 @@ const totalChars = computed(() => (outline.value.body || '').length)
           </div>
 
           <div class="mode-grid">
-            <button class="pick-card mode" :class="{ on: imageMode === 'ai' }" @click="imageMode = 'ai'">
-              <b>AI 整篇生图</b>
-              <em>按改好的大纲逐页出图（封面 + 3 内页）。图内不含文字，文字在发布页叠加。</em>
+            <button class="pick-card mode" :class="{ on: imageMode === 'ai' }" disabled title="生图能力接入中">
+              <b>AI 整篇生图 <span class="beta">接入中</span></b>
+              <em>生图暂不可用，先用右侧「封面实拍 + 内页模板」.</em>
             </button>
             <button class="pick-card mode" :class="{ on: imageMode === 'template' }" @click="imageMode = 'template'">
               <b>封面实拍 + 内页模板</b>
@@ -811,6 +811,9 @@ const totalChars = computed(() => (outline.value.body || '').length)
 }
 .pick-card:hover { border-color: var(--ring); background: var(--panel); }
 .pick-card.on { border-color: var(--red); background: var(--panel); box-shadow: 0 2px 8px var(--ring); }
+.pick-card:disabled { opacity: .55; cursor: not-allowed; }
+.pick-card:disabled:hover { border-color: var(--line); background: #fff; }
+.beta { font-size: 10px; font-weight: 600; color: #b05a1f; background: #fff3e6; border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: 1px; }
 .pick-card b { font-size: 13.5px; color: var(--ink); }
 .pick-card .badge {
   align-self: flex-start; font-size: 11px; color: var(--red); background: var(--red-soft);
