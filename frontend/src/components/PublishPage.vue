@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { coverProxy, toast } from '../store'
-import { apiClone, apiFillXhs, apiUploadImage } from '../api'
+import { apiClone, apiFillXhs, apiUploadImage, apiAiGenerate } from '../api'
 import AiWizard from './AiWizard.vue'
 import type { Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -184,6 +184,28 @@ const qcPassed = computed(() => {
 
 // 填入小红书发布页：自动打开 write 页，把标题/正文/标签/图片填进去；
 // 最后那一下「发布」始终由用户在小红书里手动点（产品红线：不自动发布）。
+const rewriting = ref(false)
+
+/** AI 改写：按当前标题与正文（来自原笔记）重写一版标题 + 正文 */
+async function aiRewrite() {
+  if (!body.value.trim()) { toast('正文为空，没有可改写的内容', 'error'); return }
+  rewriting.value = true
+  try {
+    const payload = { title: title.value, desc: body.value, keyword: aiKeyword.value }
+    const [t, b] = await Promise.all([
+      apiAiGenerate('title_rewrite', payload),
+      apiAiGenerate('body_rewrite', payload),
+    ])
+    if (t.result) title.value = t.result.trim().slice(0, 50)
+    if (b.result) body.value = b.result.trim().slice(0, 1000)
+    toast('已改写标题与正文，可继续编辑')
+  } catch (e) {
+    toast(`AI 改写失败：${(e as Error).message}`, 'error')
+  } finally {
+    rewriting.value = false
+  }
+}
+
 async function fillXhs() {
   filling.value = true
   try {
@@ -227,44 +249,10 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
           <input v-model="title" maxlength="50" style="width:100%" />
         </div>
         <div class="pub-field">
-          <label>正文 <span class="limit">{{ bCount }}/1000</span></label>
+          <label>正文 <span class="limit">{{ bCount }}/1000</span>
+            <button class="ai-rw" :disabled="rewriting" @click="aiRewrite">{{ rewriting ? '改写中…' : 'AI 改写' }}</button>
+          </label>
           <textarea v-model="body" rows="12" maxlength="1000" style="width:100%;min-height:260px;resize:vertical;line-height:1.6"></textarea>
-        </div>
-        <!-- F9 发布前质检（折叠；发布按钮自动跑 + 高风险强确认） -->
-        <div class="qc-card">
-          <div class="qc-head" @click="toggleQC">
-            <span class="qc-title">
-              🔍 发布前质检
-              <span v-if="!qcResult.checked" class="qc-badge idle">未检查（点开即查）</span>
-              <span v-else-if="qcPassed" class="qc-badge ok">无风险项</span>
-              <span v-else class="qc-badge warn">{{ qcResult.abs.length + qcResult.drain.length + qcResult.structure.length }} 项提醒</span>
-            </span>
-            <span class="qc-toggle">{{ qcOpen ? '收起 ▲' : '展开 ▼' }}</span>
-          </div>
-          <div v-if="qcOpen" class="qc-body">
-            <div class="qc-item" :class="{ pass: !qcResult.drain.length && !qcResult.abs.length }">
-              <div class="qc-t">① 违规词识别（绝对化用语 / 导流词，含谐音）</div>
-              <div v-if="!qcResult.drain.length && !qcResult.abs.length" class="qc-ok">✓ 未发现违规词</div>
-              <div v-else class="qc-fail">
-                <span v-if="qcResult.drain.length">导流词：{{ qcResult.drain.join('、') }}（平台导流红线，可能屏蔽/限流）</span>
-                <span v-if="qcResult.abs.length">绝对化用语：{{ qcResult.abs.join('、') }}（广告法风险）</span>
-              </div>
-            </div>
-            <div class="qc-item" :class="{ pass: !qcResult.structure.length }">
-              <div class="qc-t">② 结构检查（标题/正文/分段/配图）</div>
-              <div v-if="!qcResult.structure.length" class="qc-ok">✓ 结构完整</div>
-              <div v-else class="qc-fail">{{ qcResult.structure.join('；') }}</div>
-            </div>
-            <div class="qc-item">
-              <div class="qc-t">③ 图片二创提醒</div>
-              <div class="qc-warn">⚠ 克隆图片直接发布 = 搬运风险（可能下架/降权）。建议调色 / 裁剪 / 加字 / 重排后发布，或补充实拍素材。</div>
-            </div>
-            <div class="qc-item">
-              <div class="qc-t">④ 原创确认（同质化）</div>
-              <div class="qc-warn">⚠ 平台 2026 原创审核升级：仅"微改"参考爆文仍判同质化。发布前请确认：内容为你原创表达 / 已获授权。</div>
-            </div>
-            <div class="qc-sum">发布时自动再次检查：高风险项（导流词/绝对化用语）会弹窗强确认；其余提醒确认后可发布。<b>发布永远手动。</b></div>
-          </div>
         </div>
         <div class="pub-field">
           <label>图片 <span class="limit">拖拽调序 / 点击看全图 / 删改 / 追加</span></label>
