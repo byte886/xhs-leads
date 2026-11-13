@@ -52,3 +52,61 @@ Name: "{autodesktop}\XHS Leads 小红书获客助手"; Filename: "{app}\XHSLeads
 
 [Run]
 Filename: "{app}\XHSLeads.exe"; Description: "启动 XHS Leads (Launch XHS Leads)"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// 已安装检测：未安装 → 直接装；已安装 → 让用户选择「卸载」或「重新安装」。
+// 静默安装（/SILENT、/VERYSILENT）不弹窗，按覆盖安装处理，避免打断自动化流程。
+const
+  UninstKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{9F4C2A61-8B3D-4E57-9C08-1D6A5B7E2F34}_is1';
+
+function IsSilentMode(): Boolean;
+var
+  I: Integer;
+  P: String;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    P := Uppercase(ParamStr(I));
+    if (P = '/SILENT') or (P = '/VERYSILENT') then
+      Result := True;
+  end;
+end;
+
+{ 读取现有卸载程序路径；普通用户装（HKCU）与管理员装（HKLM）都查 }
+function ExistingUninstaller(): String;
+var
+  S: String;
+begin
+  Result := '';
+  if RegQueryStringValue(HKCU, UninstKey, 'UninstallString', S) and (S <> '') then
+    Result := S
+  else if RegQueryStringValue(HKLM, UninstKey, 'UninstallString', S) and (S <> '') then
+    Result := S;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Uninst: String;
+  ErrCode: Integer;
+begin
+  Result := True;
+  if IsSilentMode() then Exit;
+  Uninst := ExistingUninstaller();
+  if Uninst = '' then Exit;
+
+  if MsgBox('检测到 XHS Leads 已安装。' + #13#10 + #13#10 +
+            '「是」= 卸载现有版本（卸载完成后请重新运行本安装包）' + #13#10 +
+            '「否」= 重新安装（直接覆盖当前版本）',
+            mbConfirmation, MB_YESNO) = IDYES then
+  begin
+    if ShellExec('', Uninst, '', '', SW_SHOW, ewNoWait, ErrCode) then
+      Result := False
+    else
+    begin
+      MsgBox('卸载程序启动失败（错误码 ' + IntToStr(ErrCode) + '）。' + #13#10 +
+             '请到「设置 → 应用 → 已安装的应用」手动卸载。', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
