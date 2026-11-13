@@ -182,13 +182,6 @@ export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean;
 }
 
 /** 调试实时窗口开关：on=引擎独立小窗实时可见操作；off=回无头（引擎重启生效） */
-export async function apiMirrorWindow(on: boolean, account = 'default'): Promise<{ ok: boolean; window?: boolean; note?: string; error?: string }> {
-  return j(await fetch(`${BASE}/api/mirror/window`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ on, account_id: account }),
-  }))
-}
 
 /** 收起账号引擎：关闭引擎、释放 CDP 端口；default 不可收 */
 export async function apiMirrorClose(account: string): Promise<{ ok: boolean; note?: string; error?: string }> {
@@ -247,21 +240,7 @@ export async function apiScanLogin(accountId: string): Promise<{
 }
 
 /**双窗口设置：采集过程是否在右侧采集窗前置显示（collect_tab_visible） */
-export async function apiGetAppConfig(): Promise<{ ok: boolean; collect_tab_visible?: boolean; error?: string }> {
-  try {
-    return await j(await fetch(`${BASE}/api/app_config`))
-  } catch (e) {
-    return { ok: false, error: (e as Error).message }
-  }
-}
 
-export async function apiSetAppConfig(patch: { collect_tab_visible: boolean }): Promise<{ ok: boolean; saved?: string[]; error?: string }> {
-  return j(await fetch(`${BASE}/api/app_config`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  }))
-}
 
 export async function apiStatusNow(): Promise<{
   action: string; detail: string; collecting: boolean

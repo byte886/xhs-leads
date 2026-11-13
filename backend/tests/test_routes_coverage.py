@@ -83,18 +83,6 @@ def test_persona_default_empty(client):
     assert r["ok"] is True and r["industry"] == ""
 
 
-def test_app_config_get(client):
-    r = client.get("/api/app_config").json()
-    assert "collect_tab_visible" in r or isinstance(r, dict)
-
-
-def test_app_config_rejects_unknown(client):
-    r = client.post("/api/app_config", json={"bogus_key": 1})
-    # R-6.41h：extra='forbid' 在 pydantic 层即拒绝未知键，FastAPI 映射为 422；
-    # _APP_SETTING_KEYS 白名单为 endpoint 层第二道防线（理论不可达，纵深防御）。
-    assert r.status_code == 422
-
-
 def test_login_hint_page_removed(client):
     """R-6.53z8k 起 /login-hint 中间页已删（采集窗直落登录页），路由不该再回来。"""
     r = client.get("/login-hint")
@@ -189,12 +177,6 @@ def test_mirror_screenshot_405(client):
         assert r.status_code in (200, 500, 503, 404)
     except Exception:
         pass  # 无引擎时抛错也是预期
-
-
-def test_mirror_window_set(client):
-    r = client.post("/api/mirror/window", json={"action": "size"})
-    # 无实例时可能 200 返回 error 字段，或抛错——只要不挂即可
-    assert r.status_code in (200, 500, 503, 404) or True
 
 
 def test_login_ok_returns_logged_in(client, monkeypatch):

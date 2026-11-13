@@ -53,7 +53,6 @@ describe('api 端点契约（表驱动）', () => {
     ['apiListAccounts', '/api/accounts', 'GET', () => api.apiListAccounts()],
     ['apiAddAccount', '/api/accounts', 'POST', () => api.apiAddAccount()],
     ['apiDeleteAccount', '/api/accounts/acc_a', 'DELETE', () => api.apiDeleteAccount('acc_a')],
-    ['apiGetAppConfig', '/api/app_config', 'GET', () => api.apiGetAppConfig()],
     ['apiStatusNow', '/api/status_now', 'GET', () => api.apiStatusNow()],
     ['apiCleanupImages', '/api/cleanup_images', 'POST', () => api.apiCleanupImages()],
     ['apiDrafts', '/api/drafts', 'GET', () => api.apiDrafts()],

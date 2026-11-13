@@ -663,21 +663,6 @@ async def mirror_open(account_id: str = "default"):
     return await engine_window.open_login(account_id)
 
 
-class MirrorWindowReq(BaseModel):
-    on: bool = True
-    account_id: str = "default"
-
-
-@app.post("/api/mirror/window")
-async def mirror_window(req: MirrorWindowReq):
-    """调试实时窗口开关：有头小窗 ↔ 无头（引擎重启生效，登录态保留）。
-
-    用户需求：调试视图不再是「截图映射」，而是引擎独立小窗实时可见采集操作过程。
-    """
-    from src import engine_window
-    return await engine_window.set_window(req.account_id, req.on)
-
-
 @app.post("/api/mirror/close")
 async def mirror_close(account_id: str = "default"):
     """关闭账号引擎：第三类账号开出来必须能收回去。
@@ -2873,110 +2858,6 @@ def clear_llm_config():
     无法在 UI 移除已配置 Key——本接口提供显式清除语义（E1 场景5 遗留小缺口）。
     """
     return llm_service.clear_config()
-
-
-_APP_SETTING_KEYS = ("collect_tab_visible",)  # 采集过程是否在壳窗口 采集窗 显示
-
-
-class AppConfigReq(BaseModel):
-    # app_config_set 内 unknown 白名单分支为防御纵深，extra=forbid 后一般不可达，保留不删。
-    model_config = ConfigDict(extra="forbid")
-
-    collect_tab_visible: bool | None = None
-
-
-@app.get("/api/app_config")
-def app_config_get():
-    """读取 APP 设置（当前仅返回壳窗口 Tab 相关设置项）。"""
-    cfg = config.get_config()
-    return {k: cfg.get(k) for k in _APP_SETTING_KEYS}
-
-
-@app.post("/api/app_config")
-async def app_config_set(req: AppConfigReq):
-    """写入 APP 设置（白名单字段；collect_tab_visible 即时联动 采集窗：开→前置；关→空闲关闭）。"""
-    data = req.model_dump(exclude_none=True)
-    unknown = set(data) - set(_APP_SETTING_KEYS)
-    if unknown:
-        raise HTTPException(400, f"不支持设置项: {', '.join(sorted(unknown))}")
-    for k, v in data.items():
-        config.set_config(k, v)
-    if "collect_tab_visible" in data:
-        await _sync_collect_visibility(bool(data["collect_tab_visible"]))
-    return {"ok": True, "saved": list(data)}
-
-
-async def _ensure_collect_skeleton(eng) -> None:
-    """无任务 tab 时立即创建 采集窗 骨架（共享 COLLECT_WIN_GUARD_LOCK）。"""
-    from src import engine_pool  # noqa: PLC0415
-    async with engine_pool.COLLECT_WIN_GUARD_LOCK:
-        if eng.task_page_snapshot() is not None:
-            await eng.task_page_snapshot().bring_to_front()
-            return
-        page = await eng.new_page()
-        try:
-            await page.goto(
-                "https://www.xiaohongshu.com/login",
-                wait_until="domcontentloaded", timeout=10000,
-            )
-            from src import shell_window  # noqa: PLC0415
-
-            # 标题会变成「账号名 · 运营窗口」）；采集窗标识改由标签组名与 URL 承担。
-            _cb = engine_pool.window_bounds("collect")
-            await shell_window._calibrate_window(
-                page, _cb["left"], _cb["top"], _cb["width"], _cb["height"],
-            )
-            await cdp_call(page.bring_to_front(), timeout=CDP_QUICK,
-                           label="server.collect_win_bring_to_front", skip=True)
-            log.info("app_config：已创建 采集窗 采集骨架（开关开）")
-        except Exception:  # noqa: BLE001
-            log.warning("app_config：采集窗 骨架创建失败（keeper 兜底轮询接管）")
-
-
-async def _close_idle_collect_pages(eng) -> None:
-    """空闲时收起所有 采集窗 家族页（explore 骨架/残留采集页）。"""
-    ctx = await eng.context()
-    closed = 0
-    for p in list(ctx.pages):
-        if p.is_closed():
-            continue
-        u = p.url or ""
-        if "xiaohongshu.com" in u and "/login" not in u:
-            try:
-                await p.close()
-            except Exception:  # noqa: BLE001
-                pass
-            closed += 1
-    log.info(f"app_config：空闲采集 tab 已收起（开关关，关闭 {closed} 个）")
-
-
-@_log.tagged("win:collect")
-async def _sync_collect_visibility(visible: bool) -> None:
-    """开关即时联动：开→采集窗 前置/创建骨架；关→空闲采集 tab 关闭（采集中不打断）。"""
-    try:
-        from src import engine_pool  # noqa: PLC0415
-
-        eng = await engine_pool.pool.get("default")
-        tp = eng.task_page_snapshot()
-        if visible:
-            if tp is None:
-                await _ensure_collect_skeleton(eng)
-            else:
-                try:
-                    await tp.bring_to_front()
-                except Exception:  # noqa: BLE001
-                    pass
-                log.info("app_config：采集 tab 前置（开关开）")
-        else:
-            running = any(
-                st.get("status") == "running" for st in _COLLECT_TASKS.values()
-            )
-            if running:
-                log.info("app_config：采集中，采集窗 保持后台（开关关，任务结束后自然闲置）")
-                return
-            await _close_idle_collect_pages(eng)
-    except Exception as e:  # noqa: BLE001
-        log.warning("app_config 采集窗 联动失败: %s", e)
 
 
 @app.post("/api/llm_test")

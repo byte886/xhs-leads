@@ -6,8 +6,7 @@ import {
   apiGetLLMConfig, apiSetLLMConfig, apiClearLLMConfig, apiTestLLM,
   apiGetImageConfig, apiSetImageConfig, apiClearImageConfig, apiTestImageConfig,
   apiLicenseStatus, apiLicenseActivate,
-  apiMirrorWindow, apiMirrorOpen, apiMirrorClose,
-  apiGetAppConfig, apiSetAppConfig,
+  apiMirrorOpen, apiMirrorClose,
   apiListAccounts, apiAddAccount, apiDeleteAccount, apiRenameAccount,
   apiRefreshIdentity, apiScanLogin,
 } from '../api'
@@ -15,14 +14,15 @@ import type { AccountItem } from '../types'
 import type { ImageConfig, ImageProvider } from '../api'
 
 // ---- 左侧分类导航 ----
+// 只留 AI 可进入：其余分类置灰、不可点击也不可切入。
+// 「窗口与调试」整块已删除（壳窗口 Tab 开关、引擎实时窗口开关都不再需要）。
 const cats = [
-  { id: 'account', label: '账号与登录' },
-  { id: 'collect', label: '采集设置' },
-  { id: 'ai', label: 'AI' },
-  { id: 'window', label: '窗口与调试' },
-  { id: 'about', label: '关于与授权' },
+  { id: 'ai', label: 'AI', on: true },
+  { id: 'account', label: '账号与登录', on: false },
+  { id: 'collect', label: '采集设置', on: false },
+  { id: 'about', label: '关于与授权', on: false },
 ]
-const activeCat = ref('account')
+const activeCat = ref('ai')
 
 // 全局请求间隔：单值基准 + 自动窄随机抖动（Scrapy download_delay 同思路）。
 // UI 如实显示随机区间，避免用户把随机误读为"多处不同值"。
@@ -194,64 +194,6 @@ async function closeAccountFn(aid: string) {
     toast('收窗失败：' + (e as Error).message, 'error')
   } finally {
     acctBusy.value = false
-  }
-}
-
-// ---- 调试视图 ----
-const dbgOpen = ref(false)
-const dbgNote = ref('')
-const dbgBusy = ref(false)
-const dbgFailed = ref('')
-
-async function toggleDebug() {
-  if (dbgBusy.value) return
-  dbgBusy.value = true
-  dbgFailed.value = ''
-  const target = !dbgOpen.value
-  try {
-    const r = await apiMirrorWindow(target)
-    if (!r.ok) {
-      dbgFailed.value = '切换失败：' + (r.error || '引擎未就绪')
-      return
-    }
-    dbgOpen.value = target
-    dbgNote.value = r.note || ''
-  } catch (e) {
-    dbgFailed.value = '切换失败：' + (e as Error).message
-  } finally {
-    dbgBusy.value = false
-  }
-}
-
-// ---- 壳窗口双 Tab ----
-const collectTabVisible = ref(false)
-const collectTabBusy = ref(false)
-
-async function loadAppCfg() {
-  try {
-    const r = await apiGetAppConfig()
-    if (r.ok) collectTabVisible.value = !!r.collect_tab_visible
-  } catch {
-    /* 后端旧版本无此接口：保持默认值 */
-  }
-}
-
-async function toggleCollectTab() {
-  if (collectTabBusy.value) return
-  collectTabBusy.value = true
-  try {
-    const target = !collectTabVisible.value
-    const r = await apiSetAppConfig({ collect_tab_visible: target })
-    if (r.ok) {
-      collectTabVisible.value = target
-      toast(target ? '已开启：采集画面前置显示于右侧采集窗（空闲/新任务即时生效）' : '已关闭：采集后台完成，空闲采集页已收起（即时生效）')
-    } else {
-      toast('保存失败：' + (r.error || '未知错误'), 'error')
-    }
-  } catch (e) {
-    toast('保存失败：' + (e as Error).message, 'error')
-  } finally {
-    collectTabBusy.value = false
   }
 }
 
@@ -434,7 +376,7 @@ async function testImg() {
 // ---- 档案已拆成独立 Tab（ProfilePanel.vue），设置页不再承载档案 ----
 
 onMounted(async () => {
-  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAppCfg(), loadAccounts()])
+  await Promise.all([loadAi(), loadImg(), loadLicense(), loadAccounts()])
   fillAiForm()
   fillImgForm()
 })
@@ -449,8 +391,9 @@ onMounted(async () => {
           v-for="c in cats"
           :key="c.id"
           class="nav-item"
-          :class="{ cur: activeCat === c.id }"
-          @click="activeCat = c.id"
+          :class="{ cur: activeCat === c.id, off: !c.on }"
+          :disabled="!c.on"
+          @click="c.on && (activeCat = c.id)"
         >{{ c.label }}</button>
       </div>
 
@@ -716,40 +659,6 @@ onMounted(async () => {
         </section>
 
 
-        <!-- 窗口与调试 -->
-        <section v-if="activeCat === 'window'">
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">壳窗口 Tab（采集画面显示）</span>
-              <label class="switch">
-                <input type="checkbox" :checked="collectTabVisible" @change="toggleCollectTab" />
-                <span class="track"><span class="thumb" /></span>
-              </label>
-              <span class="cur-val">{{ collectTabVisible ? '已开启' : '已关闭' }}</span>
-            </div>
-            <p class="set-hint">
-              左侧是应用窗口（固定不可关），右侧是采集窗口——采集与登录都在这里。开 = 采集画面前置可见（调试/演示）；
-              关 = 采集后台完成、不抢前台（平时推荐）。开关即时生效。
-            </p>
-          </div>
-          <div class="set-row">
-            <div class="row-main">
-              <span class="row-label">调试视图（引擎实时窗口）</span>
-              <button v-if="!dbgOpen" class="btn primary sm" :disabled="dbgBusy" @click="toggleDebug">打开实时引擎窗口</button>
-              <button v-else class="btn danger sm" :disabled="dbgBusy" @click="toggleDebug">关闭实时窗口（回无头）</button>
-            </div>
-            <p class="set-hint">
-              切换引擎为独立小窗（真实浏览器窗口 960×720），采集/登录时实时可见每一步操作（滚动、点击、跳页）——不是截图。
-              切换会重启引擎一次（登录态自动保留）。口径：调试手动开 / 平时关。
-            </p>
-            <div v-if="dbgOpen" class="dbg-open">
-              <p class="dbg-note">✔ 实时窗口已打开：桌面可见引擎小窗，采集开始后即可观察全过程。</p>
-              <p v-if="dbgNote" class="dbg-note">{{ dbgNote }}</p>
-            </div>
-            <p v-if="dbgFailed" class="dbg-fail">{{ dbgFailed }}</p>
-          </div>
-        </section>
-
         <!-- 关于与授权 -->
         <section v-if="activeCat === 'about'">
           <div class="set-row" v-if="lic">
@@ -797,6 +706,11 @@ onMounted(async () => {
   background: var(--panel); color: var(--red); font-weight: 600;
   box-shadow: inset 0 0 0 1px rgba(226, 42, 67, .2);
 }
+/* 暂不开放的分区：置灰、不可点、不响应 hover */
+.nav-item.off {
+  color: var(--ink-3); opacity: .45; cursor: default;
+}
+.nav-item.off:hover { color: var(--ink-3); background: transparent; }
 .settings-body { flex: 1; min-width: 0; }
 
 /* 每项一行 */
@@ -835,21 +749,6 @@ input:not([type="checkbox"]) {
   background: var(--panel);
 }
 
-/* 开关 */
-.switch { display: inline-flex; align-items: center; cursor: pointer; }
-.switch input { display: none; }
-.switch .track {
-  width: 38px; height: 22px; border-radius: 999px;
-  background: rgba(43, 30, 24, .16); position: relative; transition: background .18s;
-  display: inline-block;
-}
-.switch .thumb {
-  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; transition: left .18s;
-  box-shadow: 0 1px 3px rgba(0,0,0,.2);
-}
-.switch input:checked + .track { background: var(--red); }
-.switch input:checked + .track .thumb { left: 19px; }
 
 /* 状态元素 */
 /* 多账号列表：主标题=业务名（大、深），副标题=昵称/内部id/用途（小、灰） */
@@ -919,8 +818,6 @@ input:not([type="checkbox"]) {
   border-radius: 8px; padding: 10px 12px; font-size: 12px; margin-top: 12px;
 }
 .gate-msg.ok { background: #F2FBF5; border-color: #BFE8D0; color: #1a7f4c; }
-.dbg-note { font-size: 12px; color: #1a7f4c; margin: 8px 0 0; }
-.dbg-fail { font-size: 12px; color: #c0392b; margin: 8px 0 0; }
 
 /* ---- AI 分区：生文 / 生图 两条独立链路（供应商 + Key 各自独立）---- */
 .ai-status {
