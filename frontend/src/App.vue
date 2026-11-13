@@ -14,8 +14,9 @@ import StatusBar from './components/StatusBar.vue'
 import { apiLoginStatus, apiLoginBegin, apiCleanupImages, apiNotes } from './api'
 import { isLoginAbnormal } from './lib/auth'
 
-// v1.5 工作流 4-Tab：采集 / 创作 / 客户 / 设置（创作、客户、设置用 v-show 保持状态）
+// 4 个常驻 Tab：采集 / 客户 / 档案 / 设置；「一键克隆」不占 Tab，改为弹出层
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
+const publishOpen = ref(false)
 const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 
 
@@ -35,10 +36,15 @@ function ensureRightLogin() {
 }
 
 async function openPublish(note: Note) {
-  setTab('create')
-  // PublishPage 为 v-show 常驻，v-if 挂载只在首次；确保 openFor 目标为最新笔记
+  // 一键克隆改成弹出层：不切 Tab，关闭即回采集页；PublishPage 常驻以保留编辑状态
+  publishOpen.value = true
   await nextTick()
   await publishRef.value?.openFor(note)
+}
+
+// 弹层 Esc 关闭（不监听遮罩点击，避免误触关掉正在编辑的内容）
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && publishOpen.value) publishOpen.value = false
 }
 
 // 单条克隆（对齐视频：克隆走卡片单条，不批量）
@@ -127,7 +133,11 @@ onMounted(async () => {
       appState.login = { logged_in: true, nickname: '', kicked: false }
     }
   })
-  onUnmounted(() => { if (offEvents) { offEvents(); offEvents = null } })
+  window.addEventListener('keydown', onKeydown)
+  onUnmounted(() => {
+    if (offEvents) { offEvents(); offEvents = null }
+    window.removeEventListener('keydown', onKeydown)
+  })
   // 显式 ?stage=pick 调试/自动化入口：默认白屏规则不变（不带参仍不加载历史笔记），
   // 仅当 URL 显式带参时进入列表视图（UI 自动化/演示用，dev 与生产构建均可用）。
   // 本机 127.0.0.1 桌面应用，用户看到的是本机自己的采集数据，无对外暴露面。
@@ -158,9 +168,18 @@ onMounted(async () => {
       </main>
     </div>
 
-    <!-- 创作 Tab：克隆编辑器 + AI 工具条 + 发布前质检（v-show 保持编辑状态） -->
-    <div v-show="appState.tab === 'create'" class="publish-wrap">
-      <PublishPage ref="publishRef" @open-login="ensureRightLogin" />
+    <!-- 一键克隆弹层：不占 Tab，关闭即回采集页；v-show 常驻以保留编辑状态 -->
+    <div v-show="publishOpen" class="publish-modal">
+      <div class="publish-dialog">
+        <div class="publish-bar">
+          <span class="publish-bar-t">一键克隆</span>
+          <span class="publish-bar-sub">编辑完成可直接发布，也可关闭稍后继续</span>
+          <button class="btn publish-bar-close" @click="publishOpen = false">关闭</button>
+        </div>
+        <div class="publish-body">
+          <PublishPage ref="publishRef" @open-login="ensureRightLogin" @back="publishOpen = false" />
+        </div>
+      </div>
     </div>
 
     <!-- 客户 Tab：评论区线索 + 聚合 + 获客指引 -->
@@ -196,5 +215,26 @@ onMounted(async () => {
 <style scoped>
 .toast-fade-enter-active, .toast-fade-leave-active { transition: opacity .2s; }
 .toast-fade-enter-from, .toast-fade-leave-to { opacity: 0; }
-.publish-wrap { padding: 0 22px; overflow: auto; }
+/* 一键克隆弹层：大尺寸居中面板，宽度贴近原来宽屏的创作页 */
+.publish-modal {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; align-items: center; justify-content: center;
+  padding: 3vh 2vw;
+  background: rgba(24, 20, 18, .42);
+}
+.publish-dialog {
+  display: flex; flex-direction: column;
+  width: min(1180px, 96vw); height: min(90vh, 100%);
+  background: #fff; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 28px 68px rgba(0, 0, 0, .3);
+}
+.publish-bar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  height: 46px; padding: 0 16px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.publish-bar-t { font-size: 14px; font-weight: 600; color: var(--ink); }
+.publish-bar-sub { font-size: 12px; color: var(--ink-3); }
+.publish-bar-close { margin-left: auto; }
+.publish-body { flex: 1; overflow: auto; padding: 0 22px 22px; }
 </style>
