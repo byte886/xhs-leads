@@ -242,7 +242,7 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
         </div>
         <div class="pub-field">
           <label>正文 <span class="limit">{{ bCount }}/1000</span></label>
-          <textarea v-model="body" rows="5" maxlength="1000" style="width:100%;resize:vertical"></textarea>
+          <textarea v-model="body" rows="12" maxlength="1000" style="width:100%;min-height:260px;resize:vertical;line-height:1.6"></textarea>
         </div>
         <!-- F9 发布前质检（折叠；发布按钮自动跑 + 高风险强确认） -->
         <div class="qc-card">
