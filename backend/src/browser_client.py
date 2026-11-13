@@ -1965,6 +1965,9 @@ async def _drain_comments(page) -> list:
         cur = await cdp_call(page.evaluate(_COMMENT_COUNT_JS), timeout=CDP_EVAL,
                              label="comment.count", skip=True)
         n = (cur or {}).get("items", 0)
+        # 诊断：确认滚动到底有没有真的触发加载（UI 触发时右窗可能停在搜索页浮层，
+        # 评论只在侧栏、滚不出全量——2026-11-13 实测 575 条只拿到 85 条）
+        log.info("[comment.drain] r=%d n=%d url=%s", _, n, (_page_url_now(page) or "")[:70])
 
         if n == 0 and prev > 0:                # 滚过头，评论区被卸载 → 回滚找回
             for _ in range(6):                 # 回滚也按真人节奏，别瞬间弹回
