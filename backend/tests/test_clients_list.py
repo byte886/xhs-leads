@@ -147,3 +147,48 @@ def test_collect_clients_excludes_author(tmp_path, monkeypatch):
     assert res["total"] == 2          # 两条评论都留（同一人的不同内容）
     assert res["people"] == 1         # 人数按 uid 去重
     assert all(u["uid"] != "author-uid" for u in res["users"])
+
+
+def _coverage_case(tmp_path, monkeypatch, declared, comments):
+    """跑一次 /api/clients，返回 low_coverage 标记。comments 为抓到的人均评论数。"""
+    import asyncio
+
+    from src import browser_client
+
+    _iso_db(tmp_path, monkeypatch)
+    con = server._db()
+    con.execute(
+        "INSERT OR REPLACE INTO notes (feed_id, user_id, xsec_token, comment_count) VALUES (?,?,?,?)",
+        ("f2", "author-uid", "tok", declared),
+    )
+    con.commit()
+
+    async def fake_clients(feed_id, token, keyword="", filters=None):
+        return [{"uid": f"u{i}", "nickname": "n", "comment": f"c{i}", "intent": "low"}
+                for i in range(comments)]
+
+    async def ok_login():
+        return None
+
+    monkeypatch.setattr(browser_client, "clients", fake_clients)
+    monkeypatch.setattr(server, "_require_login", ok_login)
+    return asyncio.run(server.collect_clients(server.ClientsReq(feed_id="f2")))
+
+
+def test_low_coverage_flags_interrupted_collect(tmp_path, monkeypatch):
+    """声明 343 条只采到 85 条（实测被抢滚轮的情形）必须打标，界面才能提示重试。"""
+    res = _coverage_case(tmp_path, monkeypatch, 343, 85)
+    assert res["declared"] == 343
+    assert res["low_coverage"] is True
+
+
+def test_low_coverage_ok_when_near_declared(tmp_path, monkeypatch):
+    """正常覆盖 95% 左右（实测 95.3%/95.9%）不打标，避免每次采集都报错。"""
+    res = _coverage_case(tmp_path, monkeypatch, 343, 329)
+    assert res["low_coverage"] is False
+
+
+def test_low_coverage_ignores_small_notes_and_missing_declared(tmp_path, monkeypatch):
+    """声明数缺失或笔记很小（<30）时不判断，避免误报。"""
+    assert _coverage_case(tmp_path, monkeypatch, 0, 10)["low_coverage"] is False
+    assert _coverage_case(tmp_path, monkeypatch, 20, 8)["low_coverage"] is False

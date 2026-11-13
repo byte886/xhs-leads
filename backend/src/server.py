@@ -2232,15 +2232,18 @@ async def collect_clients(req: ClientsReq):
         token = req.xsec_token
         keyword = ""
         author_uid = ""
+        declared = 0
         filters: dict = {}
         con = _db()
         row = con.execute(
-            "SELECT xsec_token, keyword, user_id FROM notes WHERE feed_id=?", (req.feed_id,)
+            "SELECT xsec_token, keyword, user_id, comment_count FROM notes WHERE feed_id=?",
+            (req.feed_id,),
         ).fetchone()
         if row:
             token = token or (row[0] or "")
             keyword = row[1] or ""
             author_uid = row[2] or ""
+            declared = int(row[3] or 0)
         ctx = con.execute("SELECT params FROM collect_ctx WHERE keyword=?", (keyword,)).fetchone()
         con.close()
         if ctx and ctx[0]:
@@ -2295,9 +2298,17 @@ async def collect_clients(req: ClientsReq):
     for u in people_users:
         label = INTENT_LABEL.get(u.get("intent"), "低意向")
         summary[label] = summary.get(label, 0) + 1
+    total = len(users)
+    # 采全没采全：平台声明的评论数（notes.comment_count）是标尺。
+    # 声明数里含已删评论与被折叠回复，正常覆盖 95% 左右（实测 95.3% / 95.9%）；
+    # 低于 90% 基本是采集中途被打断（实测用户抢滚轮时只到 24%），
+    # 界面必须提示"可能没采全"，不能静默显示一个偏小的数。
+    low_coverage = bool(declared >= 30 and total > 0 and total / declared < 0.9)
     return {
-        "total": len(users),          # 评论条数（一人可多条）
+        "total": total,               # 评论条数（一人可多条）
         "people": len(people_users),  # 去重人数（界面「本篇线索」用这个）
+        "declared": declared,         # 平台声明的评论数
+        "low_coverage": low_coverage, # 明显低于声明数 → 提示可能被打断
         "new": added,
         "users": users,
         "summary": summary,

@@ -125,6 +125,11 @@ async function collectClients(note: Note) {
     // 采集成功不再留常驻播报条：转圈停即视为完成，列表本身反映结果
     // （失败仍保留红色错误条，异常必须可见）
     collectState.value = { running: false, text: '', err: '', elapsed: 0 }
+    // 只有明显低于平台声明数才提示：评论区滚到底有 DOM 上限、也含已删评论，
+    // 正常覆盖 95% 左右；偏少通常意味着采集被打断（例如采集中操作了右侧窗口）。
+    if (data.low_coverage) {
+      toast(`只采到 ${data.total} / 平台显示 ${data.declared} 条，可能被打断，可重试（采集中别操作右侧窗口）`, 'error')
+    }
   } catch (e) {
     clearTimeout(capTimer)
     const aborted = (e as { name?: string })?.name === 'AbortError'
