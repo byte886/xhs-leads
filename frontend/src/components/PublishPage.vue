@@ -209,10 +209,6 @@ const aiKeyword = ref('')  // 来源笔记的搜索关键词（openFor 记录）
 // ---- AI 一键生成标题与正文（三步向导：设定 → 大纲 → 配图） ----
 const wizardOpen = ref(false)
 
-function openWizard() {
-  wizardOpen.value = true
-}
-
 function onWizardApply(v: { title: string; body: string; images: string[] }) {
   title.value = (v.title || '').slice(0, 50)
   body.value = (v.body || '').slice(0, 1000)
@@ -226,16 +222,6 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
     <div class="publish">
       <div v-if="loading" style="text-align:center;padding:30px;color:var(--ink-2)">正在拉取笔记内容…</div>
       <template v-else>
-        <div class="ai-panel">
-          <div class="ai-main">
-            <span class="ai-tag">AI</span>
-            <div class="ai-copy">
-              <b>一键生成标题与正文</b>
-              <p>按账号档案 + 内容结构，一次出标题与正文；大纲中间可改</p>
-            </div>
-            <button class="ai-primary" @click="openWizard">生成</button>
-          </div>
-        </div>
         <div class="pub-field">
           <label>标题 <span class="limit">{{ tCount }}/50</span></label>
           <input v-model="title" maxlength="50" style="width:100%" />
