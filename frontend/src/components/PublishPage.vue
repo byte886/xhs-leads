@@ -244,8 +244,7 @@ async function aiRun(action: string) {
 
 <template>
   <div>
-    <div class="publish" style="margin-top:18px">
-      <h2>发布笔记</h2>
+    <div class="publish">
       <div v-if="loading" style="text-align:center;padding:30px;color:var(--ink-2)">正在拉取笔记内容…</div>
       <template v-else>
         <div class="ai-panel">

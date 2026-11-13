@@ -234,5 +234,5 @@ onMounted(async () => {
 }
 .publish-bar-t { font-size: 14px; font-weight: 600; color: var(--ink); }
 .publish-bar-close { margin-left: auto; }
-.publish-body { flex: 1; overflow: auto; padding: 0 22px 22px; }
+.publish-body { flex: 1; overflow: auto; padding: 18px 22px 22px; }
 </style>

@@ -165,7 +165,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .card-menu-mask { position: fixed; inset: 0; z-index: 55; }
 
 /* 发布编辑页 */
-.publish { max-width: 720px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 26px; }
+.publish { max-width: 720px; margin: 0 auto; }
 .publish h2 { font-size: 17px; margin-bottom: 16px; }
 .pub-field { margin-bottom: 14px; }
 .pub-field label { font-size: 12px; color: var(--ink-2); display: block; margin-bottom: 5px; }
