@@ -46,7 +46,6 @@ describe('api 端点契约（表驱动）', () => {
     ['apiNotes', '/api/notes?keyword=', 'GET', () => api.apiNotes('翡翠')],
     ['apiAuthors', '/api/authors', 'GET', () => api.apiAuthors()],
     ['apiClientsList', '/api/clients_list', 'GET', () => api.apiClientsList()],
-    ['apiClientsAgg', '/api/clients_agg', 'GET', () => api.apiClientsAgg()],
     ['apiClone', '/api/clone', 'POST', () => api.apiClone('f1')],
     ['apiLogs', '/api/publish_logs', 'GET', () => api.apiLogs()],
     ['apiMirrorOpen', '/api/mirror/open', 'POST', () => api.apiMirrorOpen()],

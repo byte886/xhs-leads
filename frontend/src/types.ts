@@ -115,14 +115,6 @@ export interface ClientUser {
 }
 
 /** O1-4 客户库聚合：线索总数/意向分布/属地TOP/近7天/留联系方式 */
-export interface ClientsAgg {
-  total: number
-  intent_dist: { intent: string; label: string; count: number }[]
-  ip_top: { ip: string; count: number }[]
-  week: { date: string; count: number }[]
-  contact: number
-}
-
 export interface ClonePayload {
   feed_id: string
   title: string

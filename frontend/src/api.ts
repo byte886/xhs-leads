@@ -1,4 +1,4 @@
-import type { AccountItem, AccountListResp, Author, ClientUser, ClientsAgg, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams } from './types'
+import type { AccountItem, AccountListResp, Author, ClientUser, ClonePayload, LicenseStatus, LoginStatus, LogItem, Note, SearchParams } from './types'
 
 const BASE = ''
 
@@ -101,10 +101,6 @@ export async function apiClientsList(feedId = '', intent = ''): Promise<{ total:
   if (intent) p.set('intent', intent)
   const q = p.toString()
   return j(await fetch(`${BASE}/api/clients_list${q ? `?${q}` : ''}`))
-}
-
-export async function apiClientsAgg(): Promise<ClientsAgg> {
-  return j(await fetch(`${BASE}/api/clients_agg`))
 }
 
 /** O1-5 去联系：后端在采集窗打开用户主页并点聊天按钮，落到私信会话页（不代发消息）。 */

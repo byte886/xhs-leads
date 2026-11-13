@@ -18,6 +18,7 @@ import { isLoginAbnormal } from './lib/auth'
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
 const publishOpen = ref(false)
 const clientsOpen = ref(false)
+const clientsFeedId = ref('')
 const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 
 
@@ -80,6 +81,7 @@ onUnmounted(stopCollectClock)
 async function collectClients(note: Note) {
   const t = (note.title || '该笔记').slice(0, 12)
   clientsOpen.value = true
+  clientsFeedId.value = note.feed_id
   collectState.value = { running: true, text: `正在采集「${t}…」的评论区互动用户`, err: '', elapsed: 0 }
   stopCollectClock()
   collectClock = setInterval(() => { collectState.value.elapsed += 1 }, 1000)
@@ -112,19 +114,17 @@ async function collectClients(note: Note) {
     }
     const data = await resp.json()
     stopCollectClock()
-    const sum = data.summary || {}
-    const hi = sum['高意向'] ? `，高意向 ${sum['高意向']}` : ''
+    // 先刷新列表，再用列表实数播报（后端返回的条数含「XX关注」这类非评论动作，不能用它报数）
+    await nextTick()
+    await clientsRef.value?.refresh()
+    const n = clientsRef.value?.count?.() ?? 0
     collectState.value = {
       running: false,
-      text: data.total > 0
-        ? `采集完成：${data.total} 位互动用户（新增 ${data.new}）${hi}`
-        : '采集完成：没有找到互动用户（这篇可能没人评论）',
+      text: n > 0
+        ? `采集完成：本篇 ${n} 位客户`
+        : '采集完成：没有找到评论用户（这篇可能没人评论）',
       err: '',
       elapsed: collectState.value.elapsed,
-    }
-    if (data.total > 0) {
-      await nextTick()
-      await clientsRef.value?.refresh()
     }
   } catch (e) {
     clearTimeout(capTimer)
@@ -235,7 +235,7 @@ onMounted(async () => {
             <span v-if="collectState.running" class="cl-status-time">{{ collectState.elapsed }}s</span>
           </div>
           <div style="max-width:1100px;margin:0 auto">
-            <ClientsPanel ref="clientsRef" />
+            <ClientsPanel ref="clientsRef" :feed-id="clientsFeedId" />
           </div>
         </div>
       </div>

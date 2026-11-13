@@ -1,17 +1,19 @@
 <script setup lang="ts">
 // ClientsPanel v1.5：客户 Tab（O1-3 评论区线索 + O1-4 聚合 + O1-5 获客指引）
 // 采集完成/新增线索后由 App.vue 调 refresh() 重新拉取
-import { onMounted, ref } from 'vue'
-import type { ClientUser, ClientsAgg } from '../types'
-import { apiClientsList, apiClientsAgg, apiContactOpen } from '../api'
-import { saveTextToPath, shortPath } from '../lib/saveApi'
-import SaveDialog from './SaveDialog.vue'
+import { computed, onMounted, ref } from 'vue'
+import type { ClientUser } from '../types'
+import { apiClientsList, apiContactOpen } from '../api'
 import { toast } from '../store'
 
+// 备注是采到哪篇笔记的客户（弹层按篇过滤，不再显示全库历史）
+const props = defineProps<{ feedId?: string }>()
+
 const clients = ref<ClientUser[]>([])
-const agg = ref<ClientsAgg | null>(null)
-const clTab = ref<'all' | 'high' | '7d'>('all')
-const saveDialog = ref<{ open: (name: string) => Promise<string | null> } | null>(null)
+const clTab = ref<'all' | 'high'>('all')
+
+// 联系方式词（与后端 intent.CONTACT_WORDS 同源），只用于本地计数
+const CONTACT_RE = /vx|v信|卫星|weixin|wechat|微信|薇信|私我|私聊|滴滴|私信|手机|电话|\+86|si我|si 我/
 
 // O1-3 意向档位展示映射（与后端 intent.py 一致）
 const INTENT_META: Record<string, { label: string; cls: string }> = {
@@ -29,72 +31,61 @@ async function loadClients() {
   try {
     let intent = ''
     if (clTab.value === 'high') intent = 'high'
-    const res = await apiClientsList('', intent)
-    let list = res.clients || []
-    if (clTab.value === '7d') {
-      const weekAgo = Date.now() - 7 * 86400_000
-      list = list.filter((c) => {
-        const t = c.created_at ? new Date(c.created_at).getTime() : 0
-        return t >= weekAgo
-      })
-    }
-    clients.value = list
+    const res = await apiClientsList(props.feedId || '', intent)
+    // 兜底：关注动作记录不是评论（后端查询已过滤，这里再挡一层老数据）
+    clients.value = (res.clients || []).filter(
+      (c) => !((c.sample_comment || '').trim().endsWith('关注') && (c.sample_comment || '').trim().length <= 24),
+    )
   } catch {
     clients.value = []
   }
 }
 
-/** O1-4 加载聚合数据（线索总数/意向分布/属地TOP/近7天/留联系方式） */
-async function loadAgg() {
-  try {
-    agg.value = await apiClientsAgg()
-  } catch {
-    agg.value = null
-  }
-}
-
 /** 外部刷新入口（App.vue 采集客户成功后调用） */
 async function refresh() {
-  await Promise.all([loadClients(), loadAgg()])
+  await loadClients()
 }
 
 /** 挂载即加载：刷新/重进页面后客户库反映 DB 真实状态（否则显示"暂无客户"造成数据丢失假象） */
 onMounted(() => { refresh() })
 
-async function setClTab(tab: 'all' | 'high' | '7d') {
+async function setClTab(tab: 'all' | 'high') {
   clTab.value = tab
   await loadClients()
 }
 
-/** O1-3 统计：总数 / 高意向数 / 留联系方式命中 */
+/** 统计（全部基于当前列表，与下方明细逐条一致） */
 function clSummary() {
   let high = 0
   let contact = 0
   for (const c of clients.value) {
     if (c.intent === 'high') high += 1
-    if (c.intent === 'high' && /微信|vx|v信|卫星|手机|电话|滴滴|私信|si me|si 我|si我|v /.test((c.matched_word || '') + (c.sample_comment || '').toLowerCase())) contact += 1
+    if (CONTACT_RE.test(((c.matched_word || '') + (c.sample_comment || '')).toLowerCase())) contact += 1
   }
   return { total: clients.value.length, high, contact }
 }
 
-/** O1-3 导出线索 CSV（昵称/主页链接/评论原文/命中词/IP属地/意向）
- *  体验与卡片页三条导出一致：先在应用内「保存位置」对话框选目录与文件名，再落盘 */
-async function exportClientsCsv() {
-  const head = ['昵称', '主页链接', '评论原文', '命中词', 'IP属地', '意向', '采集时间']
-  const rows = clients.value.map((c) => [
-    c.nickname || '', c.profile || '', (c.sample_comment || '').replace(/"/g, '""'),
-    c.matched_word || '', c.ip_location || '', intentLabel(c), (c.created_at || '').slice(0, 10),
-  ])
-  const csv = '\ufeff' + [head, ...rows].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n')
-  const path = await saveDialog.value?.open(`线索导出_${new Date().toISOString().slice(0, 10)}.csv`)
-  if (!path) return
-  try {
-    const r = await saveTextToPath(path, csv)
-    toast(`已导出 ${rows.length} 条线索到 ${shortPath(r.path)}${r.overwrote ? '（覆盖了同名文件）' : ''}`)
-  } catch (e) {
-    toast('导出失败：' + (e as Error).message, 'error')
+/** 意向分布 / 属地 TOP：本地按人去重统计，不再走独立的聚合接口 */
+const aggLocal = computed(() => {
+  const dist: Record<string, number> = { high: 0, upper: 0, middle: 0, low: 0 }
+  const ip: Record<string, number> = {}
+  for (const c of clients.value) {
+    const it = c.intent || 'low'
+    dist[it] = (dist[it] || 0) + 1
+    const loc = (c.ip_location || '').trim()
+    if (loc) ip[loc] = (ip[loc] || 0) + 1
   }
-}
+  return {
+    total: clients.value.length,
+    intent_dist: [
+      { intent: 'high', label: '高意向', count: dist.high },
+      { intent: 'upper', label: '上意向', count: dist.upper },
+      { intent: 'middle', label: '中意向', count: dist.middle },
+      { intent: 'low', label: '低意向', count: dist.low },
+    ],
+    ip_top: Object.entries(ip).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => ({ ip: k, count: v })),
+  }
+})
 
 /** O1-5 去联系：后端在采集窗打开用户主页并点聊天按钮，落到私信会话页（工具不代写、不代发）。 */
 const talkingUid = ref('')
@@ -118,24 +109,25 @@ async function goTalk(c: ClientUser) {
 /** O1-5 获客指引折叠态 */
 const guideOpen = ref(true)
 
-defineExpose({ refresh })
+/** 当前列表实际人数（App 用它播报采集结果，保证状态条与明细同一口径） */
+function count() {
+  return clients.value.length
+}
+
+defineExpose({ refresh, count })
 </script>
 
 <template>
   <div>
     <div class="cl-empty-wrap" v-if="!clients.length">
-      <div class="big">暂无客户</div>
-      <p>在采集页卡片上点「采集客户」抓取笔记评论区的互动用户，会在这里按意向分级展示（高意向置顶）</p>
+      <div class="big">这篇笔记还没有采集到客户</div>
+      <p>在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级列在这里</p>
     </div>
     <template v-else>
       <div class="info-bar">
-        <div class="info-item"><span class="k">线索总数</span><span class="v">{{ agg?.total ?? clSummary().total }}</span></div>
+        <div class="info-item"><span class="k">本篇线索</span><span class="v">{{ clSummary().total }}</span></div>
         <div class="info-item"><span class="k">高意向</span><span class="v" style="color:#FF2442">{{ clSummary().high }}</span></div>
-        <div class="info-item"><span class="k">留联系方式命中</span><span class="v" style="color:#00A86B">{{ agg?.contact ?? clSummary().contact }}</span></div>
-        <div class="info-item"><span class="k">采集说明</span><span class="v small">高意向置顶；「去联系」打开私信会话页，沟通与话术由你自行完成，工具不代写、不自动发送</span></div>
-        <div style="margin-left:auto;display:flex;gap:8px">
-          <button class="btn sm primary" @click="exportClientsCsv">导出线索 CSV</button>
-        </div>
+        <div class="info-item"><span class="k">留联系方式命中</span><span class="v" style="color:#00A86B">{{ clSummary().contact }}</span></div>
       </div>
 
       <!-- O1-5 获客指引：怎么办 + 风险在哪（不做话术生成） -->
@@ -164,42 +156,32 @@ defineExpose({ refresh })
         </div>
       </div>
 
-      <!-- O1-4 聚合区：意向分布 / 属地 TOP / 近 7 天产出 -->
-      <div v-if="agg" class="agg-grid">
+      <!-- 聚合区：意向分布 / 属地 TOP（都基于当前列表按人计） -->
+      <div v-if="clients.length" class="agg-grid">
         <div class="agg-card">
           <div class="agg-title">意向分布</div>
           <div class="agg-dist">
-            <div v-for="d in agg.intent_dist" :key="d.intent" class="agg-dist-row">
+            <div v-for="d in aggLocal.intent_dist" :key="d.intent" class="agg-dist-row">
               <span class="agg-dist-label">{{ d.label }}</span>
-              <div class="agg-bar"><div class="agg-bar-fill" :class="'a-' + d.intent" :style="{ width: agg.total ? Math.max(4, (d.count / agg.total) * 100) + '%' : '0%' }"></div></div>
+              <div class="agg-bar"><div class="agg-bar-fill" :class="'a-' + d.intent" :style="{ width: aggLocal.total ? Math.max(4, (d.count / aggLocal.total) * 100) + '%' : '0%' }"></div></div>
               <span class="agg-dist-count">{{ d.count }}</span>
             </div>
           </div>
         </div>
         <div class="agg-card">
           <div class="agg-title">属地分布 TOP</div>
-          <div v-if="agg.ip_top.length" class="agg-ip">
-            <div v-for="t in agg.ip_top" :key="t.ip" class="agg-ip-row">
+          <div v-if="aggLocal.ip_top.length" class="agg-ip">
+            <div v-for="t in aggLocal.ip_top" :key="t.ip" class="agg-ip-row">
               <span class="agg-ip-name">📍 {{ t.ip }}</span><span class="agg-ip-count">{{ t.count }} 人</span>
             </div>
           </div>
           <div v-else class="agg-empty">暂无属地数据</div>
-        </div>
-        <div class="agg-card agg-week-card">
-          <div class="agg-title">近 7 天产出</div>
-          <div class="agg-week">
-            <div v-for="w in agg.week" :key="w.date" class="agg-week-col">
-              <div class="agg-week-bar" :style="{ height: Math.max(4, (w.count / Math.max(1, agg.total)) * 60) + 'px' }">{{ w.count || '' }}</div>
-              <div class="agg-week-day">{{ w.date.slice(5) }}</div>
-            </div>
-          </div>
         </div>
       </div>
 
       <div style="display:flex;gap:6px;margin-bottom:10px">
         <button class="cl-tab" :class="{ on: clTab === 'all' }" @click="setClTab('all')">全部 {{ clients.length }}</button>
         <button class="cl-tab" :class="{ on: clTab === 'high' }" @click="setClTab('high')">高意向 {{ clSummary().high }}</button>
-        <button class="cl-tab" :class="{ on: clTab === '7d' }" @click="setClTab('7d')">近 7 天</button>
       </div>
       <div class="cl-list">
         <div v-for="c in clients" :key="c.uid" class="cl-row">
@@ -225,8 +207,6 @@ defineExpose({ refresh })
     </template>
   </div>
 
-  <!-- 与卡片页导出一致：应用内「保存位置」对话框 -->
-  <SaveDialog ref="saveDialog" />
 </template>
 
 <style scoped>
@@ -449,34 +429,5 @@ defineExpose({ refresh })
   font-size: 12px;
   color: var(--ink-2, #aaa);
   padding: 12px 0;
-}
-.agg-week {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  height: 76px;
-}
-.agg-week-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-end;
-  height: 100%;
-}
-.agg-week-bar {
-  width: 100%;
-  max-width: 26px;
-  min-height: 4px;
-  background: linear-gradient(180deg, #e0b36b, #b08a4d);
-  border-radius: 4px 4px 0 0;
-  font-size: 10px;
-  color: #b08a4d;
-  text-align: center;
-}
-.agg-week-day {
-  font-size: 10px;
-  color: var(--ink-2, #999);
-  margin-top: 4px;
 }
 </style>

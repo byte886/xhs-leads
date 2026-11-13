@@ -2166,6 +2166,12 @@ class ClientsReq(BaseModel):
     xsec_token: str = ""
 
 
+def _is_noise_comment(text: str) -> bool:
+    """关注动作记录（「昵称关注」/「想要关注」）不是评论内容，不入客户线索。"""
+    t = (text or "").strip()
+    return bool(t) and len(t) <= 24 and t.endswith("关注")
+
+
 @app.post("/api/clients")
 async def collect_clients(req: ClientsReq):
     """采集笔记评论区互动用户名单（O1-3）：真实浏览器打开原作品页提取评论用户（含属地/时间），
@@ -2205,6 +2211,7 @@ async def collect_clients(req: ClientsReq):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"浏览器采集失败：{e}") from e
     from src.intent import grade_batch
+    users = [u for u in users if not _is_noise_comment(u.get("comment", ""))]
     grade_batch(users)
     con = _db()
     ts = datetime.datetime.now().isoformat(timespec="seconds")
@@ -2246,6 +2253,8 @@ def clients_list(feed_id: str = "", intent: str = ""):
     if intent:
         where.append("intent = ?")
         params.append(intent)
+    # 「想要关注」「XXX关注」是关注动作记录，不是评论内容，不参与线索统计
+    where.append("comment NOT LIKE '%关注'")
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     # 档位数值（CASE 映射）：高4 > 上3 > 中2 > 低1；每人取最高档位（同档取最新）
     intent_rank_sql = (
@@ -2350,75 +2359,6 @@ async def contact_open(req: ContactOpenReq):
 
 
 # ================= 客户库聚合（O1-4）：线索/意向分布/属地TOP/近7天/留联系方式 =================
-def _build_week_timeline(day_counts: dict) -> list:
-    """近 7 天时间线（含今天往前 7 天，无数据的天补 0）。"""
-    days = []
-    today = datetime.date.today()
-    for i in range(6, -1, -1):
-        d = (today - datetime.timedelta(days=i)).isoformat()
-        days.append({"date": d, "count": day_counts.get(d, 0)})
-    return days
-
-
-def _tally_row_aux(r, ip_counts, day_counts) -> None:
-    """单行属地/日累计。"""
-    ip = (r["ip_location"] or "").strip()
-    if ip:
-        ip_counts[ip] = ip_counts.get(ip, 0) + 1
-    d = (r["created_at"] or "")[:10]
-    if d:
-        day_counts[d] = day_counts.get(d, 0) + 1
-
-
-def _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact) -> int:
-    """单行累计意向/属地/日/联系方式命中。"""
-    it = r["intent"] or "low"
-    dist[it] = dist.get(it, 0) + 1
-    _tally_row_aux(r, ip_counts, day_counts)
-    if is_contact(r["comment"] or "", r["matched_word"] or ""):
-        contact += 1
-    return contact
-
-
-def _aggregate_client_rows(rows):
-    """逐行聚合意向分布/属地/日计数/联系方式命中。"""
-    from src.intent import is_contact
-    dist = {k: 0 for k in ("high", "upper", "middle", "low")}
-    ip_counts: dict[str, int] = {}
-    day_counts: dict[str, int] = {}
-    contact = 0
-    for r in rows:
-        contact = _tally_client_row(r, dist, ip_counts, day_counts, contact, is_contact)
-    return dist, ip_counts, day_counts, contact
-
-
-@app.get("/api/clients_agg")
-def clients_agg():
-    """数据聚合：线索总数 / 意向分布（四档计数）/ 属地 TOP / 近 7 天产出 / 留联系方式命中。
-
-    与 /api/clients_list 同一数据源，聚合数字与明细一致（验收标准）。
-    """
-    con = _db()
-    from src.intent import INTENT_LABEL, intent_rank, is_contact
-    rows = con.execute(
-        "SELECT intent, matched_word, comment, ip_location, created_at FROM clients"
-    ).fetchall()
-    dist, ip_counts, day_counts, contact = _aggregate_client_rows(rows)
-    intent_dist = [
-        {"intent": k, "label": INTENT_LABEL[k], "count": dist[k]}
-        for k in sorted(dist, key=intent_rank, reverse=True)
-    ]
-    ip_top = [{"ip": k, "count": v} for k, v in sorted(ip_counts.items(), key=lambda x: -x[1])[:6]]
-    days = _build_week_timeline(day_counts)
-    return {
-        "total": len(rows),
-        "intent_dist": intent_dist,
-        "ip_top": ip_top,
-        "week": days,
-        "contact": contact,
-    }
-
-
 # ================= Cookie（显示 / 一键从 Chrome 导入） =================
 class PublishReq(BaseModel):
     title: str
