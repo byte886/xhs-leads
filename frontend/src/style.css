@@ -98,9 +98,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .info-item .k { font-size: 11px; color: var(--ink-2); }
 .info-item .v { font-size: 15px; font-weight: 600; }
 .info-item .v.small { font-size: 13px; font-weight: 500; }
-.status-pill { font-size: 11px; padding: 3px 9px; border-radius: 99px; background: #F0F0F0; color: var(--ink-2); font-weight: 600; }
-.status-pill.running { background: #FFE9EC; color: var(--red); }
-.status-pill.done { background: #E6F8EF; color: var(--green); }
 .batch { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .b-btn { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 .b-btn:hover { border-color: var(--ink); }
@@ -160,6 +157,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .menu .mi:hover { background: #FAFAFA; }
 .menu .mi.danger { color: var(--red); font-weight: 600; }
 .menu .mi.amber { color: #B76E00; font-weight: 600; }
+.menu .mi.off { opacity: .55; cursor: not-allowed; }
+.menu .mi.off:hover { background: transparent; }
+.menu .mi-hint { margin-left: auto; font-size: 11px; font-weight: 400; color: #AAA; }
+.menu .mi.sep { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; color: #666; }
+/* 卡片右键菜单遮罩：点空白处关闭，压在菜单(z-index:60)下面 */
+.card-menu-mask { position: fixed; inset: 0; z-index: 55; }
 
 /* 发布编辑页 */
 .publish { max-width: 720px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 26px; }
@@ -327,7 +330,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 }
 .card .flags .tag.hot { color: var(--red); background: #FFF1F3; border-color: #F5C9D1; }
 
-/* 卡片「打开原作品」外链按钮（右下角，点击不触发勾选）。z-index 高于悬停浮层，悬停时仍可点 */
+/* 卡片「打开原作品」外链按钮（右下角，点击不触发勾选），压在封面信息层之上始终可点 */
 .card .open-link {
   position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;
@@ -336,27 +339,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 }
 .card .open-link:hover { background: rgba(0, 0, 0, .8); }
 
-/* 悬停操作按钮：只覆盖底部数据行（不遮挡上一行头像昵称），右侧留 40px 给外链按钮 */
-.card .hover-actions {
-  position: absolute; left: 8px; right: 40px; bottom: 8px; display: flex; gap: 4px;
-  opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 4;
-}
-.card:hover .hover-actions { opacity: 1; pointer-events: auto; }
-.hover-actions .ha-btn {
-  flex: 1 1 0; min-width: 0; border: none; border-radius: 6px; padding: 4px 2px;
-  font-size: 10px; line-height: 1.1; white-space: nowrap;
-  font-weight: 600; color: #fff; background: rgba(255, 36, 66, .92); cursor: pointer;
-}
-.hover-actions .ha-btn.client { background: rgba(64, 89, 219, .92); }
-/* 采作者：进阶粒度（一个作者的多篇合并），用描边区分，不与两个单篇操作抢视觉权重 */
-.hover-actions .ha-btn.author {
-  background: rgba(0, 0, 0, .5); border: 1px solid rgba(255, 255, 255, .55);
-}
-.hover-actions .ha-btn.author:hover { background: rgba(64, 89, 219, .92); border-color: transparent; }
-.hover-actions .ha-btn.off { background: rgba(120, 120, 120, .75); cursor: not-allowed; }
-
 /* 封面底部信息块：上一行头像+昵称（始终可点开博主主页），下一行交互指标；
-   渐变暗条承载，右侧留 40px 给外链按钮；hover/选中时只让数据行淡出，由操作按钮替换 */
+   渐变暗条承载，右侧留 40px 给外链按钮 */
 .card .cover-info {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
   padding: 22px 40px 8px 8px;
@@ -382,7 +366,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 }
 .card .cover-stats .cs-item { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .card .cover-stats .ic { width: 12px; height: 12px; flex: none; }
-.card:hover .cover-stats { opacity: 0; pointer-events: none; }
 
 /* 草稿库（简约版） */
 .draft-overlay {

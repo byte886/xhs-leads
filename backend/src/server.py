@@ -1698,8 +1698,9 @@ async def status_now():
     running = [(tid, st) for tid, st in _COLLECT_TASKS.items() if st.get("status") == "running"]
     if running:
         tid, st = running[0]
-        # 动作统一「正在采集」，进度由 note（已采集 N 条）实时播报。
-        action = "正在采集"
+        # 动作跟随真实阶段：搜索期说「正在搜索」，逐条入库期说「正在采集」。
+        phase = st.get("phase", "")
+        action = "正在搜索" if phase == "search" else "正在采集"
         return {
             "action": action,
             "detail": st.get("note") or "",

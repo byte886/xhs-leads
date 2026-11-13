@@ -45,25 +45,6 @@ watch(
   },
 )
 
-/** 已选筛选条件汇总：跳过默认值（综合/全部/不限），返回“非默认”条件列表 */
-function activeFilters(): string[] {
-  const p = appState.params
-  const items: string[] = []
-  if (p.sort && p.sort !== '综合') items.push(`排序 ${p.sort}`)
-  if (p.noteType && p.noteType !== '全部') items.push(`类型 ${p.noteType}`)
-  if (p.timeRange && p.timeRange !== '不限') items.push(`时间 ${p.timeRange}`)
-  if (p.scope && p.scope !== '不限') items.push(`范围 ${p.scope}`)
-  if (p.distance && p.distance !== '不限') items.push(`距离 ${p.distance}`)
-  return items
-}
-
-/** 任务标签：关键词 + 全部已选筛选条件（对齐小红书搜索筛选） */
-function buildTaskLabel(): string {
-  const p = appState.params
-  const f = activeFilters()
-  return `${p.keyword}${f.length ? ' · ' + f.join(' · ') : '（未选筛选）'}`
-}
-
 // 登录 UI 改版（用户拍板）：采集中失败/异常（登录失效/被踢/验证码风控）→ emit open-login
 // → App 弹 APP 内部强制登录对话框（不可关闭），点「去登录」才切小红书登录页。
 
@@ -77,7 +58,6 @@ async function finalizeCollect(pr: any) {
   stopProgressPolling()
   appState.collecting = false
   if (pr.status === 'error') {
-    appState.status = '失败'
     toast(pr.note || '采集失败', 'error')
     if (isLoginAbnormal(pr.note || '')) emit('open-login')
     return
@@ -87,9 +67,6 @@ async function finalizeCollect(pr: any) {
   sessionStorage.setItem('xhs_stage_restore', '1')
   const list = await apiNotes('', appState.rankMode === 'hot' ? 'hot' : 'score')
   appState.notes = list.notes
-  appState.total = list.total
-  appState.count = list.total
-  appState.status = '展示中'
   setStage('pick')
 }
 
@@ -102,7 +79,7 @@ function scheduleListRefresh() {
     try {
       // 过程中按入库时间正序：新卡片只往后追加、旧卡不动；完成时 finalize 再按评分排
       const live = await apiNotes('', 'time_asc')
-      if (live.notes) { appState.notes = live.notes; appState.total = live.total; appState.count = live.total }
+      if (live.notes) { appState.notes = live.notes }
     } catch { /* 单次列表刷新失败不阻断采集状态 */ }
   }, 400)
 }
@@ -124,7 +101,6 @@ async function handleCollectUpdate(pr: any) {
     emit('open-login')
     const note = pr.note || '需要登录，本次采集结束'
     toast(note, 'error')
-    appState.status = '需要登录'
     await finalizeCollect(pr)
     return
   }
@@ -182,7 +158,6 @@ async function doCollect() {
         // 未订阅事件（如后端未就绪）时不会再有收尾回调，这里自行复位，
         // 否则按钮会永远卡在「停止」
         appState.collecting = false
-        appState.status = '空闲'
         if (timer) { clearInterval(timer); timer = null }
         stopProgressPolling()
       }
@@ -193,13 +168,9 @@ async function doCollect() {
   appState.collecting = true
   appState.endedNeedLogin = false
   filterWarning.value = ''
-  appState.status = '正在采集'
   appState.selected = {}
   // 不再挂着上一次的卡片（旧列表要等采集完成才刷新，期间观感像没开始）
   appState.notes = []
-  appState.total = 0
-  appState.count = 0
-  appState.taskLabel = buildTaskLabel()
   appState.elapsed = 0
   if (timer) clearInterval(timer)
   timer = setInterval(() => { appState.elapsed += 1 }, 1000)
@@ -216,7 +187,6 @@ async function doCollect() {
     stopProgressPolling()
     const msg = (e as Error).message
     toast(`启动采集失败：${msg}`, 'error')
-    appState.status = '失败'
     if (isLoginAbnormal(msg)) emit('open-login')
     appState.collecting = false
   }
@@ -232,10 +202,8 @@ onMounted(async () => {
     const sn = await apiStatusNow()
     if (sn.collecting && sn.task_id) {
       appState.collecting = true
-      appState.status = '正在采集'
       if (sn.keyword) appState.params.keyword = sn.keyword
       if (sn.limit) appState.params.limit = sn.limit
-      appState.taskLabel = buildTaskLabel()
       if (timer) clearInterval(timer)
       timer = setInterval(() => { appState.elapsed += 1 }, 1000)
       setStage('search')
@@ -249,9 +217,6 @@ onMounted(async () => {
       const list = await apiNotes('', appState.rankMode === 'hot' ? 'hot' : 'score')
       if (list.total > 0) {
         appState.notes = list.notes
-        appState.total = list.total
-        appState.count = list.total
-        appState.status = '展示中'
         setStage('pick')
       }
     } catch { /* 后端未就绪时静默 */ }

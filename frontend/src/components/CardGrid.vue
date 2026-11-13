@@ -8,6 +8,7 @@ import { descIsOnlyTags } from '../tagOnly'
 import { filterNotes } from '../lib/noteFilter'
 import { saveTextToPath, saveZipToPath, shortPath } from '../lib/saveApi'
 import SaveDialog from './SaveDialog.vue'
+import CardMenu from './CardMenu.vue'
 
 const props = defineProps<{
   notes: Note[]
@@ -16,10 +17,22 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'menu', payload: { note: Note; x: number; y: number }): void
   (e: 'clone', note: Note): void
   (e: 'clients', note: Note): void
 }>()
+
+/** 卡片右键菜单：克隆 / 采集本篇客户 / 采作者三个单条操作统一收在这里 */
+const menuNote = ref<Note | null>(null)
+const menuPos = ref({ x: 0, y: 0 })
+
+function openMenu(note: Note, ev: MouseEvent) {
+  menuNote.value = note
+  menuPos.value = { x: ev.clientX, y: ev.clientY }
+}
+
+function closeMenu() {
+  menuNote.value = null
+}
 
 const filtered = computed(() => filterNotes(props.notes, props.filterText))
 
@@ -65,15 +78,13 @@ function phStyle(note: Note): Record<string, string> {  const palette = ['#9A6A2
   return { background: palette[h % palette.length] }
 }
 
-function onCardClick(note: Note, ev: MouseEvent) {
-  if (props.selectable) {
-    // 勾选模式：点击卡片切换选中；点右上角勾选标记同样切换
-    const feedId = note.feed_id
-    if (appState.selected[feedId]) delete appState.selected[feedId]
-    else appState.selected[feedId] = true
-    return
-  }
-  emit('menu', { note, x: ev.clientX, y: ev.clientY })
+function onCardClick(note: Note) {
+  // 非勾选模式：左键不再弹菜单，单条操作统一走右键，避免点封面/标题时误触
+  if (!props.selectable) return
+  // 勾选模式：点击卡片切换选中；点右上角勾选标记同样切换
+  const feedId = note.feed_id
+  if (appState.selected[feedId]) delete appState.selected[feedId]
+  else appState.selected[feedId] = true
 }
 
 function isSel(note: Note) {
@@ -274,7 +285,8 @@ function fmtPub(ts: string | number | null): string {
       :key="note.feed_id"
       class="card"
       :class="{ sel: isSel(note) }"
-      @click="onCardClick(note, $event)"
+      @click="onCardClick(note)"
+      @contextmenu.prevent="openMenu(note, $event)"
     >
       <div class="cover">
         <img
@@ -309,17 +321,7 @@ function fmtPub(ts: string | number | null): string {
             <path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <!-- 悬停浮层：单条操作（一键克隆仅图文；采集客户=这一篇；采作者=该作者最近几篇合并去重） -->
-        <div class="hover-actions">
-          <button
-            class="ha-btn clone"
-            :class="{ off: note.note_type === 'video' }"
-            :title="note.note_type === 'video' ? '视频暂不支持克隆（图文为主，视频仅设计留位）' : '一键克隆（抄内容）'"
-            @click.stop="note.note_type === 'video' ? toast('视频笔记暂不支持一键克隆（当前产品以图文为主）', 'error') : emit('clone', note)"
-          >一键克隆</button>
-          <button class="ha-btn client" title="采集客户（采这一篇评论区的人）" @click.stop="emit('clients', note)">采集客户</button>
-          <button class="ha-btn author" title="按作者采客户：采该作者最近几篇笔记的评论，按人去重" @click.stop="openAuthorPanel(note)">采作者</button>
-        </div>
+        <!-- 单条操作（克隆 / 采集客户 / 采作者）已统一迁入右键菜单，卡片不再叠浮层按钮 -->
         <!-- 封面底部信息：上一行头像+昵称，下一行交互指标；hover/选中时数据行让位给操作按钮 -->
         <div class="cover-info">
           <button type="button" class="cover-author" title="打开博主主页" @click.stop="openAuthor(note)">
@@ -361,6 +363,19 @@ function fmtPub(ts: string | number | null): string {
   </div>
   <div v-if="!filtered.length" style="text-align:center;color:#AAA;padding:40px 0">暂无笔记（{{ props.filterText ? '无匹配结果（标题/作者名）' : '先点「开始采集」' }}）</div>
 
+  <!-- 卡片右键菜单：原来悬停出现的三个按钮（克隆 / 采集客户 / 采作者）已全部迁到这里 -->
+  <div v-if="menuNote" class="card-menu-mask" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+  <CardMenu
+    v-if="menuNote"
+    :note="menuNote"
+    :x="menuPos.x"
+    :y="menuPos.y"
+    @clone="emit('clone', $event)"
+    @clients="emit('clients', $event)"
+    @author="openAuthorPanel"
+    @close="closeMenu"
+  />
+
   <!-- 按作者采客户：配置面板（界面先落地，采集功能后续接入） -->
   <div v-if="authorPanel" class="ap-mask" @click.self="authorPanel = null">
     <div class="ap">
@@ -386,7 +401,7 @@ function fmtPub(ts: string | number | null): string {
             <option :value="20">最近 20 篇</option>
           </select>
         </div>
-        <div class="ap-note">只采这一篇请用卡片上的「采集客户」，结果同样可用。</div>
+        <div class="ap-note">只采这一篇请用右键菜单里的「采集客户」，结果同样可用。</div>
         <div class="ap-wip">按作者采集功能开发中：本次先交付界面，点「开始采集」暂不发起采集。</div>
       </div>
       <div class="ap-foot">

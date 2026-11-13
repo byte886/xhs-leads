@@ -34,15 +34,9 @@ describe('勾选集 selected', () => {
 })
 
 describe('setStage / setTab', () => {
-  it('进 search 时状态文案=搜索中', () => {
+  it('切换到 search 阶段', () => {
     setStage('search')
     expect(appState.stage).toBe('search')
-    expect(appState.status).toBe('搜索中')
-  })
-  it('其它 stage 不覆盖 status', () => {
-    appState.status = 'xx'
-    setStage('filter')
-    expect(appState.status).toBe('xx')
   })
   it('setTab 切页', () => {
     setTab('settings')

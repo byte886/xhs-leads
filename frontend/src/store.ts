@@ -52,10 +52,6 @@ export const appState = reactive({
   notes: [] as Note[],
   // 榜单口径（两套评分并存）：lowfan=低粉潜力（默认）/ hot=综合热度
   rankMode: 'lowfan' as 'lowfan' | 'hot',
-  total: 0,
-  count: 0,
-  taskLabel: '',
-  status: '搜索中',
   elapsed: 0,
   // 勾选
   selected: {} as Record<string, boolean>,
@@ -81,7 +77,6 @@ export function toast(msg: string, type: 'ok' | 'error' = 'ok') {
 
 export function setStage(s: Stage) {
   appState.stage = s
-  if (s === 'search') appState.status = '搜索中'
 }
 
 /** 切换工作流 Tab；切到 create 时默认回到创作空态由调用方 openFor 载入 */

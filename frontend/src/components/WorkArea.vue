@@ -6,7 +6,6 @@ import { apiAuthors, apiNotes } from '../api'
 import CardGrid from './CardGrid.vue'
 
 const emit = defineEmits<{
-  (e: 'menu', payload: { note: Note; x: number; y: number }): void
   (e: 'clone', note: Note): void
   (e: 'clients', note: Note): void
 }>()
@@ -54,8 +53,6 @@ async function setRankMode(mode: 'lowfan' | 'hot') {
   try {
     const res = await apiNotes('', mode === 'hot' ? 'hot' : 'score')
     appState.notes = res.notes
-    appState.total = res.total
-    appState.count = res.total
   } catch {
     toast('切换榜单口径失败：后端未就绪', 'error')
   }
@@ -85,31 +82,12 @@ function pickAuthor(a: Author) {
 
     <!-- 采集作品 -->
     <div v-else-if="appState.stage === 'search'">
-      <!-- 吸顶信息条：采集滚动时共获取/任务/状态/已完成保持可见 -->
-      <div class="sticky-tools">
-        <div class="info-bar">
-          <div class="info-item">
-            <span class="k">共获取</span><span class="v">{{ appState.total || '—' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="k">当前任务</span><span class="v small">{{ appState.taskLabel || '—' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="k">状态</span>
-            <span class="status-pill" :class="{ running: appState.status === '正在采集', done: appState.status === '展示中' }">{{ appState.status }}</span>
-          </div>
-          <div class="info-item">
-            <span class="k">已完成</span><span class="v">{{ appState.notes.length }}</span>
-            <span class="v small">{{ appState.elapsed }}s</span>
-          </div>
-        </div>
-      </div>
       <!-- 采集中空态：左侧条件已提交、结果尚未产出时的占位提示 -->
       <div v-if="!appState.notes.length" class="empty" style="padding:48px 0">
         <div class="big">{{ appState.collecting ? '正在采集中' : '暂无结果' }}</div>
         <p>{{ appState.collecting ? '已按左侧条件开始采集，获取到的笔记会在此实时展示。' : '本次未获取到笔记，调整关键词或筛选条件后重新采集。' }}</p>
       </div>
-      <CardGrid v-else :notes="appState.notes" @menu="emit('menu', $event)" />
+      <CardGrid v-else :notes="appState.notes" />
     </div>
 
     <!-- 选择内容（一页式：评分徽标卡片 + 筛选 + 勾选 + 单条克隆；P2 作者榜在采集页内子切换） -->
@@ -175,7 +153,7 @@ function pickAuthor(a: Author) {
           <div class="big">未获取到笔记</div>
           <p>调整关键词或筛选条件后重新采集；结果会在此展示评分卡片。</p>
         </div>
-        <CardGrid v-else :notes="appState.notes" selectable :filter-text="filterText" @menu="emit('menu', $event)" @clone="emit('clone', $event)" @clients="emit('clients', $event)" />
+        <CardGrid v-else :notes="appState.notes" selectable :filter-text="filterText" @clone="emit('clone', $event)" @clients="emit('clients', $event)" />
       </div>
     </div>
   </div>

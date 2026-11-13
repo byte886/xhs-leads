@@ -6,7 +6,6 @@ import type { Note } from './types'
 import FlowBar from './components/FlowBar.vue'
 import CollectPanel from './components/CollectPanel.vue'
 import WorkArea from './components/WorkArea.vue'
-import CardMenu from './components/CardMenu.vue'
 import PublishPage from './components/PublishPage.vue'
 import ClientsPanel from './components/ClientsPanel.vue'
 import ProfilePanel from './components/ProfilePanel.vue'
@@ -19,8 +18,6 @@ import { isLoginAbnormal } from './lib/auth'
 const publishRef = ref<InstanceType<typeof PublishPage> | null>(null)
 const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 
-const menuNote = ref<Note | null>(null)
-const menuPos = ref({ x: 0, y: 0 })
 
 // 登录形态（用户拍板·双窗职责分离）：
 // - **右窗（采集调试窗）是唯一登录落点**，左窗 APP 全程不弹登录框、不被登录页覆盖。
@@ -37,17 +34,7 @@ function ensureRightLogin() {
   apiLoginBegin(true).catch(() => {})
 }
 
-function openMenu(payload: { note: Note; x: number; y: number }) {
-  menuNote.value = payload.note
-  menuPos.value = { x: payload.x, y: payload.y }
-}
-
-function closeMenu() {
-  menuNote.value = null
-}
-
 async function openPublish(note: Note) {
-  menuNote.value = null
   setTab('create')
   // PublishPage 为 v-show 常驻，v-if 挂载只在首次；确保 openFor 目标为最新笔记
   await nextTick()
@@ -150,9 +137,6 @@ onMounted(async () => {
       const r = await apiNotes()
       if (r.total > 0) {
         appState.notes = r.notes
-        appState.total = r.total
-        appState.count = r.total
-        appState.status = '展示中'
       }
     } catch { /* 列表加载失败：仍进入 pick 空态 */ }
     setStage('pick')
@@ -170,7 +154,7 @@ onMounted(async () => {
     <div v-show="appState.tab === 'collect'" class="workbench">
       <CollectPanel @open-login="ensureRightLogin" />
       <main class="work">
-        <WorkArea @menu="openMenu" @clone="cloneOne" @clients="collectClients" />
+        <WorkArea @clone="cloneOne" @clients="collectClients" />
       </main>
     </div>
 
@@ -200,12 +184,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <CardMenu :note="menuNote" :x="menuPos.x" :y="menuPos.y" @clone="openPublish" @close="closeMenu" />
-
     <!-- 登录不在本窗呈现：登录页只在右窗（采集调试窗）打开，左窗 APP 全程不被遮挡 -->
-
-    <!-- 全局点击关闭菜单 -->
-    <div v-if="menuNote" style="position:fixed;inset:0;z-index:55" @click="closeMenu"></div>
 
     <!-- Toast -->
     <transition name="toast-fade">
