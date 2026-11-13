@@ -124,6 +124,20 @@ export async function apiClone(feedId: string): Promise<ClonePayload> {
   }))
 }
 
+/** 填入小红书发布页：把标题/正文/标签/图片填进创作者中心表单；发布仍由用户手动点。 */
+export async function apiFillXhs(payload: {
+  title: string
+  desc: string
+  tags: string[]
+  images: string[]
+}): Promise<{ ok: boolean; note?: string; [k: string]: unknown }> {
+  return j(await fetch(`${BASE}/api/fill_xhs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }))
+}
+
 export async function apiPublish(payload: {
   title: string
   desc: string

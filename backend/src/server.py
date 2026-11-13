@@ -2277,6 +2277,61 @@ class ContactOpenReq(BaseModel):
     profile: str
 
 
+class FillXhsReq(BaseModel):
+    title: str = ""
+    desc: str = ""
+    tags: list[str] = []
+    images: list[str] = []
+
+
+@app.post("/api/fill_xhs")
+async def fill_xhs(req: FillXhsReq):
+    """把准备好的内容填进小红书发布页（创作者中心「上传图文」表单）。
+
+    只填不发布：最后那一下「发布」由用户在小红书里手动点（产品红线）。
+    可见范围 / 发布账号由平台自己管，不在这里设置。
+    """
+    await _require_login()
+    from src import browser_client
+
+    body = (req.desc or "").strip()
+    tags = [t.lstrip("#").strip() for t in (req.tags or []) if t.strip()]
+    if tags:
+        body = (body + "\n" + " ".join("#" + t for t in tags)).strip()
+    files = [_local_image_path(u) for u in (req.images or [])]
+    files = [f for f in files if f]
+    try:
+        note = await browser_client.fill_write_page(req.title, body, files)
+    except browser_client.FillXhsError as e:
+        raise HTTPException(409, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"浏览器操作失败：{e}") from e
+    return {"ok": True, "note": note}
+
+
+def _local_image_path(u: str) -> str:
+    """把 /app/images/xxx 或 /api/img?path=... 解析成本地图片绝对路径；解析不到返回空串。"""
+    from urllib.parse import unquote
+    s = (u or "").strip()
+    if not s:
+        return ""
+    name = ""
+    if "/app/images/" in s:
+        name = s.split("/app/images/", 1)[1].split("?")[0]
+    elif "path=" in s:
+        name = unquote(s.split("path=", 1)[1]).split("&")[0]
+        if "/app/images/" in name:
+            name = name.split("/app/images/", 1)[1]
+    if not name:
+        return ""
+    p = (IMAGES_DIR / name).resolve()
+    try:
+        p.relative_to(IMAGES_DIR.resolve())
+    except ValueError:
+        return ""
+    return str(p) if p.exists() else ""
+
+
 @app.post("/api/contact_open")
 async def contact_open(req: ContactOpenReq):
     """O1-5 去联系：在采集窗打开用户主页并点「聊天」按钮，落到私信会话页（工具不代发消息）。

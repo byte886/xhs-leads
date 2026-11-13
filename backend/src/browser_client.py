@@ -1977,3 +1977,83 @@ async def stop():
     """关闭全部引擎 + Playwright 实例（后端退出钩子）。"""
     await pool.close_all()
 
+
+
+# ===========================================================================
+# 填入小红书发布页（创作者中心「上传图文」）：只填，不点发布
+# ===========================================================================
+class FillXhsError(RuntimeError):
+    """填入发布页失败（没进到编辑页 / 图片传不上去 / 字段写不进去）。"""
+
+
+_CREATOR_PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
+_FILL_TITLE_SEL = 'input.d-text[placeholder*="填写标题"]'
+_FILL_BODY_SEL = "div.tiptap.ProseMirror"
+_FILL_IMAGE_INPUT = 'input.upload-input[type="file"]'
+
+# 发布页默认停在「上传视频」，点 tab 切到「上传图文」；已在图文时点不到、无副作用
+_SWITCH_IMAGE_TAB_JS = """() => {
+  for (const e of [...document.querySelectorAll('.creator-tab')]) {
+    if ((e.innerText || '').trim() === '上传图文') { e.click(); return true; }
+  }
+  return false;
+}"""
+
+
+async def _ensure_publish_page(account_id: str = "default"):
+    """取创作者中心发布页：已开着就复用，否则新开一个到发布页。"""
+    ctx = await _ctx(account_id)
+    creator = await _creator_page(ctx)
+    if creator is not None:
+        return creator
+    creator = await ctx.new_page()
+    await cdp_call(creator.goto(_CREATOR_PUBLISH_URL, wait_until="domcontentloaded"),
+                   timeout=CDP_NAV, label="fill.creator")
+    return creator
+
+
+async def _fill_images(creator, files: list[str]) -> None:
+    if not files:
+        return
+    await cdp_call(creator.locator(_FILL_IMAGE_INPUT).set_input_files(files),
+                   timeout=CDP_NAV, label="fill.images")
+    await asyncio.sleep(3)
+
+
+async def _fill_text(creator, title: str, body: str) -> None:
+    await creator.fill(_FILL_TITLE_SEL, (title or "").strip()[:20])
+    if body:
+        await cdp_call(creator.click(_FILL_BODY_SEL), timeout=CDP_EVAL, label="fill.body_click")
+        await creator.keyboard.insert_text(body[:1000])
+
+
+async def fill_write_page(title: str, body: str, images: list[str],
+                          account_id: str = "default") -> str:
+    """把标题/正文/标签/图片填进创作者中心发布页，**不点「发布」**。
+
+    真机验证（2026-11-13）：发布页 = creator.xiaohongshu.com/publish/publish，
+    标题 `input.d-text[placeholder*="填写标题"]`、正文 tiptap `div.tiptap.ProseMirror`、
+    图片 `input.upload-input[type=file]`（可多选）。可见范围/发布账号由平台自己管，不在此设置。
+    """
+    creator = await _ensure_publish_page(account_id)
+    await asyncio.sleep(2)
+    # 等页面侧栏 tab 渲染出来再切「上传图文」（刚打开时 tab 还没出来）
+    try:
+        await creator.wait_for_selector(".creator-tab", timeout=12000)
+    except Exception as exc:  # noqa: BLE001
+        raise FillXhsError("发布页没加载出来（可能未登录或被风控拦截）") from exc
+    try:
+        await creator.evaluate(_SWITCH_IMAGE_TAB_JS)
+    except Exception:  # noqa: BLE001  # 已在图文页，tab 点不到
+        pass
+    await asyncio.sleep(1.5)
+    if not images:
+        raise FillXhsError("图文笔记至少要有一张图片：请先补图再填入")
+    await _fill_images(creator, images)
+    # 标题/正文编辑区在上传图片之后才出现，这里等它渲染
+    try:
+        await creator.wait_for_selector(_FILL_TITLE_SEL, timeout=15000)
+    except Exception as exc:  # noqa: BLE001
+        raise FillXhsError("图片上传后没出现标题编辑区（可能上传失败或被风控拦截）") from exc
+    await _fill_text(creator, title, body)
+    return "已把标题/正文/标签/图片填进小红书发布页，请确认后手动点「发布」"

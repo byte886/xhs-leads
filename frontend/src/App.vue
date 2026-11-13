@@ -177,7 +177,7 @@ onMounted(async () => {
           <button class="btn publish-bar-close" @click="publishOpen = false">关闭</button>
         </div>
         <div class="publish-body">
-          <PublishPage ref="publishRef" @open-login="ensureRightLogin" @back="publishOpen = false" />
+          <PublishPage ref="publishRef" @open-login="ensureRightLogin" />
         </div>
       </div>
     </div>

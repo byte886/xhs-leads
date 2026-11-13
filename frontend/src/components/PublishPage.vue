@@ -1,24 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { appState, coverProxy, setStage, setTab, toast } from '../store'
-import { apiClone, apiPublish, apiSaveDraft, apiUploadImage, apiDrafts, apiDraftDelete, apiAiGenerate, apiLogs, apiPublishStatsSync } from '../api'
+import { coverProxy, toast } from '../store'
+import { apiClone, apiFillXhs, apiUploadImage, apiAiGenerate } from '../api'
 import AiWizard from './AiWizard.vue'
-import type { DraftItem } from '../api'
-import type { LogItem, Note } from '../types'
+import type { Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
 
-const emit = defineEmits<{ (e: 'back'): void; (e: 'open-login'): void }>()
+const emit = defineEmits<{ (e: 'open-login'): void }>()
 
 const title = ref('')
 const body = ref('')
 const tags = ref('')
-const visible = ref('公开可见')
-const account = ref('')
 const images = ref<string[]>([])
 const feedId = ref('')
 const videoFile = ref('')  // 视频克隆：原视频本地路径（/videos/...）；空=图文
 const videoUrl = ref('')   // 原视频远端地址（仅展示用）
-const publishing = ref(false)
+const filling = ref(false)
 const loading = ref(false)
 
 // ---- 图片去重（URL 主路径去重）：克隆载荷/草稿/追加均经此过滤 ----
@@ -40,45 +37,6 @@ function dedupe(list: string[]): string[] {
   })
 }
 
-
-// 草稿库（简约版：列表 / 恢复续编 / 删除）
-const drafts = ref<DraftItem[]>([])
-const draftPanelOpen = ref(false)
-const draftLoading = ref(false)
-
-async function loadDrafts() {
-  draftLoading.value = true
-  try {
-    const r = await apiDrafts()
-    drafts.value = r.ok ? r.drafts : []
-  } catch {
-    drafts.value = []
-  } finally {
-    draftLoading.value = false
-  }
-}
-
-function openDraftPanel() {
-  draftPanelOpen.value = true
-  loadDrafts()
-}
-
-function restoreDraft(d: DraftItem) {
-  title.value = d.title || ''
-  body.value = d.desc || ''
-  tags.value = d.tags.join(' ')
-  visible.value = d.visibility || '公开可见'
-  images.value = dedupe(d.images)
-  feedId.value = d.feed_id || ''
-  draftPanelOpen.value = false
-  toast('已恢复草稿，可继续编辑后发布或重新保存')
-}
-
-async function removeDraft(id: number) {
-  const r = await apiDraftDelete(id).catch(() => ({ ok: false }))
-toast(r.ok ? '草稿已删除' : '删除失败', r.ok ? 'ok' : 'error')
-  loadDrafts()
-}
 
 const tCount = computed(() => title.value.length)
 const bCount = computed(() => body.value.length)
@@ -120,8 +78,6 @@ async function openFor(note: CloneTarget) {
       return
     }
     tags.value = ''
-    visible.value = '公开可见'
-    account.value = ''
   } catch (e) {
     toast(`克隆失败：${(e as Error).message}`, 'error')
   } finally {
@@ -193,12 +149,6 @@ async function onAddImages(ev: Event) {
   if (added) toast(`已追加 ${added} 张图片（共 ${images.value.length} 张）`)
 }
 
-function back() {
-  setStage('pick')
-  setTab('collect')
-  emit('back')
-}
-
 // ---- F9 发布前质检（v1.5：违规词 / 结构 / 图片二创 / 同质化人工确认） ----
 // 本地确定性规则：违规词扫描 + 结构检查；图片二创与同质化做「人工确认」提示（发布永远手动）
 const Q_ABS_WORDS = ['最好', '最全', '最强', '第一名', '唯一', '全网第一', '国家级', '百分百', '100%', '绝对有效', '顶级', '极致', '最佳', '无敌', '根治', '治愈', '疗效', '永不反弹', '最低', '最低价', '最便宜', '全网最低', '全网最便宜', '史上最低']
@@ -235,105 +185,27 @@ const qcPassed = computed(() => {
   return r.checked && r.abs.length === 0 && r.drain.length === 0 && r.structure.length === 0
 })
 
-async function publish() {
-  const r = runQC()
-  // 高风险：导流词 / 绝对化用语 → 强确认（不硬拦，发布永远手动，但必须明示风险）
-  const risk = [...r.drain, ...r.abs]
-  if (risk.length) {
-    const ok = window.confirm(`发布前质检发现高风险项：\n${risk.join('、')}\n\n按平台规则这些词可能触发限流/下架。仍要继续发布吗？`)
-    if (!ok) return
-  }
-  // 提示级：结构缺失 + 图片二创 + 同质化 → 人工确认
-  const tips: string[] = [...r.structure]
-  if (images.value.length) tips.push('图片请确认已二创（调色/裁剪/加字/重排）或已获授权——克隆原图直接发布有搬运降权风险')
-  if (tips.length && !window.confirm(`发布前提醒：\n${tips.join('\n')}\n\n已确认内容为你原创/已获授权并处理上述提醒？`)) return
-
-  publishing.value = true
+// 填入小红书发布页：自动打开 write 页，把标题/正文/标签/图片填进去；
+// 最后那一下「发布」始终由用户在小红书里手动点（产品红线：不自动发布）。
+async function fillXhs() {
+  filling.value = true
   try {
-    // 前置检查：后端发布前校验账号与上传通道（现有护栏）
-    const rr = await apiPublish({
+    const r = await apiFillXhs({
       title: title.value,
       desc: body.value,
-      tags: tags.value.split(/[\s,，]+/).filter(Boolean).map(t => (t.startsWith('#') ? t : '#' + t)),
+      tags: tags.value.split(/[\s,，]+/).filter(Boolean),
       images: dedupe(images.value),
-      visible: visible.value
     })
-toast(rr.ok ? '发布成功' : `发布失败：${rr.note || '未知原因'}`, rr.ok ? 'ok' : 'error')
-    if (!rr.ok && isLoginAbnormal(String(rr.note || rr.error || ''))) emit('open-login')
+    toast(r.ok ? (r.note || '已填入小红书发布页，确认后手动点发布') : `填入失败：${r.note || '未知原因'}`, r.ok ? 'ok' : 'error')
+    if (!r.ok && isLoginAbnormal(String(r.note || ''))) emit('open-login')
   } catch (e) {
-    toast(`发布失败：${(e as Error).message}`, 'error')
+    toast(`填入失败：${(e as Error).message}`, 'error')
     if (isLoginAbnormal((e as Error).message)) emit('open-login')
   } finally {
-    publishing.value = false
+    filling.value = false
   }
 }
 
-async function saveDraft() {
-  try {
-    const r = await apiSaveDraft({
-      title: title.value,
-      desc: body.value,
-      tags: tags.value.split(/[\s,，]+/).filter(Boolean).map(t => (t.startsWith('#') ? t : '#' + t)),
-      images: dedupe(images.value),
-      visible: visible.value,
-      feed_id: feedId.value
-    })
-toast(r.ok ? r.note || '草稿已保存（长期保留）' : `保存失败：${r.note || '未知原因'}`, r.ok ? 'ok' : 'error')
-  } catch (e) {
-    toast(`保存失败：${(e as Error).message}`, 'error')
-  }
-}
-
-// ---- P1 数据回流：发布记录 + 回写互动数据（浏览/赞/藏/评/转） ----
-const logs = ref<LogItem[]>([])
-const syncing = ref(false)                      // 是否正在同步全量数据
-
-async function loadLogs() {
-  try { logs.value = await apiLogs() } catch { logs.value = [] }
-}
-loadLogs()
-
-function loadLogsOnOpen(ev: Event) {
-  const el = ev.target as HTMLDetailsElement
-  if (el.open) loadLogs()
-}
-
-function parseStats(lg: LogItem): Record<string, any> | null {
-  const s = lg.stats_json
-  if (typeof s !== 'string' || !s) return null
-  try { return JSON.parse(s) } catch { return null }
-}
-
-/** 数值 + 与上一次的增量，例如 "93 (+13)"；没变化只给数值。 */
-function statText(lg: LogItem, key: string): string {
-  const s = parseStats(lg)
-  if (!s) return '-'
-  const v = s[key] || '-'
-  const d = (s.deltas || {})[key]
-  return d ? `${v} (${d})` : String(v)
-}
-
-/** 同步发布数据：一次进创作者中心「笔记管理」，把全部已发笔记的 5 项数据一次拿回来。
- *  逐条点详情页拿不到浏览数，而且一条一条点是重复劳动，所以这里只保留全量入口。 */
-async function syncAll() {
-  if (syncing.value) return
-  syncing.value = true
-  try {
-    const r = await apiPublishStatsSync()
-    if (!r.ok) {
-      toast(`同步失败：${r.detail || '未知原因'}`, 'error')
-      return
-    }
-    const matched = (r.matched || []).length
-    const rest = (r.unmatched || []).length
-    toast(`已同步 ${r.total ?? 0} 条，其中 ${matched} 条对上发布记录${rest ? `，${rest} 条不在记录里` : ''}`)
-    await loadLogs()
-  } catch (e) {
-    toast(`同步失败：${(e as Error).message}`, 'error')
-  } finally {
-    syncing.value = false
-  }
-}
 
 // ---- O1 AI 文稿（本阶段 UI 先行：入口不读配置状态，一律当已接通） ----
 const aiBusy = ref('')
@@ -473,90 +345,20 @@ async function aiRun(action: string) {
           </div>
           <input ref="fileInput" type="file" accept="image/*" multiple style="display:none" @change="onAddImages" />
         </div>
-        <div class="pub-row">
-          <div class="pub-field">
-            <label>可见范围</label>
-            <select v-model="visible" style="width:100%">
-              <option>公开可见</option><option>仅粉丝可见</option><option>仅自己可见</option>
-            </select>
-          </div>
-          <div class="pub-field">
-            <label>发布账号</label>
-            <select v-model="account" style="width:100%">
-              <option value="">{{ appState.login.nickname || '当前账号' }}（当前）</option>
-              <option disabled>账号 2（未配置）</option>
-              <option disabled>账号 3（未配置）</option>
-            </select>
-          </div>
-        </div>
         <div v-if="videoFile" class="video-bar">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="2" stroke="#c7741e" /><path d="M10 9.5v5l4-2.5z" fill="#c7741e" /></svg>
           <b>原视频已下载</b>（{{ videoFile }}）——发布时在小红书发布页手动选择该本地视频文件上传即可（与正常发视频笔记一致，无需额外上传通道）。
         </div>
         <div class="check-note">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#888" /><path d="M12 8v5M12 16.5v.01" stroke="#888" stroke-width="2" /></svg>
-          发布前会自动检查账号和上传通道（视频原话）
+          点上方按钮后，标题 / 正文 / 标签 / 图片会自动填进小红书发布页；「发布」这一步仍需你在小红书里手动点
         </div>
         <div class="pub-btns">
-          <button class="btn-back" @click="back">返回作品列表</button>
-          <button class="btn-draft" @click="saveDraft">保存草稿</button>
-          <button class="btn-draft" @click="openDraftPanel">草稿库</button>
-          <button class="btn-pub" :disabled="publishing" @click="publish">{{ publishing ? '发布中…' : '发布至' }}</button>
+          <button class="btn-pub" :disabled="filling" @click="fillXhs">{{ filling ? '正在填入…' : '填入小红书发布页' }}</button>
         </div>
       </template>
     </div>
 
-    <!-- 草稿库弹窗（简约版：列表 / 点击恢复续编 / × 删除） -->
-    <div v-if="draftPanelOpen" class="draft-overlay" @click.self="draftPanelOpen = false">
-      <div class="draft-panel">
-        <div class="draft-head">
-          <b>草稿库</b>
-          <span class="draft-close" @click="draftPanelOpen = false">×</span>
-        </div>
-        <div v-if="draftLoading" class="draft-empty">加载中…</div>
-        <div v-else-if="!drafts.length" class="draft-empty">
-          暂无草稿<br /><span class="dim">发布页编辑后点「保存草稿」即可保存（长期保留）</span>
-        </div>
-        <div v-else class="draft-list">
-          <div v-for="d in drafts" :key="d.id" class="draft-item" @click="restoreDraft(d)">
-            <img v-if="d.images[0]" class="draft-thumb" :src="coverProxy(d.images[0])" alt="" @error="($event.target as HTMLImageElement).style.display = 'none'" />
-            <span v-else class="draft-thumb draft-thumb-empty">无图</span>
-            <div class="draft-meta">
-              <div class="draft-title">{{ d.title || '（无标题）' }}</div>
-              <div class="draft-sub">{{ d.created_at?.replace('T', ' ') }} · {{ d.visibility }} · {{ d.images.length }} 图</div>
-            </div>
-            <button class="draft-del" @click.stop="removeDraft(d.id)">删除</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 发布记录 + 数据回流（P1）：回写已发布笔记互动数据（展开时自动刷新） -->
-    <details class="pub-log-panel" style="margin:18px 26px 0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 18px"
-             @toggle="loadLogsOnOpen($event)">
-      <summary style="cursor:pointer;font-size:13px;color:var(--ink-2)">
-        发布记录（{{ logs.length }}）
-        <button class="mini-btn" style="margin-left:8px" :disabled="syncing" @click.prevent="syncAll">
-          {{ syncing ? '同步中…' : '同步发布数据' }}
-        </button>
-      </summary>
-      <div v-if="!logs.length" class="dim" style="padding:8px 0;font-size:12px">
-        暂无发布记录。发布后在此显示；点「同步发布数据」一次取回全部已发笔记的浏览/评/赞/藏/转。
-      </div>
-      <div v-for="lg in logs" :key="String(lg.id)" class="pub-log-item" style="border-top:1px dashed var(--line);padding:8px 0;margin-top:6px">
-        <div style="display:flex;gap:10px;align-items:center;font-size:12px">
-          <span style="font-weight:600">{{ String(lg.title || '(无标题)').slice(0, 24) }}</span>
-          <span class="dim">{{ String(lg.created_at || '').replace('T', ' ') }}</span>
-          <span :style="{ color: lg.status === 'success' ? 'var(--green, #16a34a)' : '#b45309' }">{{ lg.status === 'success' ? '已发布' : '待手动发布' }}</span>
-        </div>
-        <div v-if="parseStats(lg)" class="dim" style="font-size:12px;margin-top:6px">
-          浏览 {{ statText(lg, 'views') }} · 评 {{ statText(lg, 'comment_count') }} ·
-          赞 {{ statText(lg, 'liked_count') }} · 藏 {{ statText(lg, 'collected_count') }} ·
-          转 {{ statText(lg, 'shared_count') }} · 抓于 {{ (parseStats(lg)?.fetched_at || '').replace('T', ' ') }}
-        </div>
-        <div v-else class="dim" style="font-size:12px;margin-top:6px">还没取过数据</div>
-      </div>
-    </details>
 
     <!-- 图片全图预览（lightbox：点击遮罩/图关闭） -->
     <div v-if="previewUrl" class="img-lightbox" @click="previewUrl = ''">
