@@ -18,7 +18,7 @@ const videoUrl = ref('')   // 原视频远端地址（仅展示用）
 const filling = ref(false)
 const loading = ref(false)
 
-// ---- 图片去重（URL 主路径去重）：克隆载荷/草稿/追加均经此过滤 ----
+// ---- 图片去重（URL 主路径去重）：克隆载荷 / 追加图片均经此过滤 ----
 // 重复来源：克隆提取时封面与正文同图、CDN 同图不同签名 query / 处理参数变体（!nd_dft 等）。
 // key 取 CDN 主路径（去 query、去末尾 ! 处理参数），相同即视为同一张图，保留首次出现。
 function imgKey(u: string): string {
@@ -91,7 +91,7 @@ function removeImg(i: number) {
   images.value.splice(i, 1)
 }
 
-// 拖拽排序（原生 HTML5 DnD）：拖放后重排 images 数组，发布/草稿按新顺序生效
+// 拖拽排序（原生 HTML5 DnD）：拖放后重排 images 数组，填入小红书时按新顺序生效
 const dragIndex = ref(-1)
 function onDragStart(i: number) {
   dragIndex.value = i
@@ -244,15 +244,7 @@ async function aiRun(action: string) {
 
 <template>
   <div>
-    <div style="max-width:720px;margin:0 auto;padding:14px 26px 0;font-size:13px;color:var(--ink-3)">
-      发布编辑页 ·
-      <a
-        href="#"
-        style="color:var(--red)"
-        @click.prevent="toast('已复制原作品链接')"
-      >复制原作品链接</a>
-    </div>
-    <div class="publish" style="margin-top:10px">
+    <div class="publish" style="margin-top:18px">
       <h2>发布笔记</h2>
       <div v-if="loading" style="text-align:center;padding:30px;color:var(--ink-2)">正在拉取笔记内容…</div>
       <template v-else>

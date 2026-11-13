@@ -173,7 +173,6 @@ onMounted(async () => {
       <div class="publish-dialog">
         <div class="publish-bar">
           <span class="publish-bar-t">一键克隆</span>
-          <span class="publish-bar-sub">编辑完成可直接发布，也可关闭稍后继续</span>
           <button class="btn publish-bar-close" @click="publishOpen = false">关闭</button>
         </div>
         <div class="publish-body">
@@ -234,7 +233,6 @@ onMounted(async () => {
   border-bottom: 1px solid var(--line);
 }
 .publish-bar-t { font-size: 14px; font-weight: 600; color: var(--ink); }
-.publish-bar-sub { font-size: 12px; color: var(--ink-3); }
 .publish-bar-close { margin-left: auto; }
 .publish-body { flex: 1; overflow: auto; padding: 0 22px 22px; }
 </style>
