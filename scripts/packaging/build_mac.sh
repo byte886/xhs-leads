@@ -81,6 +81,17 @@ ls -d dist/XHSLeads.app
 echo ">> 产物资产自检"
 backend/.venv/bin/python scripts/packaging/check_pack.py dist/XHSLeads.app
 
+# 4.3) ad-hoc 重签：必须放在所有文件改动之后。
+# PyInstaller 产出的 .app 自带 ad-hoc 签名，但步骤 4/4.1 往 bundle 里拷引擎、换图标，
+# 签名清单随即失效（spctl 报 "a sealed resource is missing or invalid"）。签名失效时
+# macOS 判「已损坏，无法打开」，系统设置里的「仍要打开」是灰的 —— 收件人只能靠命令行
+# xattr -d com.apple.quarantine 才能打开，这正是实际踩到的坑。
+# 重签后 Gatekeeper 报「无法验证开发者」，用户在系统设置点一次「仍要打开」即可，无需命令行。
+# 注：codesign 会连嵌套的 CFT 一并转 ad-hoc（实测不影响引擎运行、采集窗照常创建）。
+echo ">> ad-hoc 重签（让签名清单与最终文件对齐）"
+codesign --force --sign - dist/XHSLeads.app
+codesign --verify --deep --strict dist/XHSLeads.app && echo "   签名校验通过"
+
 # 5) 分发件：zip（绿色免安装）与 dmg（安装镜像）
 if [[ "$FORMAT" == "zip" || "$FORMAT" == "all" ]]; then
   ZIP_OUT="${HOME}/Desktop/XHSLeads-mac-Intel.zip"
