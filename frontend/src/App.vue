@@ -47,7 +47,7 @@ async function openPublish(note: Note) {
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     if (publishOpen.value) publishOpen.value = false
-    else if (clientsOpen.value) clientsOpen.value = false
+    else if (clientsOpen.value) closeClients()
   }
 }
 
@@ -61,39 +61,75 @@ async function cloneOne(note: Note) {
   await openPublish(note)
 }
 
-// 采集客户（P4/O1-3）：真实浏览器抓取笔记评论区互动用户，入库去重；完成后切客户 Tab 并刷新
+// 采集客户（P4/O1-3）：真实浏览器抓取笔记评论区互动用户，入库去重
+// 过程呈现对齐「开始采集」：点下去即打开弹层 → 转圈 + 已用时 → 完成 / 异常停止三态
+const collectState = ref({ running: false, text: '', err: '', elapsed: 0 })
+let collectClock: ReturnType<typeof setInterval> | null = null
+
+function stopCollectClock() {
+  if (collectClock) { clearInterval(collectClock); collectClock = null }
+}
+
+function closeClients() {
+  clientsOpen.value = false
+  stopCollectClock()
+  collectState.value = { running: false, text: '', err: '', elapsed: 0 }
+}
+onUnmounted(stopCollectClock)
+
 async function collectClients(note: Note) {
   const t = (note.title || '该笔记').slice(0, 12)
-  toast(`正在采集「${t}…」的互动用户…`)
+  clientsOpen.value = true
+  collectState.value = { running: true, text: `正在采集「${t}…」的评论区互动用户`, err: '', elapsed: 0 }
+  stopCollectClock()
+  collectClock = setInterval(() => { collectState.value.elapsed += 1 }, 1000)
+
+  const ac = new AbortController()
+  const capTimer = setTimeout(() => ac.abort(), 120_000)
+  const fail = (msg: string, ms = 120) => {
+    stopCollectClock()
+    collectState.value = { running: false, text: `采集失败：${msg.slice(0, ms)}`, err: '1', elapsed: collectState.value.elapsed }
+    toast('采集失败：' + msg.slice(0, ms), 'error')
+    if (isLoginAbnormal(msg)) ensureRightLogin()
+  }
+
   try {
     const resp = await fetch('/api/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ feed_id: note.feed_id, xsec_token: note.xsec_token || '' }),
+      signal: ac.signal,
     })
+    clearTimeout(capTimer)
     if (!resp.ok) {
       let msg = `HTTP ${resp.status}`
       try {
         const body = await resp.json()
         if (body?.detail) msg = String(body.detail)
       } catch { /* 非 JSON 错误体 */ }
-      toast('采集失败：' + msg.slice(0, 120), 'error')
-      if (isLoginAbnormal(msg)) ensureRightLogin()
+      fail(msg)
       return
     }
     const data = await resp.json()
+    stopCollectClock()
     const sum = data.summary || {}
-    const hi = sum['高意向'] ? `，高意向 ${sum['高意向']} 条` : ''
-    toast(data.total > 0
-      ? `采集到 ${data.total} 位互动用户（新增 ${data.new}）${hi}，已入库`
-      : '未采集到互动用户（可能无评论或需登录）')
+    const hi = sum['高意向'] ? `，高意向 ${sum['高意向']}` : ''
+    collectState.value = {
+      running: false,
+      text: data.total > 0
+        ? `采集完成：${data.total} 位互动用户（新增 ${data.new}）${hi}`
+        : '采集完成：没有找到互动用户（这篇可能没人评论）',
+      err: '',
+      elapsed: collectState.value.elapsed,
+    }
     if (data.total > 0) {
-      clientsOpen.value = true
       await nextTick()
       await clientsRef.value?.refresh()
     }
-  } catch {
-    toast('采集失败：网络错误', 'error')
+  } catch (e) {
+    clearTimeout(capTimer)
+    const aborted = (e as { name?: string })?.name === 'AbortError'
+    fail(aborted ? '采集超时（120 秒），已停止' : '网络错误，已停止')
   }
 }
 
@@ -190,9 +226,14 @@ onMounted(async () => {
       <div class="publish-dialog">
         <div class="publish-bar">
           <span class="publish-bar-t">采集客户</span>
-          <button class="btn publish-bar-close" @click="clientsOpen = false">关闭</button>
+          <button class="btn publish-bar-close" @click="closeClients">关闭</button>
         </div>
         <div class="publish-body">
+          <div v-if="collectState.text" class="cl-status" :class="{ run: collectState.running, err: collectState.err }">
+            <span v-if="collectState.running" class="cl-spin" aria-hidden="true" />
+            <span class="cl-status-t">{{ collectState.text }}</span>
+            <span v-if="collectState.running" class="cl-status-time">{{ collectState.elapsed }}s</span>
+          </div>
           <div style="max-width:1100px;margin:0 auto">
             <ClientsPanel ref="clientsRef" />
           </div>
@@ -247,4 +288,22 @@ onMounted(async () => {
 .publish-bar-t { font-size: 14px; font-weight: 600; color: var(--ink); }
 .publish-bar-close { margin-left: auto; }
 .publish-body { flex: 1; overflow: auto; padding: 18px 22px 22px; }
+.cl-status {
+  display: flex; align-items: center; gap: 9px;
+  max-width: 1100px; margin: 0 auto 14px;
+  padding: 9px 12px; border-radius: 7px;
+  background: #F6F2EC; border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--ink-2);
+}
+.cl-status.run { background: #FFF7EE; border-color: #F0D3B6; color: #8A5A22; }
+.cl-status.err { background: #FDECEC; border-color: #F2C9C9; color: #A33; }
+.cl-status-t { flex: 1; line-height: 1.45; }
+.cl-status-time { font-variant-numeric: tabular-nums; opacity: .75; }
+.cl-spin {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: cl-spin .8s linear infinite;
+}
+@keyframes cl-spin { to { transform: rotate(360deg); } }
+
 </style>
