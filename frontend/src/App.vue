@@ -117,15 +117,9 @@ async function collectClients(note: Note) {
     // 先刷新列表，再用列表实数播报（后端返回的条数含「XX关注」这类非评论动作，不能用它报数）
     await nextTick()
     await clientsRef.value?.refresh()
-    const n = clientsRef.value?.count?.() ?? 0
-    collectState.value = {
-      running: false,
-      text: n > 0
-        ? `采集完成：本篇 ${n} 位客户`
-        : '采集完成：没有找到评论用户（这篇可能没人评论）',
-      err: '',
-      elapsed: collectState.value.elapsed,
-    }
+    // 采集成功不再留常驻播报条：转圈停即视为完成，列表本身反映结果
+    // （失败仍保留红色错误条，异常必须可见）
+    collectState.value = { running: false, text: '', err: '', elapsed: 0 }
   } catch (e) {
     clearTimeout(capTimer)
     const aborted = (e as { name?: string })?.name === 'AbortError'

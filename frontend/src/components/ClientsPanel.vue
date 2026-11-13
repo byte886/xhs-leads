@@ -12,8 +12,7 @@ const props = defineProps<{ feedId?: string }>()
 const clients = ref<ClientUser[]>([])
 const clTab = ref<'all' | 'high'>('all')
 
-// 联系方式词（与后端 intent.CONTACT_WORDS 同源），只用于本地计数
-const CONTACT_RE = /vx|v信|卫星|weixin|wechat|微信|薇信|私我|私聊|滴滴|私信|手机|电话|\+86|si我|si 我/
+
 
 // O1-3 意向档位展示映射（与后端 intent.py 一致）
 const INTENT_META: Record<string, { label: string; cls: string }> = {
@@ -54,16 +53,8 @@ async function setClTab(tab: 'all' | 'high') {
   await loadClients()
 }
 
-/** 统计（全部基于当前列表，与下方明细逐条一致） */
-function clSummary() {
-  let high = 0
-  let contact = 0
-  for (const c of clients.value) {
-    if (c.intent === 'high') high += 1
-    if (CONTACT_RE.test(((c.matched_word || '') + (c.sample_comment || '')).toLowerCase())) contact += 1
-  }
-  return { total: clients.value.length, high, contact }
-}
+/** 高意向人数（筛选用） */
+const highCount = computed(() => clients.value.filter((c) => c.intent === 'high').length)
 
 /** 意向分布 / 属地 TOP：本地按人去重统计，不再走独立的聚合接口 */
 const aggLocal = computed(() => {
@@ -124,12 +115,6 @@ defineExpose({ refresh, count })
       <p>在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级列在这里</p>
     </div>
     <template v-else>
-      <div class="info-bar">
-        <div class="info-item"><span class="k">本篇线索</span><span class="v">{{ clSummary().total }}</span></div>
-        <div class="info-item"><span class="k">高意向</span><span class="v" style="color:#FF2442">{{ clSummary().high }}</span></div>
-        <div class="info-item"><span class="k">留联系方式命中</span><span class="v" style="color:#00A86B">{{ clSummary().contact }}</span></div>
-      </div>
-
       <!-- O1-5 获客指引：怎么办 + 风险在哪（不做话术生成） -->
       <div class="guide-card" :class="{ closed: !guideOpen }">
         <div class="guide-head" @click="guideOpen = !guideOpen">
@@ -181,7 +166,7 @@ defineExpose({ refresh, count })
 
       <div style="display:flex;gap:6px;margin-bottom:10px">
         <button class="cl-tab" :class="{ on: clTab === 'all' }" @click="setClTab('all')">全部 {{ clients.length }}</button>
-        <button class="cl-tab" :class="{ on: clTab === 'high' }" @click="setClTab('high')">高意向 {{ clSummary().high }}</button>
+        <button class="cl-tab" :class="{ on: clTab === 'high' }" @click="setClTab('high')">高意向 {{ highCount }}</button>
       </div>
       <div class="cl-list">
         <div v-for="c in clients" :key="c.uid" class="cl-row">
