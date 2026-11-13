@@ -69,3 +69,6 @@ data/license.json
 data/license_private.pem
 build_resources/
 build-win.log
+
+# --- 临时工作区（诊断取证 / 一次性脚本，不入库） ---
+.tmp/
