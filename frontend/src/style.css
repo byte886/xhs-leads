@@ -193,7 +193,6 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .img-lightbox .lb-hint { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,.65); font-size: 12px; letter-spacing: .5px; }
 .pub-row { display: flex; gap: 12px; }
 .pub-row > * { flex: 1; }
-.check-note { background: #F7F8FA; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 12px; color: var(--ink-2); margin-bottom: 14px; display: flex; gap: 8px; align-items: center; }
 .video-bar { background: #FFF7EC; border: 1px solid #F3D9B8; border-radius: 8px; padding: 9px 12px; font-size: 12px; color: var(--ink-2); margin-bottom: 14px; display: flex; gap: 8px; align-items: flex-start; line-height: 1.5; }
 .pub-btns { display: flex; gap: 10px; padding-top: 6px; }
 .pub-btns button { padding: 11px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; }

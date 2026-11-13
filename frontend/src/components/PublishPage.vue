@@ -305,10 +305,6 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="2" stroke="#c7741e" /><path d="M10 9.5v5l4-2.5z" fill="#c7741e" /></svg>
           <b>原视频已下载</b>（{{ videoFile }}）——发布时在小红书发布页手动选择该本地视频文件上传即可（与正常发视频笔记一致，无需额外上传通道）。
         </div>
-        <div class="check-note">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#888" /><path d="M12 8v5M12 16.5v.01" stroke="#888" stroke-width="2" /></svg>
-          点上方按钮后，标题 / 正文 / 标签 / 图片会自动填进小红书发布页；「发布」这一步仍需你在小红书里手动点
-        </div>
         <div class="pub-btns">
           <button class="btn-pub" :disabled="filling" @click="fillXhs">{{ filling ? '正在填入…' : '填入小红书发布页' }}</button>
         </div>
