@@ -17,12 +17,13 @@ BlockedError —— 状态机只剩 ok 与 manual，采集前置不再有任何�
 - 审计：风控事件全部走 logger.audit
 """
 import json
-import pathlib
 import time
 
+from src import config
 from src import logger as xlog
 
-_STATE_FILE = pathlib.Path(__file__).resolve().parents[2] / "data" / "risk_state.json"
+# 随数据目录走（config.DATA_DIR）：打包态在应用支持目录，升级换包不丢、不写进安装目录。
+_STATE_FILE = config.DATA_DIR / "risk_state.json"
 
 DEFAULT_MANUAL_REASON = "需人工确认账号状态"
 

@@ -2895,8 +2895,8 @@ async def test_vision(req: LLMConfigReq):
 
 
 # ================= O1 账号人设（AI 生成口吻；v1.5 设置页三卡之一） =================
-# 存储：data/persona.json（本地明文，与 llm_config.json 同级信任域）。
-PERSONA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data" / "persona.json"
+# 存储：<数据目录>/persona.json（随 DATA_DIR 走，升级换包不丢，不写进安装目录）。
+PERSONA_PATH = DATA_DIR / "persona.json"
 
 
 class PersonaReq(BaseModel):

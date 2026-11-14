@@ -12,14 +12,15 @@ from pathlib import Path
 
 import httpx
 
+from . import config
 from .jsonio import read_json_safe, write_json
 
-# 与 server.py 同基准：~/Desktop/xhs-leads
-_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = _ROOT / "data" / "llm_config.json"
-# 按能力分文件：生成文章（text）沿用 llm_config.json 保持存量兼容；
-# 分析图片（vision）单独一份，两者模型完全不同，不能共用一份配置。
-VISION_CONFIG_PATH = _ROOT / "data" / "llm_vision_config.json"
+# 配置随数据目录走（config.DATA_DIR）：打包态在应用支持目录、与代码分离，
+# 升级换包不丢配置；不能用基于 __file__ 的路径，否则会写进安装目录、重装即丢。
+# 按能力分文件：生成文章（text）用 llm_config.json；分析图片（vision）单独一份，
+# 两者模型完全不同，不能共用一份配置。
+CONFIG_PATH = config.DATA_DIR / "llm_config.json"
+VISION_CONFIG_PATH = config.DATA_DIR / "llm_vision_config.json"
 def _path(profile: str = "text") -> Path:
     # 直接引用模块级常量（不缓存进字典），测试 monkeypatch 才能生效。
     return VISION_CONFIG_PATH if profile == "vision" else CONFIG_PATH
