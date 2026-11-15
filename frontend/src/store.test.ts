@@ -64,3 +64,16 @@ describe('refreshSysStatus', () => {
     expect(appState.sys.aiKey).toBe(true)
   })
 })
+
+describe('error toast 也会自动消失', () => {
+  beforeEach(() => { vi.useFakeTimers(); appState.toastMsg = '' })
+  afterEach(() => { vi.useRealTimers() })
+  it('错误提示 6s 后清空，避免长期压在底部挡住按钮', () => {
+    toast('AI 改写失败：未配置', 'error')
+    expect(appState.toastMsg).toContain('AI 改写失败')
+    vi.advanceTimersByTime(5900)
+    expect(appState.toastMsg).toContain('AI 改写失败')
+    vi.advanceTimersByTime(200)
+    expect(appState.toastMsg).toBe('')
+  })
+})

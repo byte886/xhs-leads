@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { coverProxy, toast } from '../store'
-import { apiClone, apiFillXhs, apiUploadImage, apiAiGenerate } from '../api'
+import { apiClone, apiFillXhs, apiUploadImage, apiAiGenerate, apiGetLLMConfig } from '../api'
 import AiWizard from './AiWizard.vue'
 import type { Note } from '../types'
 import { isLoginAbnormal } from '../lib/auth'
@@ -16,6 +16,19 @@ const videoFile = ref('')  // 视频克隆：原视频本地路径（/videos/...
 const videoUrl = ref('')   // 原视频远端地址（仅展示用）
 const filling = ref(false)
 const loading = ref(false)
+// AI 改写前置门：未配置「生成文章」模型时按钮灰态并给原因，不靠点了再报错。
+// null = 尚未取到配置（此时不拦，避免慢请求误伤正常流程）。
+const aiReady = ref<boolean | null>(null)
+const AI_NOT_READY_HINT = '未配置 AI 模型：请到「设置 → AI → 生成文章」填写 API Key / Base URL / 模型'
+
+onMounted(async () => {
+  try {
+    const cfg = await apiGetLLMConfig()
+    aiReady.value = !!cfg.configured
+  } catch {
+    aiReady.value = false
+  }
+})
 
 // ---- 图片去重（URL 主路径去重）：克隆载荷 / 追加图片均经此过滤 ----
 // 重复来源：克隆提取时封面与正文同图、CDN 同图不同签名 query / 处理参数变体（!nd_dft 等）。
@@ -188,9 +201,18 @@ const rewriting = ref(false)
 
 /** AI 改写：按当前标题与正文（来自原笔记）重写一版标题 + 正文 */
 async function aiRewrite() {
+  if (aiReady.value === false) { toast(AI_NOT_READY_HINT, 'error'); return }
   if (!body.value.trim()) { toast('正文为空，没有可改写的内容', 'error'); return }
   rewriting.value = true
   try {
+    // 若进页面时配置还没读到（null），点的时候补一次，避免误拦
+    if (aiReady.value === null) {
+      try {
+        const cfg = await apiGetLLMConfig()
+        aiReady.value = !!cfg.configured
+      } catch { aiReady.value = false }
+      if (aiReady.value === false) { toast(AI_NOT_READY_HINT, 'error'); return }
+    }
     const payload = { title: title.value, desc: body.value, keyword: aiKeyword.value }
     const [t, b] = await Promise.all([
       apiAiGenerate('title_rewrite', payload),
@@ -250,7 +272,7 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
         </div>
         <div class="pub-field">
           <label>正文 <span class="limit">{{ bCount }}/1000</span>
-            <button class="ai-rw" :disabled="rewriting" @click="aiRewrite">{{ rewriting ? '改写中…' : 'AI 改写' }}</button>
+            <button class="ai-rw" :disabled="rewriting || aiReady === false" :title="aiReady === false ? AI_NOT_READY_HINT : ''" @click="aiRewrite">{{ rewriting ? '改写中…' : 'AI 改写' }}</button>
           </label>
           <textarea v-model="body" rows="12" maxlength="1000" style="width:100%;min-height:260px;resize:vertical;line-height:1.6"></textarea>
         </div>

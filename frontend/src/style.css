@@ -243,6 +243,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
   position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
   background: #111; color: #fff; padding: 10px 20px; border-radius: 99px;
   font-size: 13px; z-index: 99;
+  /* 提示只给眼睛看，不能挡住下面真正要点的按钮（弹层底部操作条就在这一带） */
+  pointer-events: none; max-width: min(560px, calc(100vw - 48px));
 }
 .toast.error { background: #c0392b; }
 

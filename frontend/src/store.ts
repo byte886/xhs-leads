@@ -66,13 +66,14 @@ export const appState = reactive({
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(() => appState.params, (p) => saveParams(p), { deep: true })
+/** 错误提示留久一点（6s）方便看清，但同样自动消失：
+ *  留着不走的红色提示会一直压在页面底部、挡住下面的按钮。 */
+const TOAST_MS = { ok: 2400, error: 6000 }
 export function toast(msg: string, type: 'ok' | 'error' = 'ok') {
   appState.toastMsg = msg
   appState.toastType = type
   if (toastTimer) clearTimeout(toastTimer)
-  if (type === 'ok') {
-    toastTimer = setTimeout(() => { appState.toastMsg = '' }, 2400)
-  }
+  toastTimer = setTimeout(() => { appState.toastMsg = '' }, TOAST_MS[type])
 }
 
 export function setStage(s: Stage) {
