@@ -21,9 +21,12 @@ import asyncio
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.request
 import json as _json_mod
+
+from typing import Callable
 
 # 局部 JS 已全部上提至 src/injections.py（单一事实源，防「悬空引用」类历史 bug 重现）。
 from src import injections  # noqa: E402
@@ -234,7 +237,6 @@ async def _create_collect_page(
     ② 走离屏创建（窗口先出现在屏幕外，由调用方校准到目标位置），
     避免 `--new-window` 沿用它记住的旧位置、先把窗口叠在壳窗上。
     """
-    from src import engine_pool  # noqa: PLC0415
     # ① 首选：内置扩展用 chrome.windows.create 原子化建窗（位置/分组/导航一步到位）。
     page = await _create_window_via_extension(ctx, shell, url=url, bounds=bounds)
     if page is not None:
@@ -388,7 +390,6 @@ class WindowCoordinator:
     - guard（login_guard）与 engine_pool.cleanup_tabs 是**读取方**：shell()/collect_win()
       判活取引用，不再各自遍历 ctx.pages 找窗口（窗口竞态/震荡的历史根源）；
     - 引用失效：page 关闭后判活返回 None，由 keeper 按需重建/重新登记；
-    - 命令式方法：navigate_collect_win。
     """
 
     def __init__(self):
@@ -637,14 +638,6 @@ class WindowCoordinator:
                 log.warning(f"崩溃恢复：关闭 {n} 个残留窗口，仅保留主窗口")
         except Exception:  # noqa: BLE001（引擎已死/重连中：兜底轮询接管）
             pass
-
-    # ---------------- 命令式方法 ----------------
-    async def navigate_collect_win(self, url: str, timeout: int = 8000) -> None:
-        """采集窗 导航到指定 URL（引用失效时静默跳过——keeper 下轮重建后再管）。"""
-        t2 = self.collect_win()
-        if t2 is None:
-            return
-        await t2.goto(url, wait_until="domcontentloaded", timeout=timeout)
 
 
 _COORD: WindowCoordinator | None = None
@@ -1425,7 +1418,7 @@ async def _keeper_rebuild_shell(ctx, base, coord, engine_pool):
         page = await ctx.new_page()
         try:
             await page.goto(base, wait_until="domcontentloaded", timeout=8000)
-        except Exception as e:  # noqa: BLE001（goto 失败：关闭空页，交由外层/兜底处理）
+        except Exception:  # noqa: BLE001（goto 失败：关闭空页，交由外层/兜底处理）
             try:
                 await page.close()
             except Exception:  # noqa: BLE001

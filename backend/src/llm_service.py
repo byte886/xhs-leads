@@ -6,7 +6,6 @@
 - 未配置时 require_llm() 抛 ValueError → 上层转 HTTP 400（前端 AI 按钮灰态+提示）
 - 调用走 OpenAI 兼容 chat/completions（httpx 直连，不引 openai SDK）
 """
-import json
 import time
 from pathlib import Path
 

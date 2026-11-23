@@ -10,16 +10,12 @@
 - headless 登录判定（无窗口）保留独立逻辑，不占用账号引擎。
 """
 import asyncio
-import json
 import os
-import pathlib
 import random
 import re
-import subprocess
-import sys
 import time
 
-from src import config, engine_pool, injections, logger as xlog, risk
+from src import config, injections, logger as xlog, risk
 from src.cdp_timeouts import (CdpTimeoutError, CDP_DRAIN, CDP_EVAL, CDP_NAV,
                               CDP_PREP, CDP_QUICK, cdp_call)
 from src.engine_pool import pool

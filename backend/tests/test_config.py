@@ -26,29 +26,12 @@ def test_home_relative_empty():
     assert config.home_relative("") == ""
 
 
-def test_expand_none():
-    assert config.expand(None) == ""
-
-
-def test_expand_tilde():
-    assert config.expand("~/x") == os.path.expanduser("~/x")
-
-
 # ---------------------------------------------------------------- config.json merge
 
 def test_get_config_defaults_only(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "none.json")
     cfg = config.get_config()
     assert cfg["engine_port"] == 9223 and cfg["front_port"] == 8791
-
-
-def test_set_config_roundtrip(tmp_path, monkeypatch):
-    f = tmp_path / "c.json"
-    monkeypatch.setattr(config, "CONFIG_FILE", f)
-    cfg = config.set_config("front_port", 9001)
-    assert cfg["front_port"] == 9001
-    # 持久化：重新读回
-    assert config.get_config()["front_port"] == 9001
 
 
 # ---------------------------------------------------------------- port policy
@@ -100,12 +83,6 @@ def test_engine_port_bad_value_falls_back(monkeypatch, tmp_path):
 def test_mode_dev(monkeypatch):
     monkeypatch.setattr(config, "_MODE_ENV", "dev")
     assert config.is_dev() is True
-    assert config.is_prod() is False
-
-
-def test_mode_prod(monkeypatch):
-    monkeypatch.setattr(config, "_MODE_ENV", "prod")
-    assert config.is_prod() is True
 
 
 # ------------------------------------------------ accounts 系列

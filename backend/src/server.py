@@ -28,12 +28,11 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 # ---- 统一日志（审计账本） ----
 from src import logger as _log
 from src import save_dialog as _save_dialog  # 原生「另存为」面板（导出统一走它）
-from src import shell_window as _shell_window
 
 log = _log.get("server")
 
@@ -59,7 +58,6 @@ from src.jsonio import read_json_safe, write_json  # noqa: E402
 from src.browser_client import BrowserLoginRequiredError
 from src.collect_pipeline import (  # noqa: E402
     get_feed_detail,
-    get_note_detail_by_url,
     get_user_profile,
     search_via_browser,
     set_rhythm,
@@ -67,7 +65,6 @@ from src.collect_pipeline import (  # noqa: E402
 from src import browser_client  # noqa: E402（快速档 _enrich_notes 直连详情/主页）
 from src import injections
 from src import config, risk  # noqa: E402（架构改造 P1：配置中心 + 每账号风控）
-from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src import license as lic  # noqa: E402（授权薄层：free 恒放行，业务入口统一过闸）
 
 app = FastAPI(title="XHS Leads · 小红书获客助手")
@@ -379,7 +376,6 @@ async def _engine_login_state(eng, timeout: float = 15.0) -> tuple[bool, bool, b
       保持，下次动作 context() 先恢复管理，无法恢复才 force_release 重建）。
     """
     async def _impl() -> tuple[bool, bool, bool, bool]:
-        from src import browser_client
 
         mem = await eng.read_cookies()
         has_ws = any(c.get("name") == "web_session" for c in mem)
@@ -591,7 +587,6 @@ async def login_begin(req: LoginBeginReq | None = None):
     移除原「已登录短路」（已登录返回 already_logged_in=True）——用户约定
     设置页「重新登录」应总能触发（换账号/刷新会话），不得被当前登录态拦截。
     """
-    cache = _LOGIN_CACHE["data"]
     force = bool(req and req.force)
     _LOGIN_GATE["pending"] = True
     _LOGIN_GATE["force"] = force
@@ -857,7 +852,6 @@ def _require_login_fast(account_id: str = "default") -> None:
 # 采集与展示分离：采集是后台异步任务（滚动平台搜索页逐批提取，支持中途停止），
 # 采满目标数 / 平台不再增长 / 用户停止 之后统一落库并评分排序，前端再展示。
 # 这样避免"边采边排"导致的列表跳变（先采集后排序，样本固定排序才稳定）。
-import asyncio
 import uuid
 
 _COLLECT_TASKS: dict = {}
@@ -1011,40 +1005,6 @@ def _persist_notes(keyword: str, notes: list, account_id: str = "default") -> tu
     ).fetchall()
     total = con.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
     return saved, total, [dict(r) for r in top]
-
-
-async def _enrich_notes(notes: list, fast: bool = False, account_id: str = "default",
-                        on_progress=None, should_stop=None) -> list:
-    """详情补全：互动数据（赞/藏/评/转/发布时间/作者 uid）+ 作者粉丝数（按 uid 缓存）。
-
-    搜索卡片只有点赞粗值；详情页 SSR 提供全量互动与作者 uid，作者主页提供粉丝数
-    ——三者对齐后评分才不失真（低粉爆文判断的前提）。
-
-    fast=True 快速档：直连浏览器同页连续导航（无拟人 sleep、渲染等待缩短），20 条约
-    5 分钟 → 2 分钟；fast=False 拟人串行（默认，安全优先，保持真人浏览节奏）。
-    account_id：使用哪个账号引擎补全详情（默认 default）。
-    on_progress(n)：每条补全完成后回调（n=已完成条数），供任务进度/状态条实时反馈
-    should_stop()：补全阶段停止钩子——用户点「停止」时补全循环也立即收尾，
-    不再把已搜到的笔记全部补完才停（原实现只停搜索阶段，补全阶段点停止无效）。
-    """
-    cache: dict = {}
-    done = 0
-    for n in notes:
-        if should_stop and should_stop():
-            break
-        try:
-            if fast:
-                await _enrich_fast(n, cache, account_id)
-            else:
-                n = await get_feed_detail(n, account_id)
-                n = await get_user_profile(n, cache, account_id)
-        except Exception:  # noqa: BLE001 单条失败不影响整体
-            continue
-        finally:
-            done += 1
-            if on_progress:
-                on_progress(done)
-    return notes
 
 
 async def _enrich_fast(n: dict, cache: dict, account_id: str = "default") -> None:
@@ -1761,7 +1721,6 @@ async def collect_stop(req: CollectStopReq):
     account_id = st.get("account_id", "default")
     asyncio.create_task(_recover_collect_window(account_id))
     return {"ok": True, "note": "停止已请求，正在收尾…", "account_id": account_id}
-    return {"ok": False, "note": "任务不存在或已结束"}
 
 
 # ================= 笔记列表 =================
@@ -2734,7 +2693,6 @@ def publish(req: PublishReq):
     # ⑧ 执行发布：Docker 已退役（2026-10-26 迁移：采集/登录迁到外部 Chrome）。
     #    发布永远用户手动（产品红线）：后端只做校验与载荷准备，实际发布由用户在
     #    Chrome 中手动完成（避免自动化发布触发平台风控）。载荷已随请求完整传给前端。
-    import urllib.parse
     xhs_write_url = "https://www.xiaohongshu.com/write"
     ok = False
     text = "发布执行已迁移：请在 Chrome 小红书发布页手动发布（标题/正文/图片已就绪）。" \

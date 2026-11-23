@@ -18,7 +18,6 @@ NameError 被 try 吞掉静默降级）。本模块统一登记所有注入来�
 集合防重复；add_init_script 类（stealth）因注入机制为
 「每次新文档自动执行」，不走页面标记助手，但其 JS 来源同样在本注册表登记。
 """
-import asyncio
 
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 

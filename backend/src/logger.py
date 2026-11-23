@@ -23,7 +23,6 @@ import logging.handlers
 import pathlib
 import re
 import sys
-import time
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -188,15 +187,3 @@ def audit(account_id: str = "default", action: str = "", ok: bool = True,
     if cost_ms is not None:
         entry["cost_ms"] = int(cost_ms)
     _audit().info(json.dumps(entry, ensure_ascii=False))
-
-
-class Timer:
-    """耗时测量（审计用）：with xlog.Timer() as t: ... → t.ms。"""
-
-    def __enter__(self):
-        self._t0 = time.monotonic()
-        return self
-
-    def __exit__(self, *exc):
-        self.ms = int((time.monotonic() - self._t0) * 1000)
-        return False

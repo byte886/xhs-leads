@@ -124,7 +124,6 @@ async def close_account(account: str = "default") -> dict:
     default 拒绝关闭：它承载 APP 壳窗口与采集窗，关掉 = launcher 判定用户
     退出应用（与 set_window 的同一个根因）。
     """
-    from src import config
     from src.server import _COLLECT_TASKS
 
     if account == "default":

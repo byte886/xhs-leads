@@ -113,7 +113,6 @@ def _verify_activation_code(code: str) -> tuple[bool, str]:
 
     blob = base64url(JSON{"m": machine_code, "e": exp_ts})，sig = RSA-SHA256(blob)。
     """
-    import base64
 
     parsed = _parse_activation_code(code)
     if parsed is None:

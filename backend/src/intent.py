@@ -73,18 +73,3 @@ def grade_batch(rows: list[dict]) -> list[dict]:
     for r in rows:
         r.update(grade_comment(r.get("comment", "")))
     return rows
-
-
-# O1-4 聚合：留联系方式词（HIGH_WORDS 中联系方式子集，命中即"留联系方式"）
-CONTACT_WORDS: tuple[str, ...] = (
-    "vx", "v信", "卫星", "weixin", "wechat", "微信", "薇信", "私我", "私聊我",
-    "滴滴", "私信", "si我", "si 我", "手机", "电话", "+86",
-)
-
-
-def is_contact(comment: str, matched_word: str = "") -> bool:
-    """是否留了联系方式（评论原文或命中词含联系方式词）。"""
-    if matched_word and matched_word in CONTACT_WORDS:
-        return True
-    text = (comment or "").lower()
-    return any(w in text for w in CONTACT_WORDS)

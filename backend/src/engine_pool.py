@@ -16,7 +16,6 @@
 import asyncio
 import json
 import os
-import pathlib
 import re
 import subprocess
 import sys
@@ -24,7 +23,7 @@ import time
 
 from playwright.async_api import async_playwright
 
-from src import config, injections, logger as xlog, risk, window_layout
+from src import config, injections, logger as xlog, window_layout
 from src.cdp_timeouts import CDP_QUICK, cdp_call
 from src.engine_types import builtin_cft_candidates, builtin_extension_dir
 
@@ -308,18 +307,6 @@ def _normalize_exit_type(default_dir: str) -> None:
         pass
 
 
-def _collect_win_executable() -> str | None:
-    """采集调试窗命令行路由用的内置 CFT 路径；拿不到就 None（改由 CDP
-    `Target.createTarget(newWindow)` 建标准窗口，仍不会退成无地址栏 popup）。
-
-    右窗要标准浏览器外观（地址栏/标签栏），命令行 `--new-window` 是最稳的一条
-    路由，因此建窗时尽量带上可执行路径。
-    """
-    try:
-        return builtin_cft_candidates()
-    except Exception:  # noqa: BLE001（打包/权限异常不该阻断建窗）
-        return None
-
 
 def _clear_session_restore(user_data_dir: str) -> None:
     """启动前清理 Chrome 会话恢复。
@@ -425,19 +412,6 @@ class AccountEngine:
             return True
         except Exception:  # noqa: BLE001（探测超时/失败：判定无法恢复）
             return False
-
-    async def force_release(self) -> None:
-        """CDP 假死强制释放（对外入口）：无条件关闭当前 context 并置空，下次 context() 重建。
-
-        （用户拍板分级）：假死 → 保持（mark_fake_dead）→ 新动作先恢复管理
-        （_try_recover_cdp）→ 无法恢复才释放（本方法）。login_status 超时只标记保持，
-        由下次 context() 先尝试恢复，失败才走 _release_locked。
-        假死时 close() 挂起/失败（CDP 无响应）——5s 超时，失败后强杀残留进程
-        （此前 close 异常忽略 → 实例残留，每轮假死积累实例+页面，renderer 膨胀内存消干）。
-        """
-        async with self._lock:
-            self._fake_dead = False
-            await self._release_locked(reason="假死无法恢复")
 
     async def _release_locked(self, reason: str) -> None:
         """释放当前 context（调用方须已持有 _lock）。
@@ -863,17 +837,6 @@ class AccountEngine:
 
     # ---------------- 页面管理 ----------------
 
-    def task_page_snapshot(self):
-        """返回该账号缓存的【任务 tab】（未关闭时）；供设置开关联动 采集窗 显隐。"""
-        tp = self._task_page
-        if tp is not None:
-            try:
-                if not tp.is_closed():
-                    return tp
-            except Exception:  # noqa: BLE001
-                pass
-        return None
-
     async def _reusable_collect_page(self, ctx):
         """可复用的采集窗页（同 context、未关闭），否则 None。
 
@@ -1035,27 +998,6 @@ class AccountEngine:
         except Exception:  # noqa: BLE001（判定失败保守不开窗）
             return True
 
-    async def _open_task_page_window(self, ctx):
-        """登录有效时开独立采集调试窗；失败返回 None（退化由调用方处理）。"""
-        try:
-            from src import shell_window  # noqa: PLC0415（规避模块级循环依赖）
-
-            # 原实现把壳窗窗口 bounds 设到右半屏(l2)，随后 open_collect_window 又把
-            # 采集窗弹到右半——两窗重叠，开始采集瞬间采集窗(小红书页)覆盖壳窗，
-            # 用户观感「主窗瞬间跳小红书再切回」（主窗 URL 全程未变，纯窗口覆盖）。
-            # 壳窗位置由 keeper 守护（左半），采集窗位置由 open_collect_window 内部校准。
-            src_page = ctx.pages[0]
-            page = await shell_window.open_collect_window(
-                ctx, src_page, url="https://www.xiaohongshu.com/explore",
-                user_data_dir=self.user_data_dir,
-                executable=_collect_win_executable(),
-            )
-            self._task_page = page
-            return page
-        except Exception as e:  # noqa: BLE001（窗口创建失败：退化为前台新页）
-            log.warning("独立采集窗口创建失败，退化为前台新页: %r", e)
-            return None
-
     async def close_page_safe(self, page):
         """任务收尾：任务 tab【保留不关闭】（浏览器内留着，供下次任务复用导航 /
         登录墙页供用户扫码），仅兜底保证至少留一个空白页（防整窗退出反复开关）。
@@ -1184,6 +1126,7 @@ class EnginePool:
             self._visible_order.remove(account_id)
 
     def visible_order(self) -> list[str]:
+        """当前可见窗口顺序（旧→新；单测与诊断读）。"""
         return list(self._visible_order)
 
     async def enforce_visible_cap(self, account_id: str,

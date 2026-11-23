@@ -162,17 +162,6 @@ async def get_feed_detail(note: dict, account_id: str = "default") -> dict:
     return note
 
 
-async def get_note_detail_by_url(url: str, account_id: str = "default") -> dict:
-    """数据回流：按完整笔记链接抓取详情（已发布笔记）。返回提取原始 dict，未 merge。"""
-    from src import browser_client
-
-    try:
-        d = await browser_client.note_url(url, account_id=account_id)
-    except Exception:  # noqa: BLE001
-        return {}
-    time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
-    return d or {}
-
 
 def _merge_detail_core(note: dict, d: dict) -> None:
     """标题/正文/类型 + 无标题兜底 + 作者 uid/昵称 + 详情图片。"""

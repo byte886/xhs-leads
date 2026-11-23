@@ -15,14 +15,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-# 默认权重（可配置项，后续放 settings）
-DEFAULT_WEIGHTS = {
-    "like_fan_ratio": 0.40,
-    "low_fan": 0.25,
-    "interaction_health": 0.20,
-    "freshness": 0.15,
-}
-
 # 默认阈值（来自生财实战帖，可按行业类目改数值）
 DEFAULT_THRESHOLDS = {
     "low_like": 300,          # 点赞 ≤300 → 低赞
@@ -161,7 +153,6 @@ def _pick_tag(liked: int, fan_ratio: float, fans: int, t: dict) -> str:
 
 def score_note(
     note: dict,
-    weights: dict | None = None,
     thresholds: dict | None = None,
     now: datetime | None = None,
 ) -> dict:
@@ -172,7 +163,6 @@ def score_note(
       fans_count      (int/str，来自 user_profile)
       publish_time    (int 秒级时间戳，来自 get_feed_detail)
     """
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
     t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
 
     liked = _to_int(note.get("liked_count"))

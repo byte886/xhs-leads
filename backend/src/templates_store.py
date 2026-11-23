@@ -140,10 +140,6 @@ def list_text() -> list[dict]:
     return load()["text"]
 
 
-def list_image() -> list[dict]:
-    return load()["image"]
-
-
 # ---------- 写入 ----------
 def save_text(item: dict) -> dict:
     """按 id 新增或更新文字模板；name/prompt 必填，否则抛 ValueError。"""

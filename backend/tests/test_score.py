@@ -3,7 +3,6 @@ import pytest
 
 from src.score import (
     DEFAULT_THRESHOLDS,
-    DEFAULT_WEIGHTS,
     TAGS,
     fans_for_db,
     fans_known_of,
@@ -110,10 +109,9 @@ class TestDimensions:
         # now 参数与 monkeypatch 并存时以传入 now 为准
         assert info["dimensions"]["freshness"] >= 0.0
 
-    def test_custom_weights(self):
+    def test_custom_thresholds(self):
         info = score_note(
             _note(liked_count=100, fans_count=50),
-            weights={**DEFAULT_WEIGHTS, "low_fan": 0.5},
             thresholds={**DEFAULT_THRESHOLDS, "low_like": 50},
         )
         # 点赞 100>50 → 非 low_like；粉丝 50<500 → 低粉

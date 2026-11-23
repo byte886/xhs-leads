@@ -74,12 +74,6 @@ def home_relative(p: str) -> str:
     return p
 
 
-def expand(p: str | None) -> str:
-    """~ 相对路径 → 绝对路径（空值返回空串）。"""
-    if not p:
-        return ""
-    return os.path.expanduser(p)
-
 
 def accounts_dir() -> pathlib.Path:
     """账号 profile 统一根：<数据目录>/accounts（跨平台随 DATA_DIR 走）。"""
@@ -141,13 +135,6 @@ def get_config() -> dict:
     cfg.update(_read_json(CONFIG_FILE))
     return cfg
 
-
-def set_config(key: str, value) -> dict:
-    """写单个配置项（持久化 config.json），返回更新后的合并配置。"""
-    cfg = _read_json(CONFIG_FILE)
-    cfg[key] = value
-    _write_json(CONFIG_FILE, cfg)
-    return get_config()
 
 
 def find_free_port(preferred: int, lo: int = 8800, hi: int = 8899) -> int:
@@ -289,10 +276,6 @@ def is_dev() -> bool:
     """是否开发/测试态（源码直跑，方便调试）。"""
     return mode() == "dev"
 
-
-def is_prod() -> bool:
-    """是否生产/交付态（打包进壳，静态产物）。"""
-    return mode() == "prod"
 
 
 def frontend_base_url() -> str:
