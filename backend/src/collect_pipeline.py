@@ -165,6 +165,13 @@ async def get_feed_detail(note: dict, account_id: str = "default") -> dict:
 
 def _merge_detail_core(note: dict, d: dict) -> None:
     """标题/正文/类型 + 无标题兜底 + 作者 uid/昵称 + 详情图片。"""
+    _merge_detail_text(note, d)
+    _merge_detail_author(note, d)
+    _merge_detail_media(note, d)
+
+
+def _merge_detail_text(note: dict, d: dict) -> None:
+    """标题/正文/类型（详情 SSR 优先），无标题时取正文首段前 20 字兜底。"""
     if d.get("title"):
         # 详情 SSR 里标题带 HTML 实体（如「桃花玉&amp;和田玉」），入库前反转义
         note["title"] = html.unescape(d["title"])
@@ -174,24 +181,26 @@ def _merge_detail_core(note: dict, d: dict) -> None:
         # 详情页视频判断更准：直接覆盖 type（搜索卡片 play-icon 可能漏判）。
         # 内存对象全链路只用 type 一个字段；DB 列名 note_type 由 _rank_and_insert 映射。
         note["type"] = d["type"]
-    # 无标题笔记兜底：取正文去掉话题标记后的首段前 20 字
     if not note.get("title") and note.get("desc"):
         dd = note["desc"].strip().lstrip("#").strip()
         dd = re.sub(r"\[.*?\]", "", dd).strip()
         note["title"] = dd[:20]
-    # 作者 uid 补全（搜索页 user_id 恒 None → 详情页 SSR 提供）：
-    # 有了 uid，get_user_profile 才能拿到粉丝数（低粉判断的前提）
+
+
+def _merge_detail_author(note: dict, d: dict) -> None:
+    """作者 uid/昵称/头像（搜索页 user_id 恒 None → 详情页 SSR 提供）。"""
     if d.get("user_id"):
         note["user_id"] = d["user_id"]
     if d.get("author_nick"):
         note["nickname"] = html.unescape(d["author_nick"])
     if d.get("author_avatar"):
         note["avatar"] = d["author_avatar"]
+
+
+def _merge_detail_media(note: dict, d: dict) -> None:
+    """详情图片、视频原地址、实况图张数与原片地址（图文笔记视频字段恒空）。"""
     note["detail_imgs"] = d.get("imgs", [])
-    # 视频原地址（视频克隆下载用；图文笔记恒空）
     note["video_url"] = d.get("video_url", "")
-    # 实况图（动图，页面上的 LIVE 角标）：类型仍是图文，单独记张数与原片地址，
-    # 供卡片标记「动图」、图片包/克隆附带那几段 3 秒 mp4。
     note["live_photo"] = int(d.get("live_photo") or 0)
     note["live_videos"] = d.get("live_videos") or []
 

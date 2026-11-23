@@ -2149,29 +2149,6 @@ class ClientsReq(BaseModel):
     limit: int = 150          # 单次条数上限（0 = 用后端默认）
 
 
-def _is_noise_comment(text: str) -> bool:
-    """关注动作记录（「昵称关注」/「想要关注」）不是评论内容，不入客户线索。"""
-    t = (text or "").strip()
-    return bool(t) and len(t) <= 24 and t.endswith("关注")
-
-
-def _dedupe_clients_by_uid(users: list) -> list:
-    """把评论记录按 uid 收敛成「人」：一人可发多条评论，库里只存一行。
-
-    实测口径差：平台声明 488 条评论 → 浏览器抓到 465 条评论记录 → 实际 376 人。
-    若按评论条数返回，界面「本篇线索」和意向分布都会把同一个人算成很多人。
-    同一人保留意向最高的那条（high > upper > middle > low）。
-    """
-    order = {"high": 0, "upper": 1, "middle": 2, "low": 3}
-    by_uid: dict = {}
-    for u in users:
-        k = u.get("uid") or ""
-        cur = by_uid.get(k)
-        if cur is None or order.get(u.get("intent", "low"), 9) < order.get(cur.get("intent", "low"), 9):
-            by_uid[k] = u
-    return list(by_uid.values())
-
-
 @app.post("/api/clients")
 async def collect_clients(req: ClientsReq):
     """采集笔记评论区互动用户名单（O1-3）：真实浏览器打开原作品页提取评论用户（含属地/时间），
@@ -2182,47 +2159,12 @@ async def collect_clients(req: ClientsReq):
     """
     await _require_login()
     from src import browser_client  # 提前导入：except 分支要用 ClientCollectError
+    from src import clients_flow
+    plan = _clients_plan(req)
     try:
-        # xsec_token / keyword 兜底：调用方未传 token 时从本地库补查（explore/{id} 直链会 404，
-        # 必须带 token）；keyword 供无活动搜索页时按原关键词重开搜索页。
-        token = req.xsec_token
-        keyword = ""
-        author_uid = ""
-        declared = 0
-        filters: dict = {}
-        con = _db()
-        row = con.execute(
-            "SELECT xsec_token, keyword, user_id, comment_count FROM notes WHERE feed_id=?",
-            (req.feed_id,),
-        ).fetchone()
-        if row:
-            token = token or (row[0] or "")
-            keyword = row[1] or ""
-            author_uid = row[2] or ""
-            declared = int(row[3] or 0)
-        ctx = con.execute("SELECT params FROM collect_ctx WHERE keyword=?", (keyword,)).fetchone()
-        con.close()
-        if ctx and ctx[0]:
-            try:
-                filters = json.loads(ctx[0]) or {}
-            except ValueError:
-                filters = {}
-        known: list = []
-        if req.resume:
-            # 续采时把库里这篇已采过的用户带下去：万一上一页已经不在了，后端会重开本篇、
-            # 快进跳过已采深度再接着采（否则会从头重复采、或直接报"无法接着采"）。
-            con2 = _db()
-            known = [{"uid": r[0], "comment": r[1]} for r in con2.execute(
-                "SELECT uid, comment FROM clients WHERE feed_id=?", (req.feed_id,)).fetchall()]
-            con2.close()
-        # 单批条数可由界面调（默认 150）：太小要多点几次，太大容易超时/踩风控，掐在 20~500
-        limit = max(20, min(500, int(req.limit or 150)))
         got = await browser_client.clients(
-            req.feed_id, token, keyword=keyword, filters=filters,
-            limit=limit, resume=req.resume, known=known)
-        users = got.get("users") or []
-        capped = bool(got.get("capped"))
-        added = int(got.get("added", len(users)))
+            req.feed_id, plan["token"], keyword=plan["keyword"], filters=plan["filters"],
+            limit=plan["limit"], resume=req.resume, known=plan["known"])
     except HTTPException as e:
         # 风控风险页：已采部分保留（历史入库记录不动），明确提示停用窗口，不自动重试
         raise HTTPException(429, "触发平台风险拦截，建议停用 ≥24h，人工确认后再恢复采集") from e
@@ -2234,72 +2176,25 @@ async def collect_clients(req: ClientsReq):
         raise HTTPException(409, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"浏览器采集失败：{e}") from e
-    from src.intent import grade_batch
-    # 作者本人的评论不是线索：笔记作者会在自己评论区回复、顶帖，算进来会虚增客户数。
-    # 作者 uid 来自 notes.user_id（采集时入库的作者主页 uid）。
-    users = [
-        u for u in users
-        if not _is_noise_comment(u.get("comment", ""))
-        and (u.get("uid") or "") != author_uid
-    ]
-    grade_batch(users)
     con = _db()
-    ts = datetime.datetime.now().isoformat(timespec="seconds")
-    added = 0
-    for u in users:
-        cur = con.execute(
-            "INSERT INTO clients "
-            "(uid, feed_id, nickname, comment, profile, created_at, intent, matched_word, ip_location, comment_time) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(uid, feed_id, comment) DO UPDATE SET "
-            "intent=excluded.intent, matched_word=excluded.matched_word, "
-            "ip_location=excluded.ip_location, comment_time=excluded.comment_time",
-            (
-                u.get("uid", ""), req.feed_id, u.get("nickname", ""), u.get("comment", ""),
-                u.get("profile", ""), ts, u.get("intent", "low"), u.get("matched_word", ""),
-                u.get("ip_location", ""), u.get("comment_time", ""),
-            ),
-        )
-        added += cur.rowcount
-    con.commit()
-    from src.intent import INTENT_LABEL
-    # 存储不压：同一人的多条评论都入库（主键含 comment），明细 users 也全量下发。
-    # 人数口径单独算：people 按 uid 去重，意向分布也按人去重（同一人保留最高档），
-    # 否则「5 个人发了 40 条」会把界面撑成一个很虚的高意向数。
-    people_users = _dedupe_clients_by_uid(users)
-    summary = {}
-    for u in people_users:
-        label = INTENT_LABEL.get(u.get("intent"), "低意向")
-        summary[label] = summary.get(label, 0) + 1
-    total = len(users)
-    # 采全没采全：平台声明的评论数（notes.comment_count）是标尺。
-    # 声明数里含已删评论与被折叠回复，正常覆盖 95% 左右（实测 95.3% / 95.9%）；
-    # 低于 90% 基本是采集中途被打断（实测用户抢滚轮时只到 24%），
-    # 界面必须提示"可能没采全"，不能静默显示一个偏小的数。
-    # 到单批上限是"主动分段"，不是漏采：此时不可再打 low_coverage（否则界面同时说
-    # 「已到上限还能继续」和「只采到 163/2734，可能被打断」，自相矛盾）
-    low_coverage = bool(not capped and declared >= 30 and total > 0 and total / declared < 0.9)
-    remain = max(0, declared - total)
-    # 续采没拿到一个新面孔、而平台还显示有剩余：多半是这一篇被平台限了频（同一篇采得太密），
-    # 必须如实说，不能把"0 条"当成功收尾（也不能显示成功提示骗用户）。
-    stalled = bool(not capped and added == 0 and remain > 0)
-    # 没到上限但平台还显示有剩余：本篇评论太多，平台一次只放到这里 → 仍然给「继续采集」
-    more = bool(not capped and remain > 0)
-    return {
-        "total": total,               # 评论条数（一人可多条）
-        "people": len(people_users),  # 去重人数（界面「本篇线索」用这个）
-        "declared": declared,         # 平台声明的评论数
-        "capped": capped,             # 到单次上限提前停（评论太多 → 分段采）
-        "limit": limit,               # 本批单次上限（界面据此说明"每批最多 N 条"）
-        "remain": remain,             # 还能继续采的估计条数（按平台声明数算）
-        "added": added,               # 本批新增条数（续采只算新面孔）
-        "stalled": stalled,           # 本批没新增但平台还有剩余 → 提示限频/稍后再试
-        "more": more,                 # 没到上限但平台还有剩余 → 也保留「继续采集下一批」
-        "low_coverage": low_coverage, # 明显低于声明数 → 提示可能被打断
-        "new": added,
-        "users": users,
-        "summary": summary,
-    }
+    try:
+        users, added = clients_flow.ingest(
+            con, req.feed_id, plan["author_uid"], got.get("users") or [],
+            datetime.datetime.now().isoformat(timespec="seconds"))
+    finally:
+        con.close()
+    return clients_flow.summarize(
+        users, plan["declared"], bool(got.get("capped")), plan["limit"], added)
+
+
+def _clients_plan(req: ClientsReq) -> dict:
+    """DB 读写留在这里，业务装配交给 clients_flow（纯函数、可单测）。"""
+    from src import clients_flow
+    con = _db()
+    try:
+        return clients_flow.build_plan(con, req.feed_id, req.xsec_token, req.resume, req.limit)
+    finally:
+        con.close()
 
 
 # ================= 客户库（P4 价值视图）：已采集互动用户按足迹聚合 =================

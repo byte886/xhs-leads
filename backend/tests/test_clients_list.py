@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend" / "src"))
 
-from src import server  # noqa: E402
+from src import clients_flow, server  # noqa: E402
 
 
 def _iso_db(tmp_path, monkeypatch):
@@ -102,7 +102,7 @@ def test_dedupe_clients_by_uid_keeps_highest_intent():
         {"uid": "u1", "intent": "high", "comment": "多少钱", "matched_word": "多少钱"},
         {"uid": "u2", "intent": "middle", "comment": "在哪买"},
     ]
-    out = server._dedupe_clients_by_uid(users)
+    out = clients_flow.dedupe_by_uid(users)
     assert len(out) == 2
     by = {u["uid"]: u for u in out}
     assert by["u1"]["intent"] == "high"
@@ -111,7 +111,7 @@ def test_dedupe_clients_by_uid_keeps_highest_intent():
 
 
 def test_dedupe_clients_by_uid_empty():
-    assert server._dedupe_clients_by_uid([]) == []
+    assert clients_flow.dedupe_by_uid([]) == []
 
 
 def test_collect_clients_excludes_author(tmp_path, monkeypatch):
