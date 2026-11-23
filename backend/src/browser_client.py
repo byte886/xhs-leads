@@ -1838,8 +1838,6 @@ async def sync_creator_stats(account_id: str = "default") -> list:
     return await _read_note_manager(creator)
 
 
-
-
 async def note_url(url: str, wait_ms: int = 5000, account_id: str = "default") -> dict:
     """按完整链接打开笔记页并提取详情（**唯一例外**：链接由用户本人提供，无页内入口可达）。"""
     page = await _load(url, wait_ms, account_id)
@@ -1885,7 +1883,8 @@ class _RiskLimited(RuntimeError):
 
 
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default",
-                  keyword: str = "", filters: dict | None = None) -> dict:
+                  keyword: str = "", filters: dict | None = None,
+                  limit: int = 0, budget: float = 0.0, resume: bool = False) -> dict:
     """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。
 
     点卡片与详情补全走同一条路径（真鼠标点可见卡片，平台才会补 xsec_token）。
@@ -1901,6 +1900,20 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     主路径：**在活动搜索页上用真鼠标点开那张卡片**（用户拍板：能点的就别拼 URL 直开，
     URL 只允许开 /login）。点开失败、且手里有 xsec_token 时才兜底直开一次。
     """
+    limit = int(limit or _COMMENT_LIMIT)
+    budget = float(budget or _COMMENT_BUDGET)
+    if resume:
+        sess = _COMMENT_SESSIONS.get(note_id)
+        if not sess or sess["page"].is_closed() or _page_position(sess["page"]) != "detail":
+            _COMMENT_SESSIONS.pop(note_id, None)
+            raise ClientCollectError("上一次的采集页已经离开原笔记，无法接着采。请重新采集这篇笔记。")
+        return await _drain_with_session(sess, limit, budget)
+
+    # 同一篇重新采集（非续采）：上一次到上限留下的详情页要先退回列表，否则点卡片落空
+    stale = _COMMENT_SESSIONS.pop(note_id, None)
+    if stale and not stale["page"].is_closed() and _page_position(stale["page"]) == "detail":
+        await _back_to_list(stale["page"])
+
     page = _active_page(account_id)
     if page is None and keyword:
         log.info("无活动搜索页，按关键词重开 note_id=%s kw=%s filters=%s", note_id, keyword, filters)
@@ -1923,7 +1936,8 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
                 direct = await _open_detail_page(note_id, xsec_token, account_id)
                 if direct is not None:
                     try:
-                        return await _drain_comments(direct)
+                        users, capped = await _drain_comments(direct, limit, budget)
+                        return _finish_session(note_id, direct, {}, users, capped)
                     except _RiskLimited:
                         await _risk_relogin(direct, account_id, note_id)
             log.info("评论卡片未命中 note_id=%s url=%s", note_id, _page_url_now(page))
@@ -1931,11 +1945,17 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
                 "这条笔记已不在当前搜索结果里（平台每次搜索结果会变化，尤其按「最新」排序）。"
                 "请重新采集一批笔记后再点「采集客户」。")
     await asyncio.sleep(4)
+    _ensure_detail_page(page)
     try:
-        _ensure_detail_page(page)
-        return await _drain_comments(page)
-    finally:
-        await _back_to_list(page)
+        users, capped = await _drain_comments(page, limit, budget)
+    except _RiskLimited:
+        await _risk_relogin(page, account_id, note_id)
+    if capped:
+        # 到上限不返回列表：留着这一页停在当前位置，用户点「继续采集」时接着往下滚
+        _COMMENT_SESSIONS[note_id] = {"page": page, "acc": _acc_map(users)}
+        return {"users": users, "capped": True, "added": len(users)}
+    await _back_to_list(page)
+    return {"users": users, "capped": False, "added": len(users)}
 
 
 def _ensure_detail_page(page) -> None:
@@ -1952,13 +1972,61 @@ def _ensure_detail_page(page) -> None:
 
 
 _COMMENT_MAX_ROUNDS = 70      # 滚动保险上限（防死循环），不是采集配额
+_COMMENT_LIMIT = 150          # 单次采集条数上限（评论多的笔记分段采，防超时/踩风控）
+_COMMENT_BUDGET = 90.0        # 单次采集时间预算（秒）：到点先停，界面提示还能继续采
+_COMMENT_SESSIONS: dict[str, dict] = {}   # note_id → {page, acc}：到上限后留着页继续采
 _COMMENT_IDLE_STOP = 4        # 连续 4 轮没有新批就判定到底
 _COMMENT_WHEEL_STEP = 850     # 每次滚轮位移≈一屏（真人一屏的量，不是一次跳到底）
 _COMMENT_WHEEL_GAP = (1.2, 1.8)   # 两次滚轮之间停顿（秒），带抖动
 _COMMENT_ROUND_GAP = (1.6, 2.4)   # 每轮之间停顿（秒），看内容的时间
 
 
-async def _drain_comments(page) -> list:
+def _acc_key(u: dict) -> str:
+    return str(u.get("uid", "")) + "|" + (u.get("comment") or "")[:24]
+
+
+def _acc_map(users: list) -> dict:
+    return {_acc_key(u): u for u in users or []}
+
+
+def _finish_session(note_id: str, page, acc: dict, users: list, capped: bool,
+                    start_len: int = 0) -> dict:
+    """统一收尾：到上限就存会话留页，否则清会话。added=本批新增（续采只算新面孔）。"""
+    if capped:
+        _COMMENT_SESSIONS[note_id] = {"page": page, "acc": acc or _acc_map(users)}
+    else:
+        _COMMENT_SESSIONS.pop(note_id, None)
+    return {"users": users, "capped": bool(capped), "added": max(0, len(users) - start_len)}
+
+
+async def _drain_with_session(sess: dict, limit: int, budget: float) -> dict:
+    """续采：沿用上次留在详情页的那一页，从当前位置接着滚，累积去重。"""
+    page = sess["page"]
+    acc = sess["acc"]
+    start_len = len(acc)
+    users, capped = await _drain_comments(page, limit, budget, acc=acc)
+    added = max(0, len(users) - start_len)
+    # 一个新面孔都没拿到（平台把这篇限频了）：页面留着，用户过几分钟点「继续」还能接上
+    keep = capped or added == 0
+    if not keep:
+        await _back_to_list(page)
+    return _finish_session_no_key(sess, page, users, capped, start_len, keep)
+
+
+def _finish_session_no_key(sess: dict, page, users: list, capped: bool,
+                           start_len: int = 0, keep: bool | None = None) -> dict:
+    keep = bool(capped) if keep is None else keep
+    if keep:
+        sess["page"] = page
+    else:
+        for k, v in list(_COMMENT_SESSIONS.items()):
+            if v is sess:
+                _COMMENT_SESSIONS.pop(k, None)
+    return {"users": users, "capped": bool(capped), "added": max(0, len(users) - start_len)}
+
+
+async def _drain_comments(page, limit: int = _COMMENT_LIMIT, budget: float = _COMMENT_BUDGET,
+                          acc: dict | None = None) -> tuple[list, bool]:
     """评论区互动用户：真实滚轮滚到底 + 展开折叠回复 + 边滚边抓。
 
     （2026-11-13 真机取证，替换旧实现）两条硬事实：
@@ -1970,25 +2038,32 @@ async def _drain_comments(page) -> list:
        只在最后提取一次必然拿到空列表（实测 total=0）。所以每加载一批就
        抓一次、按 uid+评论去重累积，滚过头也不丢已抓到的用户。
 
-    有多少采多少：判定到底靠"连续 4 轮没有新批"，不设人为条数上限。
+    单次上限：条数（limit）与时间（budget）任一先到就停，返回 capped=True。
+    评论几百条的笔记一次滚到底要好几分钟、也更容易踩风控，所以分段采：
+    到上限时调用方保留这一页，用户点「继续采集」再从当前位置接着滚。
+    判定"真的到底"仍靠"连续 4 轮没有新批"。
     """
     if "website-login/error" in (_page_url_now(page) or ""):
         raise _RiskLimited("详情页被平台判为异常访问")
     await _expand_comment_folds(page)          # 先展开「查看更多评论」类入口
 
-    # 鼠标必须落在评论区里，滚轮才会滚评论列表而不是笔记正文
-    try:
-        await page.locator(".comment-item").first.hover(timeout=5000)
-    except Exception:                          # noqa: BLE001
-        box = await cdp_call(page.evaluate(_COMMENT_BOX_JS), timeout=CDP_EVAL,
-                             label="comment.box", skip=True)
-        if box:
-            await page.mouse.move(box["x"], box["y"])
+    # 鼠标必须落在「当前可见」的评论上，滚轮才会滚评论列表而不是笔记正文。
+    # 不能 hover 第一条：续采时那条在视口外，Playwright 会自动 scrollIntoView
+    # 把列表拉回顶部（2026-11-23 实测：续采每轮 n 恒等于 336、再也采不到新评论）。
+    await _aim_comment_area(page)
 
-    acc: dict[str, dict] = {}
+    acc = acc if acc is not None else {}
     prev = -1
     idle = 0
+    capped = False
+    start_len = len(acc)          # 续采时 acc 里已有上一批，上限只算"本批新增"
+    t0 = time.monotonic()
     for _ in range(_COMMENT_MAX_ROUNDS):
+        if (len(acc) - start_len) >= limit or (time.monotonic() - t0) >= budget:
+            capped = True
+            log.info("[comment.drain] 到上限 limit=%s budget=%s 本批新增=%d 累计=%d",
+                     limit, budget, len(acc) - start_len, len(acc))
+            break
         # 真人节奏：一次滚一屏、停一下再看，别 4 连跳、也别 0.2s 一拍
         for k in range(2):
             await page.mouse.wheel(0, _COMMENT_WHEEL_STEP)
@@ -2001,7 +2076,11 @@ async def _drain_comments(page) -> list:
         n = (cur or {}).get("items", 0)
         # 诊断：确认滚动到底有没有真的触发加载（UI 触发时右窗可能停在搜索页浮层，
         # 评论只在侧栏、滚不出全量——2026-11-13 实测 575 条只拿到 85 条）
-        log.info("[comment.drain] r=%d n=%d url=%s", _, n, (_page_url_now(page) or "")[:70])
+        url_now = _page_url_now(page) or ""
+        log.info("[comment.drain] r=%d n=%d url=%s", _, n, url_now[:70])
+        # 滚到一半被平台跳「异常访问」页：评论永不再加载，绝不能当"这篇没人评论"返回空
+        if "website-login/error" in url_now:
+            raise _RiskLimited("详情页被平台判为异常访问")
 
         if n == 0 and prev > 0:                # 滚过头，评论区被卸载 → 回滚找回
             for _ in range(6):                 # 回滚也按真人节奏，别瞬间弹回
@@ -2014,7 +2093,7 @@ async def _drain_comments(page) -> list:
             await injections.inject_once(page, "extract")
             batch = await page.evaluate("() => xhsExtractComments()") or []
             for u in batch:
-                acc.setdefault(str(u.get("uid", "")) + "|" + (u.get("comment") or "")[:24], u)
+                acc.setdefault(_acc_key(u), u)
             prev = n
             idle = 0
             continue
@@ -2023,13 +2102,14 @@ async def _drain_comments(page) -> list:
         if idle >= _COMMENT_IDLE_STOP:
             break
 
-    clicked = await _expand_comment_folds(page)  # 到底后再展开折叠的二级回复
-    if clicked:                                 # 真展开出新回复 → 补抓一次
-        await injections.inject_once(page, "extract")
-        batch = await page.evaluate("() => xhsExtractComments()") or []
-        for u in batch:
-            acc.setdefault(str(u.get("uid", "")) + "|" + (u.get("comment") or "")[:24], u)
-    return list(acc.values())
+    if not capped:                              # 到上限时不再展开折叠，留给下一批
+        clicked = await _expand_comment_folds(page)  # 到底后再展开折叠的二级回复
+        if clicked:                             # 真展开出新回复 → 补抓一次
+            await injections.inject_once(page, "extract")
+            batch = await page.evaluate("() => xhsExtractComments()") or []
+            for u in batch:
+                acc.setdefault(_acc_key(u), u)
+    return list(acc.values()), capped
 
 
 async def _expand_comment_folds(page, batch: int = 15, max_batches: int = 8) -> int:
@@ -2051,16 +2131,41 @@ async def _expand_comment_folds(page, batch: int = 15, max_batches: int = 8) -> 
 
 
 # 评论区中心坐标（hover 失败时的兜底）：钳制在可视区内
-_COMMENT_BOX_JS = """() => {
-  const c = document.querySelector('.interaction-container') || document.querySelector('.comment-item');
+_COMMENT_AIM_JS = """() => {
+  // 取"当前视口内面积最大"的评论块中心，绝不 scrollIntoView（那会把列表拉回顶部）
+  const items = [...document.querySelectorAll('.comment-item')];
+  let best = null, area = 0;
+  for (const el of items) {
+    const r = el.getBoundingClientRect();
+    const h = innerHeight, w = innerWidth;
+    const visH = Math.min(r.bottom, h) - Math.max(r.top, 0);
+    const visW = Math.min(r.right, w) - Math.max(r.left, 0);
+    if (visH > 24 && visW > 60) {
+      const a = visH * visW;
+      if (a > area) { area = a; best = r; }
+    }
+  }
+  if (best) {
+    return { x: Math.round(best.left + best.width / 2), y: Math.round(Math.max(best.top, 30) + 12) };
+  }
+  const c = document.querySelector('.interaction-container');
   if (!c) return null;
-  c.scrollIntoView({ block: 'center' });
   const r = c.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return null;
-  const x = Math.round(Math.min(Math.max(r.x + r.width / 2, 20), innerWidth - 20));
-  const y = Math.round(Math.min(Math.max(r.y + r.height / 2, 60), innerHeight - 60));
-  return { x, y };
+  if (r.width <= 0 || r.bottom < 0 || r.top > innerHeight) return null;
+  return { x: Math.round(Math.min(Math.max(r.left + r.width / 2, 20), innerWidth - 20)),
+           y: Math.round(Math.min(Math.max(r.top + Math.min(r.height / 2, 120), 60), innerHeight - 60)) };
 }"""
+
+
+async def _aim_comment_area(page) -> bool:
+    """把鼠标移到视口内可见的评论区（不触发滚动），滚轮才只滚评论列表。"""
+    box = await cdp_call(page.evaluate(_COMMENT_AIM_JS), timeout=CDP_EVAL,
+                         label="comment.aim", skip=True)
+    if not box:
+        return False
+    await page.mouse.move(box["x"], box["y"])
+    return True
+
 
 _COMMENT_COUNT_JS = """() => ({
   items: document.querySelectorAll('.comment-item').length,
@@ -2161,7 +2266,6 @@ async def open_contact(profile_url: str, account_id: str = "default") -> str:
 async def stop():
     """关闭全部引擎 + Playwright 实例（后端退出钩子）。"""
     await pool.close_all()
-
 
 
 # ===========================================================================

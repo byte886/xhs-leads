@@ -2213,6 +2213,8 @@ def _download_images(feed_id: str, images: list) -> list:
 class ClientsReq(BaseModel):
     feed_id: str
     xsec_token: str = ""
+    resume: bool = False      # 上一次到上限后，接着采下一批（沿用同一笔记页）
+    limit: int = 150          # 单次条数上限（0 = 用后端默认）
 
 
 def _is_noise_comment(text: str) -> bool:
@@ -2273,8 +2275,13 @@ async def collect_clients(req: ClientsReq):
                 filters = json.loads(ctx[0]) or {}
             except ValueError:
                 filters = {}
-        users = await browser_client.clients(
-            req.feed_id, token, keyword=keyword, filters=filters)
+        got = await browser_client.clients(
+            req.feed_id, token, keyword=keyword, filters=filters,
+            limit=req.limit, resume=req.resume)
+        limit = int(req.limit or 0)
+        users = got.get("users") or []
+        capped = bool(got.get("capped"))
+        added = int(got.get("added", len(users)))
     except HTTPException as e:
         # 风控风险页：已采部分保留（历史入库记录不动），明确提示停用窗口，不自动重试
         raise HTTPException(429, "触发平台风险拦截，建议停用 ≥24h，人工确认后再恢复采集") from e
@@ -2328,11 +2335,22 @@ async def collect_clients(req: ClientsReq):
     # 声明数里含已删评论与被折叠回复，正常覆盖 95% 左右（实测 95.3% / 95.9%）；
     # 低于 90% 基本是采集中途被打断（实测用户抢滚轮时只到 24%），
     # 界面必须提示"可能没采全"，不能静默显示一个偏小的数。
-    low_coverage = bool(declared >= 30 and total > 0 and total / declared < 0.9)
+    # 到单批上限是"主动分段"，不是漏采：此时不可再打 low_coverage（否则界面同时说
+    # 「已到上限还能继续」和「只采到 163/2734，可能被打断」，自相矛盾）
+    low_coverage = bool(not capped and declared >= 30 and total > 0 and total / declared < 0.9)
+    remain = max(0, declared - total)
+    # 续采没拿到一个新面孔、而平台还显示有剩余：多半是这一篇被平台限了频（同一篇采得太密），
+    # 必须如实说，不能把"0 条"当成功收尾（也不能显示成功提示骗用户）。
+    stalled = bool(not capped and added == 0 and remain > 0)
     return {
         "total": total,               # 评论条数（一人可多条）
         "people": len(people_users),  # 去重人数（界面「本篇线索」用这个）
         "declared": declared,         # 平台声明的评论数
+        "capped": capped,             # 到单次上限提前停（评论太多 → 分段采）
+        "limit": limit,               # 本批单次上限（界面据此说明"每批最多 N 条"）
+        "remain": remain,             # 还能继续采的估计条数（按平台声明数算）
+        "added": added,               # 本批新增条数（续采只算新面孔）
+        "stalled": stalled,           # 本批没新增但平台还有剩余 → 提示限频/稍后再试
         "low_coverage": low_coverage, # 明显低于声明数 → 提示可能被打断
         "new": added,
         "users": users,
@@ -3391,4 +3409,6 @@ app.mount("/videos", StaticFiles(directory=str(VIDEOS_DIR)), name="videos")
 
 @app.get("/")
 def index():
-    return FileResponse(WEB_DIR / "index.html")
+    # 禁止缓存 index.html：升级换包后浏览器缓存会继续拉旧的 assets 名，
+    # 界面便一直跑上一版旧代码（2026-11-23 实测：新包在跑，页面仍加载旧 bundle）。
+    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})

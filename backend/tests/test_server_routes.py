@@ -674,9 +674,10 @@ class TestCollectClients:
         from src import browser_client
         seen: dict = {}
 
-        async def fake_clients(feed_id, token, keyword="", filters=None):
-            seen.update(keyword=keyword, filters=filters)
-            return [{"uid": "u1", "nickname": "n1", "comment": "c1", "profile": "p1"}]
+        async def fake_clients(feed_id, token, keyword="", filters=None, **kw):
+            seen.update(keyword=keyword, filters=filters, kw=kw)
+            return {"users": [{"uid": "u1", "nickname": "n1", "comment": "c1", "profile": "p1"}],
+                    "capped": False}
 
         # 采集时用的筛选条件落到 collect_ctx，采客户时必须原样透传给重开搜索页
         con = sqlite3.connect(tmp_path / "test.db")
@@ -696,12 +697,29 @@ class TestCollectClients:
         con.close()
         assert cnt == 1
 
+    def test_clients_capped_reports_remain(self, client, monkeypatch, tmp_path):
+        """评论过多时单次只采一批：到上限要回传 capped/remain，界面才给「继续采集」。"""
+        _seed_notes(tmp_path)
+        from src import browser_client
+
+        async def fake_clients(feed_id, token, keyword="", filters=None, **kw):
+            return {"users": [{"uid": f"u{i}", "comment": f"c{i}"} for i in range(20)],
+                    "capped": True}
+
+        monkeypatch.setattr(browser_client, "clients", fake_clients)
+        r = client.post("/api/clients", json={"feed_id": "a1", "limit": 20})
+        j = r.json()
+        assert j["capped"] is True
+        assert j["total"] == 20
+        # 种子里平台声明 30 条 → 还剩 10 条
+        assert j["remain"] == max(0, j["declared"] - 20)
+
     def test_clients_no_search_page(self, client, monkeypatch, tmp_path):
         """无搜索页/卡片不在结果里 → 409 并原话回传原因，不伪装成「没人评论」。"""
         _seed_notes(tmp_path)
         from src import browser_client
 
-        async def no_page(feed_id, token, keyword="", filters=None):
+        async def no_page(feed_id, token, keyword="", filters=None, **kw):
             raise browser_client.ClientCollectError("当前没有打开的搜索结果页")
 
         monkeypatch.setattr(browser_client, "clients", no_page)
@@ -712,7 +730,7 @@ class TestCollectClients:
     def test_clients_fail(self, client, monkeypatch):
         from src import browser_client
 
-        async def boom(feed_id, token, keyword="", filters=None):
+        async def boom(feed_id, token, keyword="", filters=None, **kw):
             raise RuntimeError("浏览器失败")
 
         monkeypatch.setattr(browser_client, "clients", boom)

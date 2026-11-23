@@ -20,6 +20,9 @@ const publishOpen = ref(false)
 const clientsOpen = ref(false)
 const clientsFeedId = ref('')
 const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
+// 评论太多时单次只采一批（后端 150 条 / 90 秒），到上限后在弹层里给「继续采集」
+const clientsNote = ref<Note | null>(null)
+const resumeState = ref({ can: false, taken: 0, declared: 0, remain: 0 })
 
 
 // 登录形态（用户拍板·双窗职责分离）：
@@ -73,16 +76,23 @@ function stopCollectClock() {
 
 function closeClients() {
   clientsOpen.value = false
+  resumeState.value = { can: false, taken: 0, declared: 0, remain: 0 }
   stopCollectClock()
   collectState.value = { running: false, text: '', err: '', elapsed: 0 }
 }
 onUnmounted(stopCollectClock)
 
-async function collectClients(note: Note) {
+async function collectClients(note: Note, resume = false) {
   const t = (note.title || '该笔记').slice(0, 12)
   clientsOpen.value = true
   clientsFeedId.value = note.feed_id
-  collectState.value = { running: true, text: `正在采集「${t}…」的评论区互动用户`, err: '', elapsed: 0 }
+  clientsNote.value = note
+  collectState.value = {
+    running: true,
+    text: resume ? `正在接着采「${t}…」的下一批评论` : `正在采集「${t}…」的评论区互动用户`,
+    err: '',
+    elapsed: 0,
+  }
   stopCollectClock()
   collectClock = setInterval(() => { collectState.value.elapsed += 1 }, 1000)
 
@@ -94,6 +104,7 @@ async function collectClients(note: Note) {
     // 被平台判异常访问（300013）时后端已自动退登 → 左窗直接提示重新扫码，不铺平台长文案
     const needLogin = isLoginAbnormal(msg)
     const tip = needLogin ? '需要重新登录：请在右侧窗口重新扫码' : `采集失败：${msg.slice(0, ms)}`
+    resumeState.value = { can: false, taken: 0, declared: 0, remain: 0 }
     collectState.value = { running: false, text: tip, err: '1', elapsed: collectState.value.elapsed }
     toast(tip, 'error')
     // 不再调 ensureRightLogin：后端被限时已经把右窗清 cookie 并停在 /login，
@@ -104,7 +115,11 @@ async function collectClients(note: Note) {
     const resp = await fetch('/api/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feed_id: note.feed_id, xsec_token: note.xsec_token || '' }),
+      body: JSON.stringify({
+        feed_id: note.feed_id,
+        xsec_token: note.xsec_token || '',
+        resume,
+      }),
       signal: ac.signal,
     })
     clearTimeout(capTimer)
@@ -125,6 +140,39 @@ async function collectClients(note: Note) {
     // 采集成功不再留常驻播报条：转圈停即视为完成，列表本身反映结果
     // （失败仍保留红色错误条，异常必须可见）
     collectState.value = { running: false, text: '', err: '', elapsed: 0 }
+    if (data.capped) {
+      const lim = data.limit || 0
+      resumeState.value = {
+        can: true,
+        taken: data.total || 0,
+        declared: data.declared || 0,
+        remain: data.remain || 0,
+      }
+      collectState.value = {
+        running: false,
+        text: `已到单批上限${lim ? `（每批最多 ${lim} 条，防超时/踩风控）` : ''}，本批累计采到 ${data.total} 条`
+          + (data.declared ? `；本篇平台显示共 ${data.declared} 条，估计还有 ${data.remain} 条` : ''),
+        err: '',
+        elapsed: 0,
+      }
+    } else if (data.stalled) {
+      // 本批一个新面孔都没拿到，但平台还显示有剩余：多半是同一篇采得太密被限频
+      resumeState.value = {
+        can: true,
+        taken: data.total || 0,
+        declared: data.declared || 0,
+        remain: data.remain || 0,
+      }
+      collectState.value = {
+        running: false,
+        text: `本批没采到新用户：平台这次没再放出更多评论（同一篇采得太密会被限频），`
+          + `过几分钟再点「继续采集下一批」，估计还有 ${data.remain} 条`,
+        err: '',
+        elapsed: 0,
+      }
+    } else {
+      resumeState.value = { can: false, taken: 0, declared: 0, remain: 0 }
+    }
     // 只有明显低于平台声明数才提示：评论区滚到底有 DOM 上限、也含已删评论，
     // 正常覆盖 95% 左右；偏少通常意味着采集被打断（例如采集中操作了右侧窗口）。
     if (data.low_coverage) {
@@ -135,6 +183,10 @@ async function collectClients(note: Note) {
     const aborted = (e as { name?: string })?.name === 'AbortError'
     fail(aborted ? '采集超时（420 秒），已停止' : '网络错误，已停止')
   }
+}
+
+function resumeClients() {
+  if (clientsNote.value && !collectState.value.running) collectClients(clientsNote.value, true)
 }
 
 function fmtTime(s: number) {
@@ -237,6 +289,7 @@ onMounted(async () => {
             <span v-if="collectState.running" class="cl-spin" aria-hidden="true" />
             <span class="cl-status-t">{{ collectState.text }}</span>
             <span v-if="collectState.running" class="cl-status-time">{{ collectState.elapsed }}s</span>
+            <button v-if="resumeState.can && !collectState.running" class="btn cl-resume" @click="resumeClients">继续采集下一批</button>
           </div>
           <div style="max-width:1100px;margin:0 auto">
             <ClientsPanel ref="clientsRef" :feed-id="clientsFeedId" />
@@ -302,6 +355,7 @@ onMounted(async () => {
 .cl-status.run { background: #FFF7EE; border-color: #F0D3B6; color: #8A5A22; }
 .cl-status.err { background: #FDECEC; border-color: #F2C9C9; color: #A33; }
 .cl-status-t { flex: 1; line-height: 1.45; }
+.cl-resume { flex: 0 0 auto; padding: 4px 12px; font-size: 12px; border-radius: 14px; }
 .cl-status-time { font-variant-numeric: tabular-nums; opacity: .75; }
 .cl-spin {
   width: 13px; height: 13px; flex: none; border-radius: 50%;

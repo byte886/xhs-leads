@@ -131,12 +131,12 @@ def test_collect_clients_excludes_author(tmp_path, monkeypatch):
     )
     con.commit()
 
-    async def fake_clients(feed_id, token, keyword="", filters=None):
-        return [
+    async def fake_clients(feed_id, token, keyword="", filters=None, **kw):
+        return {"capped": False, "users": [
             {"uid": "author-uid", "nickname": "作者", "comment": "谢谢大家", "intent": "low"},
             {"uid": "u1", "nickname": "路人", "comment": "多少钱", "intent": "high"},
             {"uid": "u1", "nickname": "路人", "comment": "能便宜吗", "intent": "high"},
-        ]
+        ]}
 
     async def ok_login():
         return None
@@ -163,9 +163,10 @@ def _coverage_case(tmp_path, monkeypatch, declared, comments):
     )
     con.commit()
 
-    async def fake_clients(feed_id, token, keyword="", filters=None):
-        return [{"uid": f"u{i}", "nickname": "n", "comment": f"c{i}", "intent": "low"}
-                for i in range(comments)]
+    async def fake_clients(feed_id, token, keyword="", filters=None, **kw):
+        return {"capped": False, "users": [
+            {"uid": f"u{i}", "nickname": "n", "comment": f"c{i}", "intent": "low"}
+            for i in range(comments)]}
 
     async def ok_login():
         return None

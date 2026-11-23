@@ -47,8 +47,8 @@ def test_keyword_reopens_search_then_collects(monkeypatch):
         page.url = f"https://www.xiaohongshu.com/explore/{note_id}"
         return True
 
-    async def fake_drain(page):
-        return [{"uid": "u1"}]
+    async def fake_drain(page, *a, **kw):
+        return [{"uid": "u1"}], False
 
     async def fake_back(page):
         return None
@@ -65,8 +65,8 @@ def test_keyword_reopens_search_then_collects(monkeypatch):
 
     # 采集时的筛选条件必须原样带到重开的搜索页
     filters = {"note_type": "图文", "sort": "最新"}
-    users = asyncio.run(bc.clients("nid", keyword="翡翠手串", filters=filters))
-    assert users == [{"uid": "u1"}]
+    got = asyncio.run(bc.clients("nid", keyword="翡翠手串", filters=filters))
+    assert got["users"] == [{"uid": "u1"}] and got["capped"] is False and got["added"] == 1
     assert calls[0] == ("翡翠手串", True, filters)  # 只搜索、保留页面、带原筛选
     assert calls[1] == ("open", "nid")
 
@@ -95,7 +95,7 @@ def test_card_clicked_but_not_in_detail_raises(monkeypatch):
     async def fake_open(page, note_id):
         return True                      # 点击"成功"，但 URL 仍在列表
 
-    async def fake_drain(page):          # pragma: no cover - 不应被调用
+    async def fake_drain(page, *a, **kw):   # pragma: no cover - 不应被调用
         raise AssertionError("没进详情页时不得提取评论")
 
     async def _no_sleep(*_):
