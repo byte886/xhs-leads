@@ -411,3 +411,44 @@ def test_engine_alive_false_when_process_unknown():
 def test_engine_connected_exits():
     c = _coord_with(_account(connected=True, proc_alive=True))
     assert asyncio.run(c._engine_alive_after_close()) is True
+
+
+# ------------------------------- 快速退出路径：连得上就立刻退，不等 3s
+
+def _coord_fired(account):
+    hits = []
+    c = _coord_with(account)
+    c.bind(None, lambda: hits.append(time.monotonic()))
+    return c, hits
+
+
+def test_fast_path_exits_when_engine_connected():
+    """只关主窗、浏览器还连着 → 0.1s 快速路径直接触发退出（不等 3s）。"""
+    c, hits = _coord_fired(_account(connected=True, proc_alive=True))
+    asyncio.run(c._shell_closed_verify(fast=True))
+    assert hits
+
+
+def test_fast_path_silent_when_connection_lost():
+    """连接断了（用户把两扇窗都关了/崩溃）→ 快速路径不退出，交给 3s 兜底。"""
+    c, hits = _coord_fired(_account(connected=False, proc_alive=False))
+    asyncio.run(c._shell_closed_verify(fast=True))
+    assert not hits
+    # 兜底那次仍然按「进程没了=用户关窗」退出
+    asyncio.run(c._shell_closed_verify())
+    assert hits
+
+
+def test_fast_path_silent_during_rebuild():
+    """60s 内重建过（崩溃恢复中）→ 快速路径不退出，避免把崩溃当用户关窗。"""
+    c, hits = _coord_fired(_account(connected=True, proc_alive=True, rebuilt=5.0))
+    asyncio.run(c._shell_closed_verify(fast=True))
+    assert not hits
+
+
+def test_exit_fires_only_once():
+    """快速路径退出后，3s 兜底那次不得重复触发退出。"""
+    c, hits = _coord_fired(_account(connected=True, proc_alive=True))
+    asyncio.run(c._shell_closed_verify(fast=True))
+    asyncio.run(c._shell_closed_verify())
+    assert len(hits) == 1

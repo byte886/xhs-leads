@@ -399,6 +399,7 @@ class WindowCoordinator:
         self._on_shell_closed = None
         self._engine = None
         self._shell_close_ts = 0.0
+        self._shell_exit_fired = False  # 退出只触发一次（快速路径与 3s 兜底互斥）
         self._loop = None
         # playwright 驱动线程，get_event_loop/get_running_loop 均不可靠）
 
@@ -462,16 +463,49 @@ class WindowCoordinator:
             return False
         return True
 
-    async def _shell_closed_verify(self) -> None:
-        """壳窗 close 事件延迟 3s 校验——引擎崩溃时壳窗 close 是引擎
-        进程死亡的副作用（非用户行为），跳过退出交给 keeper 重建；引擎存活且
-        非重建期才是用户真关主窗，维持「关主窗=退出应用」语义。"""
+    async def _engine_connected_and_healthy(self) -> bool:
+        """快速路径的强证据：引擎当前确实连着活着的浏览器，且不在重建期。
+
+        只有这种状态才 100% 是「用户手动关主窗」——浏览器崩了/正在重建时
+        连接必然断，一律让 3s 兜底校验接手。"""
+        eng = self._engine
+        if eng is None:
+            return False
+        try:
+            account = await eng.get("default") if hasattr(eng, "get") else eng
+        except Exception:  # noqa: BLE001（引擎未就绪：交给兜底）
+            return False
+        if account is None:
+            return False
+        try:
+            if account.rebuild_age() < 60:
+                return False
+            return bool(account.is_connected_now())
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _shell_closed_verify(self, fast: bool = False) -> None:
+        """壳窗 close 事件校验——引擎崩溃时壳窗 close 是引擎进程死亡的副作用
+        （非用户行为），跳过退出交给 keeper 重建；引擎存活且非重建期才是用户真
+        关主窗，维持「关主窗=退出应用」语义。
+
+        fast=True 是 0.1s 的快速路径：仅在「引擎仍连着一个活浏览器」这种强证据
+        下立即退出（用户手动关主窗），把退出耗时从 3s+ 压到 ~1s；拿不到强证据
+        就静默返回，交给 3s 兜底那次校验继续判定崩溃/重建。"""
         if self._stop is not None and self._stop.is_set():
+            return
+        if self._shell_exit_fired:
             return
         if not await self._engine_alive_after_close():
             return
+        if fast and not await self._engine_connected_and_healthy():
+            return
+        self._shell_exit_fired = True
         if self._on_shell_closed is not None:
-            log.info("壳窗被关闭（引擎存活），触发应用退出")
+            if fast:
+                log.info("壳窗被关闭（引擎仍在正常连接），立即触发应用退出")
+            else:
+                log.info("壳窗被关闭（引擎存活），触发应用退出")
             self._on_shell_closed()
 
     # ---------------- 判活引用 ----------------
@@ -527,13 +561,16 @@ class WindowCoordinator:
             log.info("右侧调试窗被关闭（不自动重建；关窗即中断本次采集，需重新点「开始采集」）")
             self._abort_collect_on_win_close()
             return
-        # 延迟 3s 校验引擎状态，区分「用户关主窗」与「崩溃」。
+        # 两段校验：0.1s 快速路径（引擎还连着=用户关窗，立即退），3s 兜底
+        # （引擎断了才需要等——那可能是崩溃重建，不能贸然退出）。
         self._shell_close_ts = time.monotonic()
-        log.warning("壳窗 close 事件，3s 后校验（区分用户关闭/引擎崩溃）")
+        log.warning("壳窗 close 事件，先做快速校验（0.1s），3s 再做兜底校验")
         # keeper loop 调度；无 loop 时仅靠轮询 shell_close_age 兜底。
         if self._loop is None:
             return
         try:
+            self._loop.call_later(0.1, lambda: asyncio.ensure_future(
+                self._shell_closed_verify(fast=True)))
             self._loop.call_later(3.0, lambda: asyncio.ensure_future(
                 self._shell_closed_verify()))
         except Exception:  # noqa: BLE001（loop 关闭中：keeper 轮询兜底）
