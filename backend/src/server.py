@@ -2275,9 +2275,17 @@ async def collect_clients(req: ClientsReq):
                 filters = json.loads(ctx[0]) or {}
             except ValueError:
                 filters = {}
+        known: list = []
+        if req.resume:
+            # 续采时把库里这篇已采过的用户带下去：万一上一页已经不在了，后端会重开本篇、
+            # 快进跳过已采深度再接着采（否则会从头重复采、或直接报"无法接着采"）。
+            con2 = _db()
+            known = [{"uid": r[0], "comment": r[1]} for r in con2.execute(
+                "SELECT uid, comment FROM clients WHERE feed_id=?", (req.feed_id,)).fetchall()]
+            con2.close()
         got = await browser_client.clients(
             req.feed_id, token, keyword=keyword, filters=filters,
-            limit=req.limit, resume=req.resume)
+            limit=req.limit, resume=req.resume, known=known)
         limit = int(req.limit or 0)
         users = got.get("users") or []
         capped = bool(got.get("capped"))
@@ -2342,6 +2350,8 @@ async def collect_clients(req: ClientsReq):
     # 续采没拿到一个新面孔、而平台还显示有剩余：多半是这一篇被平台限了频（同一篇采得太密），
     # 必须如实说，不能把"0 条"当成功收尾（也不能显示成功提示骗用户）。
     stalled = bool(not capped and added == 0 and remain > 0)
+    # 没到上限但平台还显示有剩余：本篇评论太多，平台一次只放到这里 → 仍然给「继续采集」
+    more = bool(not capped and remain > 0)
     return {
         "total": total,               # 评论条数（一人可多条）
         "people": len(people_users),  # 去重人数（界面「本篇线索」用这个）
@@ -2351,6 +2361,7 @@ async def collect_clients(req: ClientsReq):
         "remain": remain,             # 还能继续采的估计条数（按平台声明数算）
         "added": added,               # 本批新增条数（续采只算新面孔）
         "stalled": stalled,           # 本批没新增但平台还有剩余 → 提示限频/稍后再试
+        "more": more,                 # 没到上限但平台还有剩余 → 也保留「继续采集下一批」
         "low_coverage": low_coverage, # 明显低于声明数 → 提示可能被打断
         "new": added,
         "users": users,

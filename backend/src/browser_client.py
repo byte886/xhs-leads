@@ -1884,7 +1884,8 @@ class _RiskLimited(RuntimeError):
 
 async def clients(note_id: str, xsec_token: str = "", account_id: str = "default",
                   keyword: str = "", filters: dict | None = None,
-                  limit: int = 0, budget: float = 0.0, resume: bool = False) -> dict:
+                  limit: int = 0, budget: float = 0.0, resume: bool = False,
+                  known: list | None = None) -> dict:
     """评论区互动用户：在采集页点开目标卡片 → 展开/滚动评论区 → 提取 → 返回。
 
     点卡片与详情补全走同一条路径（真鼠标点可见卡片，平台才会补 xsec_token）。
@@ -1902,12 +1903,19 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     """
     limit = int(limit or _COMMENT_LIMIT)
     budget = float(budget or _COMMENT_BUDGET)
+    seed: dict = {}
+    skip = 0
     if resume:
         sess = _COMMENT_SESSIONS.get(note_id)
-        if not sess or sess["page"].is_closed() or _page_position(sess["page"]) != "detail":
-            _COMMENT_SESSIONS.pop(note_id, None)
-            raise ClientCollectError("上一次的采集页已经离开原笔记，无法接着采。请重新采集这篇笔记。")
-        return await _drain_with_session(sess, limit, budget)
+        if sess and not sess["page"].is_closed() and _page_position(sess["page"]) == "detail":
+            return await _drain_with_session(sess, limit, budget)
+        # 会话页已经不在原笔记（被关掉/被平台跳走/这一页翻到底了）：不甩报错给用户，
+        # 改为重新打开本篇，把库里已采过的用户当"已知集合"，开头快进滚过已采深度，
+        # 再从新评论接着采（2026-11-23 用户实测：点继续直接报"无法接着采"+按钮消失）。
+        _COMMENT_SESSIONS.pop(note_id, None)
+        seed = _acc_map(known or [])
+        skip = len(seed)
+        log.info("续采会话失效，改为重开本篇 note_id=%s known=%d", note_id, skip)
 
     # 同一篇重新采集（非续采）：上一次到上限留下的详情页要先退回列表，否则点卡片落空
     stale = _COMMENT_SESSIONS.pop(note_id, None)
@@ -1947,15 +1955,15 @@ async def clients(note_id: str, xsec_token: str = "", account_id: str = "default
     await asyncio.sleep(4)
     _ensure_detail_page(page)
     try:
-        users, capped = await _drain_comments(page, limit, budget)
+        users, capped = await _drain_comments(page, limit, budget, acc=seed or None, skip_known=skip)
     except _RiskLimited:
         await _risk_relogin(page, account_id, note_id)
     if capped:
         # 到上限不返回列表：留着这一页停在当前位置，用户点「继续采集」时接着往下滚
         _COMMENT_SESSIONS[note_id] = {"page": page, "acc": _acc_map(users)}
-        return {"users": users, "capped": True, "added": len(users)}
+        return {"users": users, "capped": True, "added": max(0, len(users) - skip)}
     await _back_to_list(page)
-    return {"users": users, "capped": False, "added": len(users)}
+    return {"users": users, "capped": False, "added": max(0, len(users) - skip)}
 
 
 def _ensure_detail_page(page) -> None:
@@ -2026,7 +2034,7 @@ def _finish_session_no_key(sess: dict, page, users: list, capped: bool,
 
 
 async def _drain_comments(page, limit: int = _COMMENT_LIMIT, budget: float = _COMMENT_BUDGET,
-                          acc: dict | None = None) -> tuple[list, bool]:
+                          acc: dict | None = None, skip_known: int = 0) -> tuple[list, bool]:
     """评论区互动用户：真实滚轮滚到底 + 展开折叠回复 + 边滚边抓。
 
     （2026-11-13 真机取证，替换旧实现）两条硬事实：
@@ -2053,6 +2061,15 @@ async def _drain_comments(page, limit: int = _COMMENT_LIMIT, budget: float = _CO
     await _aim_comment_area(page)
 
     acc = acc if acc is not None else {}
+    if skip_known:
+        # 重开本篇续采：先用快进滚轮跳过已经采过的深度（不做提取，省时间），
+        # 速度≈10 条/轮，已知 N 条就滚 N/8 轮（留余量），上限 60 轮防跑飞。
+        wheels = min(60, max(6, int(skip_known / 8)))
+        log.info("[comment.drain] 快进跳过已采区 known=%d wheels=%d", skip_known, wheels)
+        for _ in range(wheels):
+            await page.mouse.wheel(0, _COMMENT_WHEEL_STEP)
+            await asyncio.sleep(0.45)
+        await asyncio.sleep(1.2)
     prev = -1
     idle = 0
     capped = False

@@ -170,12 +170,27 @@ async function collectClients(note: Note, resume = false) {
         err: '',
         elapsed: 0,
       }
+    } else if (data.more) {
+      // 没到上限，但平台这次只放到这么多（本篇评论太多）：按钮照留，别让用户以为采完了
+      resumeState.value = {
+        can: true,
+        taken: data.total || 0,
+        declared: data.declared || 0,
+        remain: data.remain || 0,
+      }
+      collectState.value = {
+        running: false,
+        text: `这批采到 ${data.total} 条（本篇平台显示共 ${data.declared} 条，估计还有 ${data.remain} 条）：`
+          + `平台一次只放出这么多，点「继续采集下一批」接着采`,
+        err: '',
+        elapsed: 0,
+      }
     } else {
       resumeState.value = { can: false, taken: 0, declared: 0, remain: 0 }
     }
     // 只有明显低于平台声明数才提示：评论区滚到底有 DOM 上限、也含已删评论，
     // 正常覆盖 95% 左右；偏少通常意味着采集被打断（例如采集中操作了右侧窗口）。
-    if (data.low_coverage) {
+    if (data.low_coverage && !resumeState.value.can) {
       toast(`只采到 ${data.total} / 平台显示 ${data.declared} 条，可能被打断，可重试（采集中别操作右侧窗口）`, 'error')
     }
   } catch (e) {
