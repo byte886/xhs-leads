@@ -3,11 +3,14 @@ root_package = "src"
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "纯叶子模块保持独立（config/logger/score/jsonio/intent/injections/llm_service 互不依赖）"
+name = "纯叶子模块保持独立（logger/score/intent/injections/llm_service 互不依赖）"
 type = "independence"
-modules = ["src.config", "src.logger", "src.score", "src.intent", "src.injections", "src.llm_service"]
+modules = ["src.logger", "src.score", "src.intent", "src.injections", "src.llm_service"]
 # R-6.36c 用户拍板：llm_service→jsonio 为合法依赖（jsonio 保持叶子身份，
 # 从本 independence 清单移除；其余模块仍不得 import jsonio）
+# 2026-11-24：config 从清单移除 —— 它是全局配置底座（DATA_DIR / resource_root()），
+# 全仓 18 个模块都在读；7f20cbc（Windows 打包资源根）与 3695cc4（数据目录统一）之后，
+# injections / logger / llm_service 依赖 config 是正当的，原契约把 config 当互斥叶子已不成立。
 
 [[tool.importlinter.contracts]]
 name = "server 是顶层（任何模块不得依赖 server，防循环）"
