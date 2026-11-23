@@ -22,6 +22,12 @@ import sys
 from datetime import datetime
 
 _WRITE_FD = -1  # 主进程持有的写端；进程无论怎么死，操作系统都会关闭它
+_CHILD_PROC = None  # Windows：看门狗子进程句柄（写端 = proc.stdin，靠它 EOF 判父进程消失）
+_WIN_CHILD_FLAG = "XHS_WD_CHILD"  # launcher 见到即转来看门狗子进程分支
+_WIN_MARKS_ENV = "XHS_WD_MARKS"   # 特征串以 JSON 传，避开命令行空格/引号
+_WIN_LOG_ENV = "XHS_WD_LOG"
+_CREATE_NO_WINDOW = 0x08000000  # Windows 子进程不弹黑框
+_WIN_FD_MARK = -2  # _WRITE_FD 占位：表示写端是 Popen.stdin 而不是 fd
 _LOG_KEEP_BYTES = 512 * 1024  # 看门狗日志轮转阈值
 
 
@@ -228,9 +234,9 @@ def _child_main(read_fd: int, markers: list[str], log_path: str) -> None:
 
 
 def _can_start(marks: list[str], log_path: str) -> bool:
-    """前置条件：POSIX + 至少一条特征串；不满足时留痕说明原因。"""
-    if not hasattr(os, "fork"):
-        _log(log_path, "start", "跳过：当前平台无 os.fork")
+    """前置条件：有派生手段（POSIX fork 或 Windows Popen）+ 至少一条特征串。"""
+    if not hasattr(os, "fork") and sys.platform != "win32":
+        _log(log_path, "start", "跳过：当前平台既无 os.fork 也不是 Windows")
         return False
     if not marks:
         _log(log_path, "start", "跳过：找不到任何引擎特征串")
@@ -246,27 +252,85 @@ def _warn_if_abnormal(log_path: str) -> None:
 
 
 def _spawn(marks: list[str], log_path: str) -> tuple[int, int]:
-    """派生看门狗。返回 (写端 fd, 子进程 pid)；失败返回 (-1, -1)。"""
-    try:
-        r, w = os.pipe()
-        pid = os.fork()
-    except Exception as e:  # noqa: BLE001
-        _log(log_path, "start", f"失败：{e.__class__.__name__}: {e}")
-        return -1, -1
-    if pid == 0:
+    """派生看门狗。返回 (写端 fd/Popen 占位, 子进程 pid)；失败返回 (-1, -1)。
+
+    POSIX：pipe + fork，写端 fd 随主进程消失被内核关闭。
+    Windows：没有 fork，改用 subprocess.Popen(stdin=PIPE) —— 父进程无论怎么死，
+    管道写端都会关，子进程的阻塞读立刻返回 EOF，语义与 fork 版一致。
+    """
+    if hasattr(os, "fork"):
         try:
-            os.close(w)
-            _child_main(r, marks, log_path)
-        finally:
-            os._exit(0)  # 子进程永不返回父流程
-    os.close(r)
-    return w, pid
+            r, w = os.pipe()
+            pid = os.fork()
+        except Exception as e:  # noqa: BLE001
+            _log(log_path, "start", f"失败：{e.__class__.__name__}: {e}")
+            return -1, -1
+        if pid == 0:
+            try:
+                os.close(w)
+                _child_main(r, marks, log_path)
+            finally:
+                os._exit(0)  # 子进程永不返回父流程
+        os.close(r)
+        return w, pid
+    return _spawn_win(marks, log_path)
+
+
+def _spawn_win(marks: list[str], log_path: str) -> tuple[int, int]:
+    """Windows 派生：Popen(stdin=PIPE)，子进程靠 stdin EOF 感知父进程消失。"""
+    global _CHILD_PROC
+    import json  # noqa: PLC0415（仅 Windows 路径用）
+
+    cmd = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        # 源码态：sys.executable 是 python.exe，还要把 launcher 脚本传进去
+        cmd.append(os.path.abspath(sys.argv[0]))
+    env = os.environ.copy()
+    env[_WIN_CHILD_FLAG] = "1"
+    env[_WIN_MARKS_ENV] = json.dumps(marks, ensure_ascii=False)
+    env[_WIN_LOG_ENV] = log_path
+    try:
+        proc = subprocess.Popen(  # noqa: S603（固定参数、无 shell）
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+    except Exception as e:  # noqa: BLE001
+        _log(log_path, "start", f"失败（Popen）：{e.__class__.__name__}: {e}")
+        return -1, -1
+    _CHILD_PROC = proc
+    return _WIN_FD_MARK, proc.pid
+
+
+def child_main_stdin() -> None:
+    """Windows 看门狗子进程主体：阻塞读 stdin 直到父进程消失 → 清理 → 退出。"""
+    import json  # noqa: PLC0415
+
+    t0 = datetime.now()
+    try:
+        marks = json.loads(os.environ.get(_WIN_MARKS_ENV) or "[]")
+    except Exception:  # noqa: BLE001
+        marks = []
+    log_path = os.environ.get(_WIN_LOG_ENV) or ""
+    _log(log_path, "armed", f"等待父进程 EOF（stdin 管道），监视 {len(marks)} 条特征")
+    try:
+        sys.stdin.buffer.read()  # 写端全关才返回：父进程存在期间一直阻塞
+    except Exception:  # noqa: BLE001
+        pass
+    _log(log_path, "eof", "父进程已消失（正常退出 / 被强杀 / 崩溃），开始清理引擎")
+    _reap(marks, log_path)
+    cost = (datetime.now() - t0).total_seconds()
+    _log(log_path, "exit", f"清理完成，存活 {cost:.1f}s 后退出")
+    os._exit(0)
 
 
 def start(markers: list[str] | None = None, log_path: str = "") -> bool:
     """派生看门狗子进程。返回是否成功（失败只影响残留清理，不影响主流程）。"""
     global _WRITE_FD
-    if _WRITE_FD >= 0:
+    if _WRITE_FD >= 0 or _CHILD_PROC is not None:
         return True  # 已启动，幂等
     marks = markers if markers is not None else default_markers()
     if not _can_start(marks, log_path):
@@ -288,12 +352,20 @@ def start(markers: list[str] | None = None, log_path: str = "") -> bool:
 
 def stop(log_path: str = "") -> None:
     """关闭写端：子进程读到 EOF 后清理残留并退出。主进程退出前调用（可选）。"""
-    global _WRITE_FD
-    if _WRITE_FD < 0:
+    global _WRITE_FD, _CHILD_PROC
+    if _WRITE_FD < 0 and _CHILD_PROC is None:
         return
     _log(log_path, "stop", "主进程正常退出，通知看门狗收尾")
-    try:
-        os.close(_WRITE_FD)
-    except OSError:
-        pass
+    if _WRITE_FD >= 0:
+        try:
+            os.close(_WRITE_FD)
+        except OSError:
+            pass
+    if _CHILD_PROC is not None:
+        try:
+            if _CHILD_PROC.stdin is not None:
+                _CHILD_PROC.stdin.close()  # 关写端 → 子进程 EOF → 清理后退出
+        except Exception:  # noqa: BLE001（子进程可能已先退出）
+            pass
+        _CHILD_PROC = None
     _WRITE_FD = -1

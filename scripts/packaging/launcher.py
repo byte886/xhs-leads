@@ -202,6 +202,18 @@ def _acquire_single_instance(data_dir: pathlib.Path) -> bool:
 
 
 def main() -> int:
+    # 看门狗子进程分支（Windows 无 os.fork 时由 watchdog._spawn_win 带环境变量拉起）：
+    # 必须在单实例锁/服务/窗口之前分流，否则子进程会去抢锁、起第二个服务。
+    if os.environ.get("XHS_WD_CHILD") == "1":
+        if not getattr(sys, "_MEIPASS", None):
+            backend = pathlib.Path(__file__).resolve().parents[2] / "backend"
+            if str(backend) not in sys.path:
+                sys.path.insert(0, str(backend))
+        from src import watchdog  # noqa: PLC0415（分支内延迟导入）
+
+        watchdog.child_main_stdin()
+        return 0
+
     data_dir = _data_dir()
     _migrate_legacy_data(data_dir)  # 旧 codex-zhuke 数据目录首次迁移（仅打包态生效）
     data_dir.mkdir(parents=True, exist_ok=True)
