@@ -12,6 +12,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { coverProxy, setTab, toast } from '../store'
 import { apiAiImageFromOutline, apiAiOutline, apiContentTemplates, apiListProfiles, apiUploadImage } from '../api'
 import type { AiProfile, AiOutline, ImageTemplate, TextTemplate } from '../api'
+import { canvasToFile, innerPageDataUrl, renderInnerCanvas } from '../ai/innerPage'
 
 const props = defineProps<{
   open: boolean
@@ -98,221 +99,23 @@ function toProfiles() {
 }
 
 /**
- * 内页真渲染：1242×1656（3:4），按所选图片模板的骨架 + 皮肤 + 大纲正文出图。
- * 预览与「填入发布页」用的是同一张，所见即所得——不画抽象色块。
+ * 内页真渲染已抽到 ../ai/innerPage.ts（骨架 + 皮肤 + 正文 → canvas / dataURL / File）。
+ * 这里只负责把「当前大纲页 + 当前模板」递进去，绘制规则本身不在这。
  */
-const INNER_W = 1242
-const INNER_H = 1656
-const SANS_STACK = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif'
-const SERIF_STACK = '"Songti SC","STSong","SimSun",serif'
-
-/** 按像素宽度折行（中文逐字，遇 \n 强制断行） */
-function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
-  const out: string[] = []
-  let line = ''
-  for (const ch of Array.from(text || '')) {
-    if (ch === '\n') { if (line) out.push(line); line = ''; continue }
-    const next = line + ch
-    if (ctx.measureText(next).width > maxW && line) { out.push(line); line = ch } else line = next
+function innerInput(idx: number) {
+  return {
+    page: outline.value.pages[idx + 1],
+    template: imageTemplates.value.find((x) => x.id === contentLayouts[idx]),
+    index: idx,
   }
-  if (line) out.push(line)
-  return out
 }
 
-/** 圆角矩形路径（不依赖 ctx.roundRect，老 Chromium 也能用） */
-function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2))
-  ctx.beginPath()
-  ctx.moveTo(x + rr, y)
-  ctx.arcTo(x + w, y, x + w, y + h, rr)
-  ctx.arcTo(x + w, y + h, x, y + h, rr)
-  ctx.arcTo(x, y + h, x, y, rr)
-  ctx.arcTo(x, y, x + w, y, rr)
-  ctx.closePath()
-}
-
-/** 把一页大纲按模板骨架画成 3:4 真图，返回 canvas（预览与落盘共用同一绘制结果） */
 function buildInnerCanvas(idx: number): HTMLCanvasElement | null {
-  const tpl = imageTemplates.value.find((x) => x.id === contentLayouts[idx])
-  const page = outline.value.pages[idx + 1]
-  const heading = (page?.heading || '这一页讲什么').trim()
-  const copy = (page?.copy || '').trim()
-  const skin = tpl?.skin
-  const bg = skin?.bg || '#f7f2ec'
-  const primary = skin?.primary || '#e22a43'
-  const skeleton = tpl?.skeleton || 'card'
-  const radius = skin?.radius ?? 8
-  const centered = skin?.align === 'center'
-  const font = skin?.font === 'serif' ? SERIF_STACK : SANS_STACK
-
-  const cv = document.createElement('canvas')
-  cv.width = INNER_W
-  cv.height = INNER_H
-  const ctx = cv.getContext('2d')
-  if (!ctx) return null
-
-  ctx.fillStyle = bg
-  ctx.fillRect(0, 0, INNER_W, INNER_H)
-
-  const pad = 108
-  const innerW = INNER_W - pad * 2
-  const x = centered ? INNER_W / 2 : pad
-  ctx.textAlign = centered ? 'center' : 'left'
-  ctx.textBaseline = 'alphabetic'
-
-  const paint = (lines: string[], startY: number, size: number, gap: number) => {
-    lines.forEach((l, i) => ctx.fillText(l, x, startY + i * (size + gap)))
-    return startY + (lines.length - 1) * (size + gap)
-  }
-  const headingLines = (size: number) => {
-    ctx.fillStyle = primary
-    ctx.font = `700 ${size}px ${font}`
-    return wrapText(ctx, heading, innerW).slice(0, 2)
-  }
-  const copyLines = (size: number, alpha: number, max: number) => {
-    ctx.globalAlpha = alpha
-    ctx.fillStyle = primary
-    ctx.font = `400 ${size}px ${font}`
-    const ls = wrapText(ctx, copy, innerW).slice(0, max)
-    ctx.globalAlpha = 1
-    return ls
-  }
-
-  // 页眉编号：三张内页带一致的序号，看起来是一套
-  if (skin?.number !== false) {
-    ctx.globalAlpha = 0.55
-    ctx.fillStyle = primary
-    ctx.font = `600 36px ${font}`
-    ctx.fillText(`${String(idx + 1).padStart(2, '0')} / 03`, x, pad)
-    ctx.globalAlpha = 1
-  }
-
-  if (skeleton === 'num') {
-    // 大数字：巨型序号当主视觉，标题与正文压在下面，别让下半页空着
-    ctx.globalAlpha = 0.9
-    ctx.fillStyle = primary
-    ctx.font = `700 330px ${font}`
-    ctx.fillText(String(idx + 1).padStart(2, '0'), x, 560)
-    ctx.globalAlpha = 1
-    paint(headingLines(104), 740, 104, 26)
-    paint(copyLines(54, 0.74, 5), 940, 54, 84)
-  } else if (skeleton === 'list') {
-    // 清单：标题在上，正文按句拆成带圆点的条目
-    paint(headingLines(84), 300, 84, 24)
-    const rows = (copy || '条目一。条目二。条目三。').split(/[。；;]/).filter(Boolean).slice(0, 4)
-    ctx.font = `400 48px ${font}`
-    rows.forEach((row, i) => {
-      const y = 480 + i * 150
-      ctx.globalAlpha = 0.85
-      ctx.fillStyle = primary
-      ctx.beginPath()
-      ctx.arc(centered ? pad : pad + 12, y - 16, 12, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.globalAlpha = 0.78
-      const ls = wrapText(ctx, row.trim(), centered ? innerW - 48 : innerW - 56).slice(0, 2)
-      ls.forEach((l, k) => ctx.fillText(l, centered ? INNER_W / 2 : pad + 56, y + k * 70))
-      ctx.globalAlpha = 1
-    })
-  } else if (skeleton === 'card') {
-    // 卡片：正文装进一张圆角块
-    paint(headingLines(84), 280, 84, 24)
-    const boxY = 420
-    const boxH = INNER_H - boxY - pad - 60
-    ctx.globalAlpha = 0.16
-    ctx.fillStyle = primary
-    roundRectPath(ctx, pad, boxY, innerW, boxH, radius * 3)
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.textAlign = 'left'
-    ctx.fillStyle = primary
-    ctx.font = `400 54px ${font}`
-    const body = wrapText(ctx, copy, innerW - 96).slice(0, 8)
-    body.forEach((l, i) => ctx.fillText(l, pad + 48, boxY + 96 + i * 84))
-    ctx.textAlign = centered ? 'center' : 'left'
-  } else if (skeleton === 'compare') {
-    // 对比：左右两栏，左标题右正文，中间一条竖线
-    const colW = (innerW - 60) / 2
-    ctx.globalAlpha = 0.14
-    ctx.fillStyle = primary
-    roundRectPath(ctx, pad, 300, colW, INNER_H - 300 - pad - 60, radius * 3)
-    ctx.fill()
-    roundRectPath(ctx, pad + colW + 60, 300, colW, INNER_H - 300 - pad - 60, radius * 3)
-    ctx.fill()
-    ctx.globalAlpha = 1
-    ctx.textAlign = 'left'
-    ctx.fillStyle = primary
-    ctx.font = `700 68px ${font}`
-    wrapText(ctx, heading, colW - 64).slice(0, 3)
-      .forEach((l, i) => ctx.fillText(l, pad + 32, 400 + i * 96))
-    ctx.font = `400 46px ${font}`
-    ctx.globalAlpha = 0.8
-    wrapText(ctx, copy, colW - 64).slice(0, 8)
-      .forEach((l, i) => ctx.fillText(l, pad + colW + 92, 400 + i * 76))
-    ctx.globalAlpha = 1
-    ctx.textAlign = centered ? 'center' : 'left'
-  } else if (skeleton === 'split') {
-    // 分屏：上 40% 色块压标题（反白），下半留正文
-    ctx.fillStyle = primary
-    ctx.fillRect(0, 0, INNER_W, Math.round(INNER_H * 0.4))
-    ctx.fillStyle = bg
-    ctx.font = `700 104px ${font}`
-    wrapText(ctx, heading, innerW).slice(0, 2)
-      .forEach((l, i) => ctx.fillText(l, x, 250 + i * 130))
-    ctx.fillStyle = primary
-    paint(copyLines(54, 0.8, 6), Math.round(INNER_H * 0.4) + 160, 54, 30)
-  } else {
-    // quote 金句：正文当大字居中，上下引号
-    ctx.fillStyle = primary
-    ctx.globalAlpha = 0.25
-    ctx.font = `700 220px ${font}`
-    ctx.fillText('\u201c', x, 460)
-    ctx.globalAlpha = 1
-    ctx.font = `700 88px ${font}`
-    const body = wrapText(ctx, copy || heading, innerW - 40).slice(0, 6)
-    body.forEach((l, i) => ctx.fillText(l, x, 620 + i * 130))
-    ctx.globalAlpha = 0.6
-    ctx.font = `600 44px ${font}`
-    wrapText(ctx, heading, innerW).slice(0, 2).forEach((l, i) => ctx.fillText(l, x, 1160 + i * 66))
-    ctx.globalAlpha = 1
-  }
-
-  // 页脚：模板名 + 分隔线，让整套图有署名感
-  if (skin?.divider !== false) {
-    ctx.globalAlpha = 0.22
-    ctx.strokeStyle = primary
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.moveTo(pad, INNER_H - 150)
-    ctx.lineTo(INNER_W - pad, INNER_H - 150)
-    ctx.stroke()
-    ctx.globalAlpha = 0.55
-    ctx.fillStyle = primary
-    ctx.font = `500 32px ${font}`
-    ctx.fillText(tpl?.name || '内容模板', x, INNER_H - pad)
-    ctx.globalAlpha = 1
-  }
-
-  return cv
-}
-
-/** 即时预览：canvas 转 dataURL，改模板/大纲时由 computed 整体重算 */
-function renderInnerPage(idx: number): string {
-  const cv = buildInnerCanvas(idx)
-  return cv ? cv.toDataURL('image/png') : ''
+  return renderInnerCanvas(innerInput(idx))
 }
 
 /** 3 张内页预览：内容/模板/大纲一变就整体重算，避免重复渲染 */
-const innerPreviews = computed(() => contentLayouts.map((_, i) => renderInnerPage(i)))
-
-/** canvas → PNG File（toBlob 是异步的，包一层 Promise） */
-function canvasToFile(cv: HTMLCanvasElement, idx: number): Promise<File> {
-  return new Promise((resolve, reject) => {
-    cv.toBlob((blob) => {
-      if (!blob) { reject(new Error('第 ' + (idx + 1) + ' 张内页导出失败')); return }
-      resolve(new File([blob], `inner_${idx + 1}.png`, { type: 'image/png' }))
-    }, 'image/png')
-  })
-}
+const innerPreviews = computed(() => contentLayouts.map((_, i) => innerPageDataUrl(innerInput(i))))
 
 /**
  * 把 3 张内页 canvas 走上传接口落盘成真实文件（/app/images/...），返回持久路径。
