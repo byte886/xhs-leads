@@ -36,10 +36,6 @@ export async function apiLoginBegin(force = false): Promise<{ ok: boolean; alrea
   }))
 }
 
-export async function apiLoginCancel(): Promise<{ ok: boolean }> {
-  return j(await fetch(`${BASE}/api/auth/login_cancel`, { method: 'POST' }))
-}
-
 export async function apiLicenseStatus(): Promise<{ ok: boolean; status: LicenseStatus }> {
   return j(await fetch(`${BASE}/api/license_status`))
 }
@@ -133,48 +129,7 @@ export async function apiFillXhs(payload: {
   }))
 }
 
-export async function apiPublish(payload: {
-  title: string
-  desc: string
-  tags: string[]
-  images: string[]
-  visible: string
-  account?: string
-}): Promise<{ ok: boolean; note?: string; [k: string]: unknown }> {
-  return j(await fetch(`${BASE}/api/publish`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }))
-}
-
-export async function apiSaveDraft(payload: {
-  title: string
-  desc: string
-  tags: string[]
-  images: string[]
-  visible: string
-  feed_id?: string
-}): Promise<{ ok: boolean; note?: string; [k: string]: unknown }> {
-  return j(await fetch(`${BASE}/api/save_draft`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }))
-}
-
-export async function apiLogs(): Promise<LogItem[]> {
-  const d = await j<{ logs: LogItem[] }>(await fetch(`${BASE}/api/publish_logs`))
-  return d.logs || []
-}
-
 /** 一次同步全量：创作者中心「笔记管理」里每条笔记的浏览/评/赞/藏/转 + 与上次的增量。 */
-export async function apiPublishStatsSync(): Promise<{
-  ok: boolean; total?: number; matched?: unknown[]; unmatched?: unknown[]; detail?: string
-}> {
-  return j(await fetch(`${BASE}/api/publish_stats_sync`, { method: 'POST' }))
-}
-
 // ---- R 批 v1.4：镜像层（登录小窗 / 调试视图共用 CDP 桥） ----
 /** 登录小窗/调试视图打开：确保引擎打开小红书登录页（截图流/事件转发的目标页就绪） */
 export async function apiMirrorOpen(account = 'default'): Promise<{ ok: boolean; account?: string; note?: string; error?: string }> {
@@ -272,18 +227,6 @@ export interface DraftItem {
   visibility: string
   images: string[]
   created_at: string
-}
-
-export async function apiDrafts(): Promise<{ ok: boolean; total: number; drafts: DraftItem[] }> {
-  return j(await fetch(`${BASE}/api/drafts`))
-}
-
-export async function apiDraftDelete(id: number): Promise<{ ok: boolean; note?: string }> {
-  return j(await fetch(`${BASE}/api/draft_delete`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
-  }))
 }
 
 
@@ -503,13 +446,10 @@ export async function apiSaveImageTemplate(t: ImageTemplate): Promise<{ ok: bool
 export async function apiDeleteTemplate(kind: 'text' | 'image', id: string): Promise<{ ok: boolean }> {
   return j(await fetch(`${BASE}/api/content_templates/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE' }))
 }
-export async function apiResetTemplates(): Promise<{ ok: boolean; text: TextTemplate[]; image: ImageTemplate[] }> {
-  return j(await fetch(`${BASE}/api/content_templates/reset`, { method: 'POST' }))
-}
+
 export async function apiResetTemplateGroup(kind: 'text' | 'image'): Promise<{ ok: boolean; text: TextTemplate[]; image: ImageTemplate[] }> {
   return j(await fetch(`${BASE}/api/content_templates/reset/${kind}`, { method: 'POST' }))
 }
-
 // ---- AI 大纲（一句话 → 标题/正文/标签/分页文案） ----
 export interface OutlinePage {
   type: 'cover' | 'content' | string
@@ -531,19 +471,6 @@ export async function apiAiOutline(payload: { profile_id: string; structure: str
 }
 
 // ---- 一键生成（生文 + 逐页生图，1 封面 + 3 内容图） ----
-export async function apiAiGenerateNote(payload: {
-  profile_id: string
-  structure: string
-  word_count?: number
-  note: Record<string, string>
-}): Promise<{ ok: boolean; outline: AiOutline; images: string[] }> {
-  return j(await fetch(`${BASE}/api/ai_generate_note`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }))
-}
-
 // ---- 按已编辑大纲逐页生图（人改完大纲再配图） ----
 export async function apiAiImageFromOutline(payload: {
   profile_id: string

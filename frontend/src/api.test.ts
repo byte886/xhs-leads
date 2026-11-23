@@ -41,13 +41,11 @@ function okRes(body: any) {
 describe('api 端点契约（表驱动）', () => {
   afterEach(() => { vi.unstubAllGlobals() })
   const cases: Array<[string, string, string, () => Promise<unknown> | unknown]> = [
-    ['apiLoginCancel', '/api/auth/login_cancel', 'POST', () => api.apiLoginCancel()],
     ['apiLicenseStatus', '/api/license_status', 'GET', () => api.apiLicenseStatus()],
     ['apiNotes', '/api/notes?keyword=', 'GET', () => api.apiNotes('翡翠')],
     ['apiAuthors', '/api/authors', 'GET', () => api.apiAuthors()],
     ['apiClientsList', '/api/clients_list', 'GET', () => api.apiClientsList()],
     ['apiClone', '/api/clone', 'POST', () => api.apiClone('f1')],
-    ['apiLogs', '/api/publish_logs', 'GET', () => api.apiLogs()],
     ['apiMirrorOpen', '/api/mirror/open', 'POST', () => api.apiMirrorOpen()],
     ['apiMirrorClose', '/api/mirror/close', 'POST', () => api.apiMirrorClose('acc_a')],
     ['apiListAccounts', '/api/accounts', 'GET', () => api.apiListAccounts()],
@@ -55,8 +53,6 @@ describe('api 端点契约（表驱动）', () => {
     ['apiDeleteAccount', '/api/accounts/acc_a', 'DELETE', () => api.apiDeleteAccount('acc_a')],
     ['apiStatusNow', '/api/status_now', 'GET', () => api.apiStatusNow()],
     ['apiCleanupImages', '/api/cleanup_images', 'POST', () => api.apiCleanupImages()],
-    ['apiDrafts', '/api/drafts', 'GET', () => api.apiDrafts()],
-    ['apiDraftDelete', '/api/draft_delete', 'POST', () => api.apiDraftDelete(3)],
     ['apiGetLLMConfig', '/api/llm_config', 'GET', () => api.apiGetLLMConfig()],
     ['apiClearLLMConfig', '/api/llm_config/clear', 'POST', () => api.apiClearLLMConfig()],
   ]
@@ -250,10 +246,8 @@ describe('AI 图文模块 API 契约（表驱动）', () => {
     ['apiSaveTextTemplate', '/api/content_templates/text', 'POST', () => api.apiSaveTextTemplate({} as any)],
     ['apiSaveImageTemplate', '/api/content_templates/image', 'POST', () => api.apiSaveImageTemplate({} as any)],
     ['apiDeleteTemplate', '/api/content_templates/text/t1', 'DELETE', () => api.apiDeleteTemplate('text', 't1')],
-    ['apiResetTemplates', '/api/content_templates/reset', 'POST', () => api.apiResetTemplates()],
     ['apiResetTemplateGroup', '/api/content_templates/reset/image', 'POST', () => api.apiResetTemplateGroup('image')],
     ['apiAiOutline', '/api/ai_outline', 'POST', () => api.apiAiOutline(outlinePayload)],
-    ['apiAiGenerateNote', '/api/ai_generate_note', 'POST', () => api.apiAiGenerateNote(outlinePayload)],
     ['apiAiImageFromOutline', '/api/ai_image_from_outline', 'POST',
       () => api.apiAiImageFromOutline({ profile_id: 'p1', pages: [minPage] })],
   ]
