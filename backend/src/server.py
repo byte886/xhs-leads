@@ -2300,9 +2300,12 @@ async def collect_clients(req: ClientsReq):
     added = 0
     for u in users:
         cur = con.execute(
-            "INSERT OR IGNORE INTO clients "
+            "INSERT INTO clients "
             "(uid, feed_id, nickname, comment, profile, created_at, intent, matched_word, ip_location, comment_time) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(uid, feed_id, comment) DO UPDATE SET "
+            "intent=excluded.intent, matched_word=excluded.matched_word, "
+            "ip_location=excluded.ip_location, comment_time=excluded.comment_time",
             (
                 u.get("uid", ""), req.feed_id, u.get("nickname", ""), u.get("comment", ""),
                 u.get("profile", ""), ts, u.get("intent", "low"), u.get("matched_word", ""),

@@ -18,6 +18,14 @@ def test_high_contact_variants():
         assert r["matched_word"], (c, r)
 
 
+def test_high_contact_question():
+    """真机实测：评论「怎么联系」被判低意向，词典要认这类问法。"""
+    for c in ("怎么联系", "联系方式发我", "方便的话联系我", "能联系一下吗"):
+        r = grade_comment(c)
+        assert r["intent"] == "high", (c, r)
+        assert r["matched_word"], (c, r)
+
+
 def test_high_price_buy():
     for c in ("多少钱", "这个价格多少", "怎么买", "哪里买", "想下单", "已买", "怎么预订"):
         r = grade_comment(c)
