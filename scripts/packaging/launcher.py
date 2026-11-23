@@ -379,7 +379,11 @@ def main() -> int:
         try:
             from src import engine_pool  # noqa: PLC0415
 
-            await engine_pool.pool.close_all()
+            # 关窗退出必须有上限：Windows 上 Playwright 的 ctx.close() 偶尔卡住
+            # （扩展开的采集窗/浏览器无响应），没有超时就会「窗口都关了、进程还在」。
+            await asyncio.wait_for(engine_pool.pool.close_all(), timeout=12)
+        except asyncio.TimeoutError:
+            print("[xhs-leads] 引擎清理超时（12s），不再等，直接退出", file=sys.stderr)
         except Exception as e:  # noqa: BLE001（清理失败不影响主退出）
             print(f"[xhs-leads] 引擎清理异常: {e!r}", file=sys.stderr)
 
@@ -401,8 +405,12 @@ def main() -> int:
         _wd.stop(log_path=os.path.join(str(config.DATA_DIR), "watchdog.log"))
     except Exception:  # noqa: BLE001
         pass
-    print("[xhs-leads] 已退出")
-    return 0
+    print("[xhs-leads] 已退出", flush=True)
+    # 兜底强制退出：Playwright 内部线程/扩展残留可能拖住解释器收尾，
+    # 会出现「窗口都关了、进程还在」只能任务管理器杀。日志已 flush，直接硬退。
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":

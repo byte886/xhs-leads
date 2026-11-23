@@ -290,3 +290,40 @@ class TestLaunchApplyGeolocation:
             self._engine()._launch_apply_geolocation(kwargs)
             assert "geolocation" in kwargs
             assert kwargs["permissions"] == ["geolocation"]
+
+
+class TestBrowserProcessAlive:
+    """关窗退出判定用：按 profile 查浏览器进程（区分用户关窗 / 引擎崩溃）。"""
+
+    class _Dummy:
+        user_data_dir = r"C:\Users\x\AppData\Local\xhs-leads\data\accounts\default"
+
+    def test_non_windows_returns_none(self, monkeypatch):
+        monkeypatch.setattr(engine_pool.os, "name", "posix")
+        assert engine_pool.AccountEngine.browser_process_alive(self._Dummy()) is None
+
+    def test_profile_match_true(self, monkeypatch):
+        class P:
+            def __init__(self, cmd):
+                self.info = {"pid": 1, "cmdline": cmd}
+
+        class FakePS:
+            @staticmethod
+            def process_iter(fields):
+                return [P(["chrome.exe", "--user-data-dir=C:\\Users\\x\\AppData\\Local\\xhs-leads\\data\\accounts\\default"])]
+
+        import sys
+        monkeypatch.setattr(engine_pool.os, "name", "nt")
+        monkeypatch.setitem(sys.modules, "psutil", FakePS)
+        assert engine_pool.AccountEngine.browser_process_alive(self._Dummy()) is True
+
+    def test_no_process_false(self, monkeypatch):
+        class FakePS:
+            @staticmethod
+            def process_iter(fields):
+                return []
+
+        import sys
+        monkeypatch.setattr(engine_pool.os, "name", "nt")
+        monkeypatch.setitem(sys.modules, "psutil", FakePS)
+        assert engine_pool.AccountEngine.browser_process_alive(self._Dummy()) is False

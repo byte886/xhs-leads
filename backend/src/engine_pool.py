@@ -369,6 +369,32 @@ class AccountEngine:
         except Exception:  # noqa: BLE001（连接检测异常视同断开）
             return False
 
+    def browser_process_alive(self) -> bool | None:
+        """浏览器进程还在不在：True/False；无法判定返回 None（非 Windows 或没装 psutil）。
+
+        为什么需要它：用户把采集窗和主窗都关掉时，Chrome 是**正常退出**，Playwright
+        连接随之断开——和「引擎崩溃」在 is_connected_now() 上表现一模一样。
+        只看连接会把它当成崩溃、跳过退出，留下无窗口的空进程（用户只能在任务管理器
+        里杀）。这里按 profile 命令行查进程，进程没了就说明是用户关窗而非崩溃。
+        """
+        if os.name != "nt":
+            return None
+        try:
+            import psutil  # noqa: PLC0415（仅 Windows 需要）
+        except Exception:  # noqa: BLE001
+            return None
+        needle = str(getattr(self, "user_data_dir", "") or "").lower()
+        if not needle:
+            return None
+        try:
+            for p in psutil.process_iter(["pid", "cmdline"]):
+                cmd = " ".join(p.info["cmdline"] or []).lower()
+                if needle in cmd:
+                    return True
+        except Exception:  # noqa: BLE001（枚举失败：无法判定）
+            return None
+        return False
+
     def mark_fake_dead(self) -> None:
         """CDP 假死标记（保持级，用户拍板分级策略）——只标记不释放。
 

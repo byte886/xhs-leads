@@ -358,3 +358,56 @@ def test_current_shell_page_none_before_keeper(monkeypatch):
 def test_keeper_collect_target_is_login_page():
     assert asyncio.run(
         sw._keeper_collect_target_url(None, None)) == sw._LOGIN_PAGE_URL
+
+
+# ------------------------------- 关窗退出：断开连接要区分「用户关窗」与「引擎崩溃」
+
+def _account(connected: bool, proc_alive, rebuilt: float = 1e18):
+    class _Acc:
+        def __init__(self):
+            self._c = connected
+            self._p = proc_alive
+
+        def rebuild_age(self):
+            return rebuilt
+
+        def is_connected_now(self):
+            return self._c
+
+        def browser_process_alive(self):
+            return self._p
+
+    return _Acc()
+
+
+def _coord_with(account):
+    class _Pool:
+        async def get(self, k="default"):
+            return account
+
+    c = sw.WindowCoordinator()
+    c.attach_engine(_Pool())
+    return c
+
+
+def test_engine_gone_counts_as_user_close():
+    """采集窗+主窗都关掉 → Chrome 正常退出（连接断了但进程没了）：必须退出应用。"""
+    c = _coord_with(_account(connected=False, proc_alive=False))
+    assert asyncio.run(c._engine_alive_after_close()) is True
+
+
+def test_engine_crash_still_skips_exit():
+    """进程还在、连接断了 = 引擎崩溃：跳过退出，交给 keeper 重建（旧行为不变）。"""
+    c = _coord_with(_account(connected=False, proc_alive=True))
+    assert asyncio.run(c._engine_alive_after_close()) is False
+
+
+def test_engine_alive_false_when_process_unknown():
+    """判定不了（非 Windows / 没 psutil，返回 None）时保守不退出。"""
+    c = _coord_with(_account(connected=False, proc_alive=None))
+    assert asyncio.run(c._engine_alive_after_close()) is False
+
+
+def test_engine_connected_exits():
+    c = _coord_with(_account(connected=True, proc_alive=True))
+    assert asyncio.run(c._engine_alive_after_close()) is True

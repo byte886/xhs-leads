@@ -444,6 +444,17 @@ class WindowCoordinator:
                 log.warning("壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出")
                 return False
             if not account.is_connected_now():
+                # 连接断开有两种起因：引擎崩溃，或用户把采集窗+主窗都关了 → Chrome 正常退出。
+                # 后者必须照样退出应用，否则留下一个没有窗口的空进程（用户只能在任务管理器里杀）。
+                # 判定依据：按 profile 查浏览器进程，进程已经没了就是用户关窗。
+                proc_alive = None
+                try:
+                    proc_alive = account.browser_process_alive()
+                except Exception:  # noqa: BLE001（判定不可用：保守维持旧行为）
+                    proc_alive = None
+                if proc_alive is False:
+                    log.info("壳窗 close 校验：浏览器进程已退出（用户关掉全部窗口），按用户关闭退出")
+                    return True
                 log.warning("壳窗 close 校验：引擎连接已断开（崩溃），跳过退出")
                 return False
         except Exception:  # noqa: BLE001（对象无校验方法/异常：无法确认引擎状态，保守不退出）
