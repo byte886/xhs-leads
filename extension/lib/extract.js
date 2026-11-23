@@ -117,7 +117,7 @@ function xhsExtractNoteDetail(root = document) {
   // 含 interactInfo{likedCount/collectedCount/commentCount/shareCount} + time(毫秒) + user.userId，
   // 无需签名接口，比 DOM 抓取更可靠（新版详情页互动计数不在静态 DOM 文本中）。
   let interact = null, pubTimeMs = null, noteId = null, authorUserId = null, authorNick = '';
-  let authorAvatar = '', ssrAvatar = '', ssrNote = null;
+  let authorAvatar = '', ssrAvatar = '', ssrNote = null, ssrImgs = [];
   try {
     const st = window.__INITIAL_STATE__ || {};
     const detailMap = (st.note && st.note.noteDetailMap) || {};
@@ -137,6 +137,20 @@ function xhsExtractNoteDetail(root = document) {
       authorUserId = (cur.user && cur.user.userId) || null;
       authorNick = (cur.user && cur.user.nickname) || '';
       ssrAvatar = (cur.user && cur.user.avatar) || '';
+      // 正文图权威来源：SSR imageList（网页 DOM 图是懒加载的，刚打开详情页时常为空 src，
+      // 旧逻辑只认 DOM，高赞笔记克隆就拿到 0 张图）。urlDefault/urlPre 是带签名的实时地址。
+      const seenSsr = new Set();
+      ssrImgs = (Array.isArray(cur.imageList) ? cur.imageList : [])
+        .map((it) => (it && (it.urlDefault || it.urlPre)) || '')
+        .map((u) => u.replace(/^http:\/\/sns-/, 'https://sns-'))
+        .filter((u) => u && IMG_HOST.test(u) && !IMG_EXCLUDE.test(u))
+        .filter((u) => {
+          const k = norm(u);
+          if (seenSsr.has(k)) return false;
+          seenSsr.add(k);
+          return true;
+        })
+        .slice(0, 9);
     }
   } catch (e) { /* 拿不到就走空值 */ }
   // 类型判定：SSR 的 note.type 是平台自己的分类（normal=图文 / video=视频），优先采信；
@@ -191,7 +205,8 @@ function xhsExtractNoteDetail(root = document) {
     desc: descEl ? descEl.innerText.trim() : '',
     author: authorEl ? authorEl.innerText.trim() : '',
     date: dateEl ? dateEl.innerText.trim() : '',
-    imgs,
+    imgs: (ssrImgs.length ? ssrImgs : imgs),
+    img_source: ssrImgs.length ? 'ssr' : (imgs.length ? 'dom' : 'none'),
     type: isVideo ? 'video' : 'note',
     video_url: videoUrl,
     live_photo: livePhotoImgs.length,

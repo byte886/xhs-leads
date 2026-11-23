@@ -243,6 +243,8 @@ def _init_tables(con):
     # 实况图（动图，页面 LIVE 角标）：类型仍是图文，单独记张数与原片地址（JSON 数组）
     _add_column_if_missing(con, "notes", "live_photo", "INTEGER")
     _add_column_if_missing(con, "notes", "live_videos", "TEXT")
+    # 采集时拿到的详情图（JSON 数组）：一键克隆优先用这份，避免克隆时再去开详情页
+    _add_column_if_missing(con, "notes", "detail_imgs", "TEXT")
     # 存草稿（长期保留资产；区别于搜索/采集结果——用完即失效）
     con.execute("""
         CREATE TABLE IF NOT EXISTS drafts (
@@ -926,8 +928,8 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
             " nickname, avatar, cover_url, xsec_token, desc, ip_location, liked_count,"
             " collected_count, comment_count, shared_count, fans_count, publish_time,"
             " score, tag, fan_ratio, fetched_at, score_info, video_url, account_id, origin,"
-            " hot_score, hot_info, live_photo, live_videos)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " hot_score, hot_info, live_photo, live_videos, detail_imgs)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
                 n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
@@ -942,6 +944,7 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
                 hi["score"], json.dumps(hi, ensure_ascii=False),
                 int(n.get("live_photo") or 0),
                 json.dumps(n.get("live_videos") or [], ensure_ascii=False),
+                json.dumps(n.get("detail_imgs") or [], ensure_ascii=False),
             ),
         )
         return True
@@ -2125,13 +2128,31 @@ def _download_video(feed_id: str, url: str) -> str:
         return ""
 
 
+def _norm_img_urls(v) -> list:
+    """把库里存的 JSON 字符串或列表统一成去空白的 URL 列表。"""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v or "[]")
+        except Exception:  # noqa: BLE001
+            v = []
+    if not isinstance(v, list):
+        return []
+    return [u.strip() for u in v if isinstance(u, str) and u.strip()]
+
+
 async def _collect_images(n: dict, feed_id: str) -> list:
-    """克隆用：取详情图片列表（本地浏览器提取，失败回退封面）。返回图片 URL 列表。"""
+    """克隆用：取详情图片列表（本地浏览器提取，取不到才回退库里封面）。
+
+    两个坑（真机实测：高赞图文笔记克隆出 0 张图）：
+    1. 库里 cover_url 是采集当时的签名地址，隔几天必然 403 —— 只能当兜底，不能当主路径；
+    2. 详情页 DOM 图懒加载，刚打开时 src 为空 —— 所以取图以详情返回的列表为准，
+       并在这里把空串/空白串过滤掉，别让空地址流到下载环节变成 [''] 这种假结果。
+    """
     images = []
     try:
         dn = dict(n)
         dn = await get_feed_detail(dn)
-        imgs = dn.get("detail_imgs") or []
+        imgs = _norm_img_urls(dn.get("detail_imgs"))
         if imgs:
             images = imgs
             if dn.get("desc"):
@@ -2140,13 +2161,22 @@ async def _collect_images(n: dict, feed_id: str) -> list:
                 n["title"] = dn.get("title")
     except Exception:  # noqa: BLE001
         pass
-    if not images and n.get("cover_url"):
-        images = [n["cover_url"]]
+    if not images:
+        # 克隆时常常没有活动搜索页（规则也不许直接按 URL 开详情），详情取不到；
+        # 采集那一刻的详情图已经存进库，签名还有效，用它比用封面靠谱得多。
+        images = _norm_img_urls(n.get("detail_imgs"))
+    if not images:
+        cover = (n.get("cover_url") or "").strip()
+        if cover:
+            images = [cover]
+    log.info("克隆取图：source=%s urls=%d feed=%s", n.get("img_source") or "-", len(images), feed_id)
     return images
 
 
 def _download_image(feed_id: str, idx: int, url: str) -> str:
-    """克隆用：下载单张图到本地。返回可访问路径（失败/装饰性小图返回空串）。"""
+    """克隆用：下载单张图到本地。返回可访问路径（失败/非图片响应/装饰性小图返回空串）。"""
+    if not url or not str(url).startswith("http"):
+        return ""
     fname = _img_name(feed_id, suffix=f"p{idx}")
     dest = IMAGES_DIR / fname
     try:
@@ -2156,6 +2186,9 @@ def _download_image(feed_id: str, idx: int, url: str) -> str:
                 headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
             )
             with urllib.request.urlopen(reqh, timeout=20) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if not ctype.startswith("image/"):
+                    return ""  # 过期签名地址常返回 403/HTML，不算图
                 dest.write_bytes(resp.read())
         # 装饰性小图（头像/图标 2-4KB）兜底过滤：正文原图一般 ≥50KB，<20KB 判定为非正文图
         if dest.exists() and dest.stat().st_size < 20 * 1024:
@@ -2167,9 +2200,13 @@ def _download_image(feed_id: str, idx: int, url: str) -> str:
 
 
 def _download_images(feed_id: str, images: list) -> list:
-    """克隆用：并行下载图片（≤9 张）。返回本地路径列表。"""
+    """克隆用：并行下载图片（≤9 张）。返回本地路径列表（失败的图不占位）。"""
+    urls = [u for u in images[:9] if isinstance(u, str) and u.strip()]
     with ThreadPoolExecutor(max_workers=6) as ex:
-        return list(ex.map(lambda p: _download_image(feed_id, p[0], p[1]), enumerate(images[:9])))
+        paths = list(ex.map(lambda p: _download_image(feed_id, p[0], p[1]), enumerate(urls)))
+    ok = [p for p in paths if p]
+    log.info("克隆下载：尝试=%d 成功=%d feed=%s", len(urls), len(ok), feed_id)
+    return ok
 
 
 # ================= 采集客户（P4） =================

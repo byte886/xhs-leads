@@ -489,6 +489,77 @@ class TestDownloadImages:
 
 
 
+class TestCloneImageCollect:
+    """克隆取图回归：库里封面是过期签名地址（403）、详情 DOM 图懒加载（空 src）。
+
+    真机故障：高赞图文笔记克隆出 0 张图，接口返回 images_local=['']。
+    """
+
+    def test_collect_images_filters_blank_and_prefers_detail(self, monkeypatch):
+        async def fake_detail(n):
+            n["detail_imgs"] = ["http://img/1", "", "   ", None]
+            return n
+
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        got = asyncio.run(server._collect_images({"cover_url": "http://cover/1"}, "f1"))
+        assert got == ["http://img/1"]
+
+    def test_collect_images_falls_back_to_cover_when_detail_blank(self, monkeypatch):
+        async def fake_detail(n):
+            n["detail_imgs"] = ["", None]
+            return n
+
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        got = asyncio.run(server._collect_images({"cover_url": "http://cover/1"}, "f1"))
+        assert got == ["http://cover/1"]
+
+    def test_collect_images_detail_failure_then_cover(self, monkeypatch):
+        async def boom(n):
+            raise RuntimeError("详情页打不开")
+
+        monkeypatch.setattr(server, "get_feed_detail", boom)
+        got = asyncio.run(server._collect_images({"cover_url": "http://cover/1"}, "f1"))
+        assert got == ["http://cover/1"]
+
+    def test_collect_images_no_cover_no_detail(self, monkeypatch):
+        async def fake_detail(n):
+            n["detail_imgs"] = []
+            return n
+
+        monkeypatch.setattr(server, "get_feed_detail", fake_detail)
+        assert asyncio.run(server._collect_images({"cover_url": ""}, "f1")) == []
+
+    def test_collect_images_uses_stored_detail_imgs(self, monkeypatch):
+        async def boom(n):
+            raise RuntimeError("克隆时没有活动搜索页，详情跳过")
+
+        monkeypatch.setattr(server, "get_feed_detail", boom)
+        got = asyncio.run(server._collect_images(
+            {"cover_url": "http://cover/1", "detail_imgs": '["http://img/1","http://img/2"]'}, "f1"))
+        assert got == ["http://img/1", "http://img/2"]
+
+    def test_collect_images_ignores_bad_stored_json(self, monkeypatch):
+        async def boom(n):
+            raise RuntimeError("no page")
+
+        monkeypatch.setattr(server, "get_feed_detail", boom)
+        got = asyncio.run(server._collect_images(
+            {"cover_url": "http://cover/1", "detail_imgs": "not-json"}, "f1"))
+        assert got == ["http://cover/1"]
+
+    def test_download_images_drops_failed_and_blank(self, monkeypatch):
+        monkeypatch.setattr(
+            server, "_download_image",
+            lambda fid, idx, url: "/app/images/a.jpg" if url.endswith("good") else "",
+        )
+        got = server._download_images("f1", ["http://good", "", "   ", "http://bad"])
+        assert got == ["/app/images/a.jpg"]
+
+    def test_download_image_rejects_non_http_url(self):
+        assert server._download_image("f1", 0, "") == ""
+        assert server._download_image("f1", 1, "cover.jpg") == ""
+
+
 class TestClone:
     def test_clone_404(self, client):
         r = client.post("/api/clone", json={"feed_id": "nope"})

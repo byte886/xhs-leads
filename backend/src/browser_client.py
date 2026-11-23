@@ -874,6 +874,13 @@ async def _search_by_typing(page, keyword: str, account_id: str) -> bool:
     await cdp_call(page.keyboard.press("Enter"), timeout=CDP_QUICK, label="search.enter")
     arrived = await _wait_search_result_url(page)
     if not arrived:
+        # 回车没反应（新版首页光标在文字区，回车只换行）：改点搜索按钮/联想首项
+        sub = await cdp_call(page.evaluate(_SUBMIT_SEARCH_JS), timeout=CDP_EVAL,
+                             label="search.submit", skip=True)
+        if sub:
+            log.info("回车未跳转，改用点击提交（%s）", sub)
+            arrived = await _wait_search_result_url(page, timeout_s=12)
+    if not arrived:
         log.warning("搜索未进入结果页（停在 %s），判定失败、不采集", _page_url_now(page))
         return False
     appeared, wall = await _wait_note_cards(page, timeout_s=20)
@@ -941,6 +948,33 @@ _FOCUS_SELF_CHECK_JS = """() => {
   const r = el.getBoundingClientRect();
   return {tag: el.tagName, id: el.id || '', w: Math.round(r.width), h: Math.round(r.height),
           viewport: window.innerWidth};
+}"""
+
+_SUBMIT_SEARCH_JS = """() => {
+  // 新版首页本例：光标在文字区里回车不再跳结果页（实测停在 /explore，键入的
+  // 关键词只弹出联想面板）。回车无效时按真人做法点「搜索」按钮或联想首项。
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 10 && r.height > 10;
+  };
+  const btnSels = ['#search-button', '.search-button', 'button.search-btn',
+                   '.search-icon', 'div.search-icon', '[class*="search-icon"]'];
+  for (const sel of btnSels) {
+    for (const el of document.querySelectorAll(sel)) {
+      if (!visible(el)) continue;
+      el.click();
+      return {how: 'button:' + sel};
+    }
+  }
+  const sug = document.querySelector('.search-suggest-list, .suggest-list, [class*="suggest"]');
+  if (sug) {
+    const first = sug.querySelector('li, [class*="item"]');
+    if (first) { first.click(); return {how: 'suggest'}; }
+  }
+  const txtBtn = [...document.querySelectorAll('button, div, span')]
+    .find((b) => visible(b) && (b.innerText || '').trim() === '搜索');
+  if (txtBtn) { txtBtn.click(); return {how: 'text-搜索'}; }
+  return null;
 }"""
 
 _SELECT_FOCUSED_TEXT_JS = """() => {
