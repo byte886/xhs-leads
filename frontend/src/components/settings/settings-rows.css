@@ -1,0 +1,41 @@
+/* 设置页「逐项一行」的表单共用样式。
+   原先在 SettingsPanel.vue 的 scoped 里，拆成子组件后 scoped 不再作用于子组件内部，
+   故提到这里成为全局样式；用 .settings-body 前缀限定作用域，不外溢到其它页面。 */
+
+/* 字段行：在一张卡的内部逐行排，不各占一张卡（密度靠行高与一条分隔线） */
+.settings-body .set-row {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 12px 0 13px;
+  margin: 0;
+}
+.settings-body .set-row:last-of-type { border-bottom: 0; padding-bottom: 0; }
+.settings-body .row-main { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.settings-body .row-label { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: var(--ink); }
+/* 行内说明推到最右，控件仍紧跟标签（不把两者一起推开） */
+.settings-body .row-main .limit { margin-left: auto; }
+.settings-body .set-hint { font-size: 12px; color: var(--ink-3); line-height: 1.65; margin: 8px 0 0; }
+.settings-body .cur-val { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.settings-body .unit { font-size: 12px; color: var(--ink-3); }
+/* 控件不拉满整行：下拉一类的短值不该有 600px 宽 */
+.settings-body .set-row select.full-input { max-width: 340px; }
+.settings-body .set-row input.full-input { max-width: 640px; }
+.settings-body .num-input { width: 110px; }
+.settings-body .full-input { width: 100%; box-sizing: border-box; margin-top: 8px; }
+.settings-body textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; margin-top: 8px;
+  border: 1px solid var(--line, #e5e5e5); border-radius: 8px;
+  padding: 8px 10px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace;
+}
+.settings-body input:not([type="checkbox"]) {
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
+  padding: 8px 10px;
+  font-size: 13px;
+  background: var(--panel);
+}
+.settings-body .set-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+/* 行内辅助说明：中性灰，不做第二强调色 */
+.settings-body .limit { color: var(--ink-3); font-weight: 500; font-size: 12px; }
