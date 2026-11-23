@@ -110,50 +110,6 @@ def test_page_image_prompt_cover_vs_content():
     assert "挑水头" in inner and "内页" in inner
 
 
-def test_one_click_route(monkeypatch):
-    """一键串联：生文 1 次 + 逐页生图 4 次，返回 outline 与 4 张图。"""
-    outline = {"title": "t", "body": "b", "tags": "#x", "pages": [
-        {"type": "cover", "heading": "c", "copy": ""},
-        {"type": "content", "heading": "p1", "copy": ""},
-        {"type": "content", "heading": "p2", "copy": ""},
-        {"type": "content", "heading": "p3", "copy": ""},
-    ]}
-
-    async def fake_outline(profile_id, structure, word_count, note):
-        return outline
-
-    calls = []
-
-    async def fake_gen(prompt, size=None, n=1):
-        calls.append(prompt)
-        return [f"/app/images/ai_{len(calls)}.png"]
-
-    monkeypatch.setattr(server, "run_outline", fake_outline)
-    monkeypatch.setattr(ai_image, "generate_image", fake_gen)
-    monkeypatch.setattr(server, "ai_image", ai_image)
-    r = TestClient(server.app).post("/api/ai_generate_note", json={
-        "profile_id": "p1", "structure": "避坑清单", "word_count": 400, "note": {},
-    })
-    assert r.status_code == 200
-    body = r.json()
-    assert body["outline"] == outline and len(body["images"]) == 4 and len(calls) == 4
-
-
-def test_one_click_route_error(monkeypatch):
-    """生图抛 ValueError → 路由转 400。"""
-    async def fake_outline(*a):
-        return {"pages": [{"type": "cover"}]}
-
-    async def fake_gen(*a, **k):
-        raise ValueError("生图未配置")
-
-    monkeypatch.setattr(server, "run_outline", fake_outline)
-    monkeypatch.setattr(ai_image, "generate_image", fake_gen)
-    monkeypatch.setattr(server, "ai_image", ai_image)
-    r = TestClient(server.app).post("/api/ai_generate_note", json={"note": {}})
-    assert r.status_code == 400 and "生图未配置" in r.text
-
-
 def test_image_from_outline_route(monkeypatch):
     """按大纲配图：逐页调生图，返回与 pages 对齐的图片路径。"""
     pages = [

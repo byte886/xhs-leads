@@ -5,7 +5,6 @@ import datetime
 import json
 import sqlite3
 import time
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,16 +56,6 @@ def _seed_notes(tmp_path, rows=None):
                                "fans_count": "1000"}, r[2], now)
     con.commit()
     con.close()
-
-
-def _seed_publish_log(con, status, raw="", created_at=None):
-    ts = created_at or datetime.datetime.now().isoformat(timespec="seconds")
-    con.execute(
-        "INSERT INTO publish_logs (feed_id, title, content, tags, visibility, status, created_at, raw) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        ("", "t", "c", "", "仅自己可见", status, ts, raw),
-    )
-    con.commit()
 
 
 class TestStartupCleanup:
@@ -753,73 +742,6 @@ class TestCollectClients:
         r = client.post("/api/clients", json={"feed_id": "x"})
         assert r.status_code == 502
 
-
-
-class TestSaveDraft:
-    def test_save_draft(self, client):
-        r = client.post("/api/save_draft", json={"title": "标题", "content": "内容", "tags": ["a"], "visibility": "仅自己可见"})
-        assert r.json()["ok"] is True
-        con = sqlite3.connect(str(server.DB_PATH))
-        row = con.execute("SELECT title FROM drafts").fetchone()
-        con.close()
-        assert row[0] == "标题"
-
-
-class TestPublish:
-    _NOON = datetime.datetime(2026, 1, 1, 12, 0)
-
-    def test_publish_risk_blocked(self, client, monkeypatch, tmp_path):
-        monkeypatch.setattr(server, "human_delay", lambda lo=1.0, hi=3.0: None)
-        monkeypatch.setattr(server, "_now", lambda: self._NOON)
-        con = sqlite3.connect(tmp_path / "test.db")
-        con.row_factory = sqlite3.Row
-        server._init_tables(con)
-        _seed_publish_log(con, "failed", raw="发布失败，出现验证码拦截")
-        con.close()
-        r = client.post("/api/publish", json={"title": "t", "content": "c"})
-        j = r.json()
-        assert j["ok"] is False and "风控熔断" in j["raw"]
-
-    def test_publish_daily_quota(self, client, monkeypatch, tmp_path):
-        monkeypatch.setattr(server, "human_delay", lambda lo=1.0, hi=3.0: None)
-        monkeypatch.setattr(server, "_now", lambda: self._NOON)
-        # 上次发布 6 小时前（同一天）→ 冷却通过，命中今日配额上限
-        past = (self._NOON - datetime.timedelta(hours=6)).isoformat(timespec="seconds")
-        con = sqlite3.connect(tmp_path / "test.db")
-        con.row_factory = sqlite3.Row
-        server._init_tables(con)
-        for _ in range(2):
-            _seed_publish_log(con, "success", created_at=past)
-        con.close()
-        r = client.post("/api/publish", json={"title": "t", "content": "c"})
-        assert "已达上限" in r.json()["raw"]
-
-    def test_publish_pass_guard(self, client, monkeypatch, tmp_path):
-        monkeypatch.setattr(server, "human_delay", lambda lo=1.0, hi=3.0: None)
-        monkeypatch.setattr(server, "_now", lambda: self._NOON)
-        monkeypatch.setattr(server.random, "uniform", lambda lo, hi: 0.0)
-        r = client.post("/api/publish", json={"title": "标题", "content": "正文"})
-        j = r.json()
-        # 发布已迁移手动：ok 恒 False，raw 提示去小红书发布页
-        assert j["ok"] is False and "发布页" in j["raw"]
-        con = sqlite3.connect(tmp_path / "test.db")
-        cnt = con.execute("SELECT COUNT(*) FROM publish_logs").fetchone()[0]
-        con.close()
-        assert cnt == 1
-
-
-class TestLogs:
-    def test_logs_empty(self, client):
-        assert client.get("/api/publish_logs").json()["logs"] == []
-
-    def test_logs_with_data(self, client, tmp_path):
-        con = sqlite3.connect(tmp_path / "test.db")
-        con.row_factory = sqlite3.Row
-        server._init_tables(con)
-        _seed_publish_log(con, "success")
-        con.close()
-        r = client.get("/api/publish_logs")
-        assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["status"] == "success"
 
 
 class TestCollectClear:

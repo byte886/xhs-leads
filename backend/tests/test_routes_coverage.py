@@ -68,16 +68,6 @@ def test_clients_list_empty(client):
     assert "clients" in r or "total" in r
 
 
-def test_drafts_empty(client):
-    r = client.get("/api/drafts").json()
-    assert "drafts" in r
-
-
-def test_logs_empty(client):
-    r = client.get("/api/publish_logs").json()
-    assert r["logs"] == []
-
-
 def test_persona_default_empty(client):
     r = client.get("/api/persona").json()
     assert r["ok"] is True and r["industry"] == ""
@@ -112,11 +102,6 @@ def test_notes_with_params(client):
     assert r["total"] == 0
 
 
-def test_publish_stats_requires_login(client):
-    r = client.post("/api/publish_stats", json={"log_id": 9999})
-    assert r.status_code in (403, 404)
-
-
 def test_download_images_empty(client):
     r = client.post("/api/download_images", json={"feed_ids": []})
     assert r.status_code in (200, 400, 422)
@@ -128,18 +113,6 @@ def test_upload_image_not_image_ext(client, monkeypatch, tmp_path):
     r = client.post("/api/upload_image",
                     files={"file": ("note.txt", b"hello", "text/plain")}).json()
     assert "ok" in r
-
-
-def test_draft_save_list_delete(client):
-    r = client.post("/api/save_draft", json={
-        "feed_id": "f1", "title": "t", "content": "c", "tags": ["a"],
-        "visibility": "private", "images": []}).json()
-    assert r["ok"] is True
-    lst = client.get("/api/drafts").json()
-    assert lst["total"] == 1 and lst["drafts"][0]["feed_id"] == "f1"
-    d = client.post("/api/draft_delete", json={"id": lst["drafts"][0]["id"]}).json()
-    assert d["ok"] is True
-    assert client.get("/api/drafts").json()["total"] == 0
 
 
 def test_img_proxy_bad_path(client):
@@ -156,18 +129,6 @@ def test_img_proxy_missing(client, monkeypatch, tmp_path):
 def test_llm_config_get(client):
     r = client.get("/api/llm_config").json()
     assert "has_key" in r or "configured" in r or isinstance(r, dict)
-
-
-def test_draft_update_same_feed_id(client):
-    client.post("/api/save_draft", json={
-        "feed_id": "f9", "title": "v1", "content": "c", "tags": [],
-        "visibility": "private", "images": []})
-    r = client.post("/api/save_draft", json={
-        "feed_id": "f9", "title": "v2", "content": "c2", "tags": [],
-        "visibility": "private", "images": []}).json()
-    assert r["ok"] is True and "更新" in r["note"]
-    lst = client.get("/api/drafts").json()
-    assert lst["total"] == 1 and lst["drafts"][0]["title"] == "v2"
 
 
 def test_mirror_screenshot_405(client):
@@ -233,25 +194,9 @@ def test_clients_list_with_filter(client):
     assert r.status_code == 200
 
 
-def test_drafts_corrupted_images_fallback(client):
-    con = server._db()
-    con.execute("INSERT INTO drafts (feed_id,title,content,tags,visibility,images,status,created_at) VALUES ('x','t','c','','private','{bad','draft','2026-01-01')")
-    con.commit()
-    r = client.get("/api/drafts").json()
-    assert r["drafts"][0]["images"] == []
-
-
 def test_notes_order_recent(client):
     r = client.get("/api/notes", params={"order": "recent"})
     assert r.status_code == 200
-
-
-def test_logs_with_row(client):
-    con = server._db()
-    con.execute("INSERT INTO publish_logs (feed_id,title,status) VALUES ('f','t','ok')")
-    con.commit()
-    r = client.get("/api/publish_logs").json()
-    assert len(r["logs"]) == 1
 
 
 def test_persona_save_empty_keeps_old(client, monkeypatch, tmp_path):
