@@ -714,6 +714,22 @@ class TestCollectClients:
         # 种子里平台声明 30 条 → 还剩 10 条
         assert j["remain"] == max(0, j["declared"] - 20)
 
+    def test_clients_limit_clamped_to_sane_range(self, client, monkeypatch, tmp_path):
+        """界面可调单批条数：大于 500 掐到 500，小于 20 掐到 20，避免一次采太久超时。"""
+        _seed_notes(tmp_path)
+        from src import browser_client
+        used: list = []
+
+        async def fake_clients(feed_id, token, keyword="", filters=None, **kw):
+            used.append(kw.get("limit"))
+            return {"users": [], "capped": False}
+
+        monkeypatch.setattr(browser_client, "clients", fake_clients)
+        assert client.post("/api/clients", json={"feed_id": "a1", "limit": 9999}).json()["limit"] == 500
+        assert client.post("/api/clients", json={"feed_id": "a1", "limit": 3}).json()["limit"] == 20
+        assert client.post("/api/clients", json={"feed_id": "a1", "limit": 150}).json()["limit"] == 150
+        assert used == [500, 20, 150]
+
     def test_clients_no_search_page(self, client, monkeypatch, tmp_path):
         """无搜索页/卡片不在结果里 → 409 并原话回传原因，不伪装成「没人评论」。"""
         _seed_notes(tmp_path)

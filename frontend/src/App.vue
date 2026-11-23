@@ -23,6 +23,14 @@ const clientsRef = ref<InstanceType<typeof ClientsPanel> | null>(null)
 // 评论太多时单次只采一批（后端 150 条 / 90 秒），到上限后在弹层里给「继续采集」
 const clientsNote = ref<Note | null>(null)
 const resumeState = ref({ can: false, taken: 0, declared: 0, remain: 0 })
+// 单批条数：默认 150，用户可在「继续采集」旁自己改（后端掐 20~500）
+const BATCH_LIM_DEFAULT = 150
+const batchLimit = ref(Number(localStorage.getItem('clBatchLimit')) || BATCH_LIM_DEFAULT)
+function saveBatchLimit() {
+  const v = Math.max(20, Math.min(500, Math.round(Number(batchLimit.value) || BATCH_LIM_DEFAULT)))
+  batchLimit.value = v
+  localStorage.setItem('clBatchLimit', String(v))
+}
 
 
 // 登录形态（用户拍板·双窗职责分离）：
@@ -119,6 +127,7 @@ async function collectClients(note: Note, resume = false) {
         feed_id: note.feed_id,
         xsec_token: note.xsec_token || '',
         resume,
+        limit: batchLimit.value,
       }),
       signal: ac.signal,
     })
@@ -304,6 +313,12 @@ onMounted(async () => {
             <span v-if="collectState.running" class="cl-spin" aria-hidden="true" />
             <span class="cl-status-t">{{ collectState.text }}</span>
             <span v-if="collectState.running" class="cl-status-time">{{ collectState.elapsed }}s</span>
+            <span v-if="resumeState.can && !collectState.running" class="cl-lim">
+              每批
+              <input v-model.number="batchLimit" type="number" min="20" max="500" step="10"
+                     class="cl-lim-in" @change="saveBatchLimit" />
+              条
+            </span>
             <button v-if="resumeState.can && !collectState.running" class="btn cl-resume" @click="resumeClients">继续采集下一批</button>
           </div>
           <div style="max-width:1100px;margin:0 auto">
@@ -371,6 +386,8 @@ onMounted(async () => {
 .cl-status.err { background: #FDECEC; border-color: #F2C9C9; color: #A33; }
 .cl-status-t { flex: 1; line-height: 1.45; }
 .cl-resume { flex: 0 0 auto; padding: 4px 12px; font-size: 12px; border-radius: 14px; }
+.cl-lim { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; opacity: .85; }
+.cl-lim-in { width: 58px; padding: 2px 6px; font-size: 12px; text-align: center; border: 1px solid #D8D3CC; border-radius: 6px; background: #fff; color: inherit; }
 .cl-status-time { font-variant-numeric: tabular-nums; opacity: .75; }
 .cl-spin {
   width: 13px; height: 13px; flex: none; border-radius: 50%;

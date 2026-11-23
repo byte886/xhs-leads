@@ -2283,10 +2283,11 @@ async def collect_clients(req: ClientsReq):
             known = [{"uid": r[0], "comment": r[1]} for r in con2.execute(
                 "SELECT uid, comment FROM clients WHERE feed_id=?", (req.feed_id,)).fetchall()]
             con2.close()
+        # 单批条数可由界面调（默认 150）：太小要多点几次，太大容易超时/踩风控，掐在 20~500
+        limit = max(20, min(500, int(req.limit or 150)))
         got = await browser_client.clients(
             req.feed_id, token, keyword=keyword, filters=filters,
-            limit=req.limit, resume=req.resume, known=known)
-        limit = int(req.limit or 0)
+            limit=limit, resume=req.resume, known=known)
         users = got.get("users") or []
         capped = bool(got.get("capped"))
         added = int(got.get("added", len(users)))
