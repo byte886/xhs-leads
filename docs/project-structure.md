@@ -36,7 +36,6 @@ xhs-leads/                     # 仓库 / 文件夹 / APP 名
 │   └── gen_license.py         # 激活码签发工具
 ├── docs/                      # PRD / 需求 / 质检 / 阶段门文档（立项调研已收敛进 PRD §10.1）
 ├── .github/                   # CI 工作流（quality-gates）
-├── constitution/ roles/       # 多 Agent 协作提示词（engineering/project/workflow + 六角色）
 ├── docker/                    # 历史容器资产（当前交付无 Docker）
 ├── research/                  # 遗留调研归档（legacy/gauntlet 文档等）
 ├── AGENTS.md                  # 项目协作约定

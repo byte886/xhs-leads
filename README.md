@@ -75,4 +75,4 @@ cd frontend && npm run cruise  # dependency-cruiser 架构检查
 - ✅ 壳形态定稿：有头 CFT 应用窗（R-6.16 路线A）+ 双窗布局（壳窗左半 / 采集调试窗右半，960×800）+ 登录闭环（ForceLogin→壳窗真实登录页→id_token 注入）
 - ✅ 后端 A 批非登录态回归全绿；UI 回归 t 系列 PASS=9 / FAIL=0 / SKIP=2
 - ℹ️ e1 真实链路连本机引擎实例 9223（同一登录态 profile），无需另开外部 Chrome
-- ℹ️ `roles/` 与 `constitution/` 的 swarm-forge 六角色（specifier→coder→…→QA）为 clean-code-gauntlet 框架模板，**本仓实际工作流 = SOP 文档 + Playwright 脚本 + pytest**，未启用 Gherkin 流水线，勿按六角色流程开工。
+- ℹ️ 原 `roles/`、`constitution/`（swarm-forge 六角色补偿设计）已按 `docs/DECISIONS.md` 删除；现行工作流 = `CLAUDE.md` 铁律 + `.claude/agents/` 子代理 + SOP 文档 + pytest/Playwright。
