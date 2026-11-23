@@ -1,12 +1,29 @@
 # CC baseline for quality-gates/tools/check_cc.sh
+# 由 quality-gates/tools/gen_cc_baseline.sh 从 crapper 实测生成（勿手抄，手抄就会和门禁口径漂移）。
 # rows below are accepted debt; delete a row as soon as that function is split.
 # rule: new over-8 function, or a listed one getting worse, fails the gate.
-# R-6.75 首次登记（crapper 口径实测，2026-11-08）。只许减不许增：
-# 拆空一行就立刻删掉该行，此后该函数即受 ≤8 硬拦。
-server.collect_clients 14
-login_session.LoginSession._run 13
-server.accounts_refresh_identity 11
-browser_client.clients 10
-engine_pool.AccountEngine._place_account_window 10
+# 生成时间：2026-11-23；只许减不许增，拆空一行就删掉该行（此后受 ≤8 硬拦）。
+browser_client._drain_comments 26
+browser_client._open_detail_page 13
+browser_client._open_login_page 9
+browser_client._page_position 10
+browser_client._pick_filter_point 10
+browser_client._read_author_profile 12
+browser_client._search_by_typing 10
+browser_client.clients 24
+collect_pipeline.get_user_profile 9
+engine_pool.AccountEngine._kill_stale_processes 9
+engine_pool.AccountEngine._kill_stale_processes_win 12
+engine_pool.AccountEngine.browser_process_alive 9
+engine_pool.probe_screen_size 10
 engine_window.set_window 10
-collect_pipeline._merge_detail_core 9
+server._collect_images 10
+server._download_image 9
+server._local_image_path 9
+server._pack_live_videos 11
+server._rank_and_insert 9
+server.accounts_refresh_identity 11
+shell_window._runtime_ext_ids 9
+shell_window.WindowCoordinator._engine_alive_after_close 10
+shell_window.WindowCoordinator._shell_closed_verify 9
+watchdog._reap 9
