@@ -39,38 +39,96 @@ def probe_screen_size() -> tuple[int, int]:
     global _SCREEN
     if _SCREEN:
         return _SCREEN
-    w, h = 1920, 1200
-    if sys.platform == "win32":
-        # Windows：GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)。先声明 DPI 感知，
-        # 否则缩放 150% 的机器会拿到被系统缩放后的逻辑分辨率（窗口会偏小一半）。
-        try:
-            import ctypes  # noqa: PLC0415
+    probe = _probe_win_screen if sys.platform == "win32" else _probe_mac_screen
+    _SCREEN = probe() or (1920, 1200)
+    return _SCREEN
 
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(1)
-            except Exception:  # noqa: BLE001（旧系统无 shcore）
-                ctypes.windll.user32.SetProcessDPIAware()
-            w = int(ctypes.windll.user32.GetSystemMetrics(0))
-            h = int(ctypes.windll.user32.GetSystemMetrics(1))
-        except Exception:  # noqa: BLE001（探测失败走回退）
-            pass
-        _SCREEN = (w, h)
-        return _SCREEN
+
+def _probe_win_screen() -> tuple[int, int] | None:
+    """Windows：GetSystemMetrics。先声明 DPI 感知，否则 150% 缩放的机器会拿到被
+    缩放后的逻辑分辨率（窗口偏小一半）。探测失败返回 None 走默认值。"""
+    try:
+        import ctypes  # noqa: PLC0415
+
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:  # noqa: BLE001（旧系统无 shcore）
+            ctypes.windll.user32.SetProcessDPIAware()
+        return (int(ctypes.windll.user32.GetSystemMetrics(0)),
+                int(ctypes.windll.user32.GetSystemMetrics(1)))
+    except Exception:  # noqa: BLE001（探测失败走回退）
+        return None
+
+
+def _probe_mac_screen() -> tuple[int, int] | None:
+    """macOS：system_profiler 里的第一行 Resolution（主屏优先）；失败返回 None。"""
     try:
         out = subprocess.run(
             ["system_profiler", "SPDisplaysDataType"],
             capture_output=True, text=True, timeout=20,
         ).stdout
-        for line in out.splitlines():
-            if "Resolution:" in line and " x " in line:
-                nums = re.findall(r"(\d+)\s*[xX]\s*(\d+)", line)
-                if nums:
-                    w, h = int(nums[0][0]), int(nums[0][1])
-                    break
     except Exception:  # noqa: BLE001（探测失败走回退）
-        pass
-    _SCREEN = (w, h)
-    return _SCREEN
+        return None
+    return _first_resolution(out)
+
+
+def _first_resolution(out: str) -> tuple[int, int] | None:
+    for line in out.splitlines():
+        if "Resolution:" in line and " x " in line:
+            nums = re.findall(r"(\d+)\s*[xX]\s*(\d+)", line)
+            if nums:
+                return int(nums[0][0]), int(nums[0][1])
+    return None
+
+
+def _profile_cmd_contains(psutil, needle: str) -> bool | None:
+    """命令行里带本账号 profile 路径的进程是否存在；枚举失败返回 None。"""
+    try:
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            if needle in " ".join(p.info["cmdline"] or []).lower():
+                return True
+    except Exception:  # noqa: BLE001（枚举失败：无法判定）
+        return None
+    return False
+
+
+def _profile_procs(psutil, needle: str) -> list:
+    """按命令行匹配本账号 profile 的进程；枚举失败返回空列表（跳过清理）。"""
+    procs = []
+    try:
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            cmd = " ".join(p.info["cmdline"] or []).lower()
+            if needle and needle in cmd:
+                procs.append(p)
+    except Exception:  # noqa: BLE001（枚举失败：跳过清理，交由启动失败路径暴露）
+        return []
+    return procs
+
+
+def _terminate_then_kill(psutil, procs) -> None:
+    """先 terminate 给优雅退出窗口（wait 2s），残留再 kill。"""
+    for p in procs:
+        try:
+            p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+        except Exception:  # noqa: BLE001（已退出/无权限：交给后面的 wait/kill 兜底）
+            pass
+    _gone, alive = psutil.wait_procs(procs, timeout=2.0)
+    for p in alive:
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _signal_pids(pids: list[int], sig: int) -> None:
+    """给一组 pid 发信号；已退出（ProcessLookupError）视为成功。"""
+    for pid in pids:
+        try:
+            os.kill(int(pid), sig)
+        except ProcessLookupError:
+            pass
 
 # 窗口最小尺寸：低于这个尺寸前端上下布局也会挤成一团（640×480 是桌面应用常见可用下限，
 # 也与 Material 3 Medium 档位下限呼应）。用于窗口放置时的钳制，防止被拖到不可用尺寸。
@@ -373,14 +431,7 @@ class AccountEngine:
         needle = str(getattr(self, "user_data_dir", "") or "").lower()
         if not needle:
             return None
-        try:
-            for p in psutil.process_iter(["pid", "cmdline"]):
-                cmd = " ".join(p.info["cmdline"] or []).lower()
-                if needle in cmd:
-                    return True
-        except Exception:  # noqa: BLE001（枚举失败：无法判定）
-            return None
-        return False
+        return _profile_cmd_contains(psutil, needle)
 
     def mark_fake_dead(self) -> None:
         """CDP 假死标记（保持级，用户拍板分级策略）——只标记不释放。
@@ -441,56 +492,33 @@ class AccountEngine:
         if sys.platform == "win32":
             self._kill_stale_processes_win()
             return
+        pids = self._stale_pids()
+        if not pids:
+            return
+        _signal_pids(pids, 15)  # SIGTERM：优雅退出
+        time.sleep(2.0)
+        _signal_pids(pids, 9)   # SIGKILL：残留兜底
+
+    def _stale_pids(self) -> list[int]:
+        """pgrep 本账号 profile 命令行命中的 pid；pgrep 失败一律当无残留。"""
         try:
             out = subprocess.run(
                 ["pgrep", "-f", str(self.user_data_dir)],
                 capture_output=True, text=True, timeout=5,
             )
-            pids = [p.strip() for p in out.stdout.split() if p.strip().isdigit()]
         except Exception:  # noqa: BLE001（pgrep 失败：跳过清理，交由启动失败路径暴露）
-            return
-        if not pids:
-            return
-        for pid in pids:
-            try:
-                os.kill(int(pid), 15)  # SIGTERM：优雅退出
-            except ProcessLookupError:
-                pass
-        time.sleep(2.0)
-        for pid in pids:
-            try:
-                os.kill(int(pid), 9)  # SIGKILL：残留兜底
-            except ProcessLookupError:
-                pass
+            return []
+        return [int(p) for p in out.stdout.split() if p.strip().isdigit()]
 
     def _kill_stale_processes_win(self) -> None:
         """Windows 版残留清理：psutil 按命令行匹配本账号 profile，先 terminate 再 kill。"""
         try:
             import psutil  # noqa: PLC0415（仅 Windows 需要）
-
-            needle = str(self.user_data_dir).lower()
-            procs = []
-            for p in psutil.process_iter(["pid", "cmdline"]):
-                cmd = " ".join(p.info["cmdline"] or []).lower()
-                if needle and needle in cmd:
-                    procs.append(p)
-        except Exception:  # noqa: BLE001（枚举失败：跳过清理，交由启动失败路径暴露）
+        except Exception:  # noqa: BLE001（没装 psutil：跳过清理）
             return
-        if not procs:
-            return
-        for p in procs:
-            try:
-                p.terminate()
-            except psutil.NoSuchProcess:
-                pass
-            except Exception:  # noqa: BLE001
-                pass
-        _gone, alive = psutil.wait_procs(procs, timeout=2.0)
-        for p in alive:
-            try:
-                p.kill()
-            except Exception:  # noqa: BLE001
-                pass
+        procs = _profile_procs(psutil, str(self.user_data_dir).lower())
+        if procs:
+            _terminate_then_kill(psutil, procs)
 
     async def _context_fake_dead_step(self):
         """假死保持级处置。

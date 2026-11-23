@@ -97,9 +97,8 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
             "如需后台运行请用其他账号，或以无头模式整体启动"
         )}
 
-    for _st in list(_COLLECT_TASKS.values()):
-        if _st.get("status") == "running" and _st.get("account_id", "default") == account:
-            return {"ok": False, "error": "有采集任务进行中，请先停止再切换调试窗口"}
+    if _collect_running(account, _COLLECT_TASKS):
+        return {"ok": False, "error": "有采集任务进行中，请先停止再切换调试窗口"}
     want_headless = not on
     # 下次启动也变成无头（default 因此丢窗口），多账号必须各管各的。
     if config.account_headless(account) == want_headless:
@@ -113,6 +112,14 @@ async def set_window(account: str = "default", on: bool = True) -> dict:
                detail=f"window={'on' if on else 'off'}")
     return {"ok": True, "window": on,
             "note": "引擎已重启，独立小窗已打开（实时可见操作）" if on else "已回无头模式"}
+
+
+def _collect_running(account: str, tasks) -> bool:
+    """该账号是否有采集任务正在跑（任务结构由 server 侧维护）。"""
+    return any(
+        st.get("status") == "running" and st.get("account_id", "default") == account
+        for st in list(tasks.values())
+    )
 
 
 async def close_account(account: str = "default") -> dict:

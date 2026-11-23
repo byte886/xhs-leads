@@ -5,25 +5,6 @@
 # 生成时间：2026-11-23；只许减不许增，拆空一行就删掉该行（此后受 ≤8 硬拦）。
 browser_client._drain_comments 26
 browser_client._open_detail_page 13
-browser_client._open_login_page 9
-browser_client._page_position 10
-browser_client._pick_filter_point 10
 browser_client._read_author_profile 12
 browser_client._search_by_typing 10
 browser_client.clients 24
-collect_pipeline.get_user_profile 9
-engine_pool.AccountEngine._kill_stale_processes 9
-engine_pool.AccountEngine._kill_stale_processes_win 12
-engine_pool.AccountEngine.browser_process_alive 9
-engine_pool.probe_screen_size 10
-engine_window.set_window 10
-server._collect_images 10
-server._download_image 9
-server._local_image_path 9
-server._pack_live_videos 11
-server._rank_and_insert 9
-server.accounts_refresh_identity 11
-shell_window._runtime_ext_ids 9
-shell_window.WindowCoordinator._engine_alive_after_close 10
-shell_window.WindowCoordinator._shell_closed_verify 9
-watchdog._reap 9

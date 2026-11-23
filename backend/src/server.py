@@ -865,6 +865,16 @@ def emit_collect(state: dict) -> None:
     _emit_event("collect", _state_snapshot(state))
 
 
+_NOTES_UPSERT_SQL = (
+    "INSERT OR REPLACE INTO notes (feed_id, keyword, title, note_type, user_id,"
+    " nickname, avatar, cover_url, xsec_token, desc, ip_location, liked_count,"
+    " collected_count, comment_count, shared_count, fans_count, publish_time,"
+    " score, tag, fan_ratio, fetched_at, score_info, video_url, account_id, origin,"
+    " hot_score, hot_info, live_photo, live_videos, detail_imgs)"
+    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+
 def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "default") -> bool:
     """单条笔记评分 + 落库（带账号维度）。返回是否成功。
 
@@ -878,46 +888,47 @@ def _rank_and_insert(con, n: dict, keyword: str, now: str, account_id: str = "de
     try:
         n["keyword"] = keyword
         n["local_cover"] = ""
-        try:
-            si = rank_notes([n])[0]["score_info"]
-        except Exception:  # noqa: BLE001
-            si = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
-                  "dimensions": {"like_fan_ratio": 0.0, "low_fan": 0.0,
-                                 "interaction_health": 0.0, "freshness": 0.0}}
-        try:
-            hi = score_note_hot(n)  # 第二口径（综合热度），与低粉分同时入库
-        except Exception:  # noqa: BLE001
-            hi = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
-                  "dimensions": {"like_scale": 0.0, "interaction": 0.0,
-                                 "reach": 0.0, "freshness": 0.0}}
-        con.execute(
-            "INSERT OR REPLACE INTO notes (feed_id, keyword, title, note_type, user_id,"
-            " nickname, avatar, cover_url, xsec_token, desc, ip_location, liked_count,"
-            " collected_count, comment_count, shared_count, fans_count, publish_time,"
-            " score, tag, fan_ratio, fetched_at, score_info, video_url, account_id, origin,"
-            " hot_score, hot_info, live_photo, live_videos, detail_imgs)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
-                n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
-                n.get("cover_url", ""), n.get("xsec_token", ""), n.get("desc", ""),
-                n.get("ip_location", ""),
-                _to_int(n.get("liked_count")), _to_int(n.get("collected_count")),
-                _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
-                fans_for_db(n.get("fans_count")), n.get("publish_time"),
-                si["score"], si["tag"], si["fan_ratio"],
-                now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
-                account_id or "default", n.get("origin", ""),
-                hi["score"], json.dumps(hi, ensure_ascii=False),
-                int(n.get("live_photo") or 0),
-                json.dumps(n.get("live_videos") or [], ensure_ascii=False),
-                json.dumps(n.get("detail_imgs") or [], ensure_ascii=False),
-            ),
-        )
+        si, hi = _score_pair(n)
+        con.execute(_NOTES_UPSERT_SQL, _notes_row(n, keyword, si, hi, now, account_id))
         return True
     except Exception:  # noqa: BLE001
         return False
 
+
+def _score_pair(n: dict) -> tuple[dict, dict]:
+    """双口径评分：低粉分（排序依据）与综合热度分，任一失败都退化为 0 分标记。"""
+    try:
+        si = rank_notes([n])[0]["score_info"]
+    except Exception:  # noqa: BLE001
+        si = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
+              "dimensions": {"like_fan_ratio": 0.0, "low_fan": 0.0,
+                             "interaction_health": 0.0, "freshness": 0.0}}
+    try:
+        hi = score_note_hot(n)  # 第二口径（综合热度），与低粉分同时入库
+    except Exception:  # noqa: BLE001
+        hi = {"score": 0.0, "tag": "评分失败", "fan_ratio": 0.0,
+              "dimensions": {"like_scale": 0.0, "interaction": 0.0,
+                             "reach": 0.0, "freshness": 0.0}}
+    return si, hi
+
+
+def _notes_row(n: dict, keyword: str, si: dict, hi: dict, now: str, account_id: str) -> tuple:
+    return (
+        n.get("feed_id"), keyword, n.get("title", ""), n.get("type", ""),
+        n.get("user_id"), n.get("nickname", ""), n.get("avatar", ""),
+        n.get("cover_url", ""), n.get("xsec_token", ""), n.get("desc", ""),
+        n.get("ip_location", ""),
+        _to_int(n.get("liked_count")), _to_int(n.get("collected_count")),
+        _to_int(n.get("comment_count")), _to_int(n.get("shared_count")),
+        fans_for_db(n.get("fans_count")), n.get("publish_time"),
+        si["score"], si["tag"], si["fan_ratio"],
+        now, json.dumps(si, ensure_ascii=False), n.get("video_url", ""),
+        account_id or "default", n.get("origin", ""),
+        hi["score"], json.dumps(hi, ensure_ascii=False),
+        int(n.get("live_photo") or 0),
+        json.dumps(n.get("live_videos") or [], ensure_ascii=False),
+        json.dumps(n.get("detail_imgs") or [], ensure_ascii=False),
+    )
 
 def _cleanup_orphan_images() -> int:
     """清理无引用本地图片：当前 notes 批次（feed_id 前缀）保留，其余残留删除。返回删除数。
@@ -1563,7 +1574,6 @@ async def accounts_rename(account_id: str, req: AccountRenameReq):
     return {"ok": True, "account_id": account_id, "name": config.account_name(account_id)}
 
 
-@app.post("/api/accounts/{account_id}/identity")
 async def accounts_refresh_identity(account_id: str):
     """识别账号身份：账号在跑时读一次 user/me，缓存昵称+小红书号+uid。
 
@@ -1573,18 +1583,13 @@ async def accounts_refresh_identity(account_id: str):
     """
     from src import engine_pool, login_session
 
-    if config.get_account(account_id) is None:
-        return {"ok": False, "error": f"账号不存在：{account_id}"}
-    if engine_pool.pool.peek(account_id) is None:
-        return {"ok": False, "error": "账号引擎未运行，先开窗再识别"}
-    for _st in list(_COLLECT_TASKS.values()):
-        if _st.get("status") == "running" and _st.get("account_id", "default") == account_id:
-            return {"ok": False, "error": "有采集任务进行中，稍后再识别"}
+    err = _identity_blocker(account_id, engine_pool)
+    if err:
+        return {"ok": False, "error": err}
     payload = await login_session.capture_user_me(account_id)
-    if payload is None:
-        return {"ok": False, "error": "未能读取账号信息（页面未响应或超时）"}
-    if not login_session.is_real_login_me(payload):
-        return {"ok": False, "error": "该账号尚未登录，请扫码登录后再识别"}
+    err = _payload_blocker(login_session, payload)
+    if err:
+        return {"ok": False, "error": err}
     ident = login_session.cache_identity(account_id, payload)
     if not (ident["nickname"] or ident["red_id"]):
         return {"ok": False, "error": "已登录但未取到昵称与小红书号"}
@@ -1599,6 +1604,33 @@ async def accounts_refresh_identity(account_id: str):
         "red_id": ident["red_id"],
         "display_name": config.account_display_name(account_id),
     }
+
+
+def _identity_blocker(account_id: str, engine_pool) -> str:
+    """识别前置条件：账号存在、引擎在跑、当前没有采集任务。返回错误文案或空串。"""
+    if config.get_account(account_id) is None:
+        return f"账号不存在：{account_id}"
+    if engine_pool.pool.peek(account_id) is None:
+        return "账号引擎未运行，先开窗再识别"
+    if _collect_running_for(account_id):
+        return "有采集任务进行中，稍后再识别"
+    return ""
+
+
+def _collect_running_for(account_id: str) -> bool:
+    return any(
+        st.get("status") == "running" and st.get("account_id", "default") == account_id
+        for st in list(_COLLECT_TASKS.values())
+    )
+
+
+def _payload_blocker(login_session, payload) -> str:
+    """user/me 结果校验：没读到 / 未登录。返回错误文案或空串。"""
+    if payload is None:
+        return "未能读取账号信息（页面未响应或超时）"
+    if not login_session.is_real_login_me(payload):
+        return "该账号尚未登录，请扫码登录后再识别"
+    return ""
 
 
 @app.post("/api/accounts/{account_id}/scan_login")
@@ -1892,14 +1924,10 @@ def _pack_live_videos(zf, con, fid: str) -> int:
     """实况图（动图）原片入包：按库内 live_videos 下载那几段 3 秒 mp4，与图片同包交付。
 
     动图原片是 sns-video CDN 上的真实 mp4（详情页那个 blob: 只是本地播放地址，不可下载）。
-    本地已缓存则直接复用；单段失败跳过，不影响整包。返回成功入包段数。
+    本地已缓存直接复用；单段失败跳过，不影响整包。返回成功入包段数。
     """
-    try:
-        row = con.execute("SELECT live_videos FROM notes WHERE feed_id = ?", (fid,)).fetchone()
-        urls = json.loads((row["live_videos"] if row else "") or "[]")
-    except Exception:  # noqa: BLE001
-        return 0
-    if not isinstance(urls, list) or not urls:
+    urls = _live_video_urls(con, fid)
+    if not urls:
         return 0
     prefix = fid.replace("#", "_")
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1907,20 +1935,35 @@ def _pack_live_videos(zf, con, fid: str) -> int:
     for i, url in enumerate(urls[:9]):
         dest = VIDEOS_DIR / f"{prefix}_live{i}.mp4"
         try:
-            if not dest.exists():
-                reqh = urllib.request.Request(
-                    url,
-                    headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
-                )
-                with urllib.request.urlopen(reqh, timeout=30) as resp:
-                    dest.write_bytes(resp.read())
+            _ensure_live_video(url, dest)
             if dest.exists() and dest.stat().st_size >= 1024:
                 zf.write(dest, arcname=dest.name)
                 packed += 1
         except Exception:  # noqa: BLE001
-            continue
+            continue  # 单段失败跳过（CDN 过期/网络抖动）
     return packed
 
+
+def _live_video_urls(con, fid: str) -> list:
+    """库里的实况图原片地址列表；无记录/脏 JSON 一律当空。"""
+    try:
+        row = con.execute("SELECT live_videos FROM notes WHERE feed_id = ?", (fid,)).fetchone()
+        urls = json.loads((row["live_videos"] if row else "") or "[]")
+    except Exception:  # noqa: BLE001
+        return []
+    return urls if isinstance(urls, list) else []
+
+
+def _ensure_live_video(url: str, dest) -> None:
+    """本地没有才下载（带 Referer/UA，CDN 对裸请求 403）。"""
+    if dest.exists():
+        return
+    reqh = urllib.request.Request(
+        url,
+        headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(reqh, timeout=30) as resp:
+        dest.write_bytes(resp.read())
 
 @app.post("/api/download_images")
 def download_images(req: DownloadImgsReq):
@@ -2073,37 +2116,44 @@ def _norm_img_urls(v) -> list:
 
 
 async def _collect_images(n: dict, feed_id: str) -> list:
-    """克隆用：取详情图片列表（本地浏览器提取，取不到才回退库里封面）。
+    """克隆用：取详情图片列表（本地浏览器提取，取不到才回退库里详情图，再退封面）。
 
     两个坑（真机实测：高赞图文笔记克隆出 0 张图）：
     1. 库里 cover_url 是采集当时的签名地址，隔几天必然 403 —— 只能当兜底，不能当主路径；
     2. 详情页 DOM 图懒加载，刚打开时 src 为空 —— 所以取图以详情返回的列表为准，
        并在这里把空串/空白串过滤掉，别让空地址流到下载环节变成 [''] 这种假结果。
     """
-    images = []
-    try:
-        dn = dict(n)
-        dn = await get_feed_detail(dn)
-        imgs = _norm_img_urls(dn.get("detail_imgs"))
-        if imgs:
-            images = imgs
-            if dn.get("desc"):
-                n["desc"] = dn.get("desc")
-            if dn.get("title"):
-                n["title"] = dn.get("title")
-    except Exception:  # noqa: BLE001
-        pass
+    n, images = await _detail_images(n)
     if not images:
         # 克隆时常常没有活动搜索页（规则也不许直接按 URL 开详情），详情取不到；
         # 采集那一刻的详情图已经存进库，签名还有效，用它比用封面靠谱得多。
         images = _norm_img_urls(n.get("detail_imgs"))
     if not images:
-        cover = (n.get("cover_url") or "").strip()
-        if cover:
-            images = [cover]
+        images = _cover_fallback(n)
     log.info("克隆取图：source=%s urls=%d feed=%s", n.get("img_source") or "-", len(images), feed_id)
     return images
 
+
+async def _detail_images(n: dict) -> tuple[dict, list]:
+    """详情页优先：取到图顺带回填标题/正文（详情 SSR 更准）；失败不改 n、返回空图。"""
+    try:
+        dn = dict(n)
+        dn = await get_feed_detail(dn)
+        imgs = _norm_img_urls(dn.get("detail_imgs"))
+        if imgs:
+            if dn.get("desc"):
+                n["desc"] = dn.get("desc")
+            if dn.get("title"):
+                n["title"] = dn.get("title")
+            return n, imgs
+    except Exception:  # noqa: BLE001
+        pass
+    return n, []
+
+
+def _cover_fallback(n: dict) -> list:
+    cover = (n.get("cover_url") or "").strip()
+    return [cover] if cover else []
 
 def _download_image(feed_id: str, idx: int, url: str) -> str:
     """克隆用：下载单张图到本地。返回可访问路径（失败/非图片响应/装饰性小图返回空串）。"""
@@ -2112,24 +2162,33 @@ def _download_image(feed_id: str, idx: int, url: str) -> str:
     fname = _img_name(feed_id, suffix=f"p{idx}")
     dest = IMAGES_DIR / fname
     try:
-        if not dest.exists():
-            reqh = urllib.request.Request(
-                url,
-                headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
-            )
-            with urllib.request.urlopen(reqh, timeout=20) as resp:
-                ctype = (resp.headers.get("Content-Type") or "").lower()
-                if not ctype.startswith("image/"):
-                    return ""  # 过期签名地址常返回 403/HTML，不算图
-                dest.write_bytes(resp.read())
-        # 装饰性小图（头像/图标 2-4KB）兜底过滤：正文原图一般 ≥50KB，<20KB 判定为非正文图
-        if dest.exists() and dest.stat().st_size < 20 * 1024:
+        if not dest.exists() and not _fetch_image(url, dest):
+            return ""
+        if _is_decorative(dest):
             dest.unlink()
             return ""
         return f"/app/images/{fname}"
     except Exception:  # noqa: BLE001
         return ""
 
+
+def _fetch_image(url: str, dest) -> bool:
+    """抓一张图落盘；Content-Type 不是 image/* 视为过期签名（403/HTML 页），返回 False。"""
+    reqh = urllib.request.Request(
+        url,
+        headers={"Referer": "https://www.xiaohongshu.com/", "User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(reqh, timeout=20) as resp:
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if not ctype.startswith("image/"):
+            return False
+        dest.write_bytes(resp.read())
+    return True
+
+
+def _is_decorative(dest) -> bool:
+    """装饰性小图（头像/图标 2-4KB）：正文原图一般 ≥50KB，<20KB 判定为非正文图。"""
+    return dest.exists() and dest.stat().st_size < 20 * 1024
 
 def _download_images(feed_id: str, images: list) -> list:
     """克隆用：并行下载图片（≤9 张）。返回本地路径列表（失败的图不占位）。"""
@@ -2284,26 +2343,29 @@ async def fill_xhs(req: FillXhsReq):
 
 def _local_image_path(u: str) -> str:
     """把 /app/images/xxx 或 /api/img?path=... 解析成本地图片绝对路径；解析不到返回空串。"""
-    from urllib.parse import unquote
-    s = (u or "").strip()
-    if not s:
-        return ""
-    name = ""
-    if "/app/images/" in s:
-        name = s.split("/app/images/", 1)[1].split("?")[0]
-    elif "path=" in s:
-        name = unquote(s.split("path=", 1)[1]).split("&")[0]
-        if "/app/images/" in name:
-            name = name.split("/app/images/", 1)[1]
+    name = _image_name_from_url(u)
     if not name:
         return ""
     p = (IMAGES_DIR / name).resolve()
     try:
         p.relative_to(IMAGES_DIR.resolve())
     except ValueError:
-        return ""
+        return ""  # 越出图片目录（../ 穿越）一律拒绝
     return str(p) if p.exists() else ""
 
+
+def _image_name_from_url(u: str) -> str:
+    """从两种前端地址里抠文件名；抠不到返回空串。"""
+    from urllib.parse import unquote
+    s = (u or "").strip()
+    if not s:
+        return ""
+    if "/app/images/" in s:
+        return s.split("/app/images/", 1)[1].split("?")[0]
+    if "path=" not in s:
+        return ""
+    name = unquote(s.split("path=", 1)[1]).split("&")[0]
+    return name.split("/app/images/", 1)[1] if "/app/images/" in name else name
 
 @app.post("/api/contact_open")
 async def contact_open(req: ContactOpenReq):

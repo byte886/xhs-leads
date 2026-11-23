@@ -246,18 +246,21 @@ async def get_user_profile(note: dict, cache: dict, account_id: str = "default")
     u = await _run_browser("user", uid, "USER", "", account_id, wait_ms=3500)
     # 取不到就留 None（未知），绝不写 0——0 会被评分当成真·零粉，白送「低粉」标签；
     # 未知则明确降级为「粉丝未知」，评分按已知维度归一化，不进低粉判断。
-    fans: int | None = None
-    if u:
-        raw = (u.get("fans") or "").strip()
-        if raw:
-            fans = _parse_fans(raw)
-        if not fans and u.get("nickname"):
-            note["nickname"] = u["nickname"]
+    fans = _fans_of(u)
+    if fans is None and u and u.get("nickname"):
+        note["nickname"] = u["nickname"]
     cache[uid] = fans
     note["fans_count"] = fans
     time.sleep(_RHYTHM[0] + random.random() * (_RHYTHM[1] - _RHYTHM[0]))
     return note
 
+
+def _fans_of(u: dict) -> int | None:
+    """作者主页返回的粉丝数字符串（「1.2万」等）→ 整数；没取到返回 None。"""
+    if not u:
+        return None
+    raw = (u.get("fans") or "").strip()
+    return _parse_fans(raw) if raw else None
 
 def init_db(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(str(path))

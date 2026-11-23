@@ -140,15 +140,20 @@ def _runtime_ext_ids(ctx) -> list[str]:
     ids: list[str] = []
     try:
         for sw in getattr(ctx, "service_workers", None) or []:
-            u = getattr(sw, "url", "") or ""
-            if not u.startswith("chrome-extension://"):
-                continue
-            seg = u.split("/")
-            if len(seg) > 2 and seg[2] and seg[2] not in ids:
-                ids.append(seg[2])
+            ext = _ext_id_of(getattr(sw, "url", "") or "")
+            if ext and ext not in ids:
+                ids.append(ext)
     except Exception:  # noqa: BLE001（拿不到 SW 列表就退回路径推导）
         return ids
     return ids
+
+
+def _ext_id_of(url: str) -> str:
+    """chrome-extension://<id>/... → <id>；不是扩展 URL 返回空串。"""
+    if not url.startswith("chrome-extension://"):
+        return ""
+    seg = url.split("/")
+    return seg[2] if len(seg) > 2 else ""
 
 
 def _pick_ext_id(computed: str, runtime_ids: list[str]) -> str:
@@ -428,16 +433,9 @@ class WindowCoordinator:
         """壳窗 close 后判定「引擎是否仍健康」：重建期/断连/校验异常一律 False。
 
         False 的语义是**跳过退出**（崩溃恢复交给 keeper 重建），只在引擎确认
-        存活时返回 True。/的判定集中在此，便于单测覆盖。
+        存活时返回 True。判定集中在此，便于单测覆盖。
         """
-        eng = self._engine
-        if eng is None:
-            return True
-        try:
-            # attach_engine 传入 EnginePool 池对象 → 取账号引擎实例
-            account = await eng.get("default") if hasattr(eng, "get") else eng
-        except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
-            return True
+        account = await self._default_account()
         if account is None:
             return True
         try:
@@ -446,23 +444,34 @@ class WindowCoordinator:
                 log.warning("壳窗 close 校验：引擎 60s 内重建过（崩溃恢复），跳过退出")
                 return False
             if not account.is_connected_now():
-                # 连接断开有两种起因：引擎崩溃，或用户把采集窗+主窗都关了 → Chrome 正常退出。
-                # 后者必须照样退出应用，否则留下一个没有窗口的空进程（用户只能在任务管理器里杀）。
-                # 判定依据：按 profile 查浏览器进程，进程已经没了就是用户关窗。
-                proc_alive = None
-                try:
-                    proc_alive = account.browser_process_alive()
-                except Exception:  # noqa: BLE001（判定不可用：保守维持旧行为）
-                    proc_alive = None
-                if proc_alive is False:
-                    log.info("壳窗 close 校验：浏览器进程已退出（用户关掉全部窗口），按用户关闭退出")
-                    return True
-                log.warning("壳窗 close 校验：引擎连接已断开（崩溃），跳过退出")
-                return False
+                return self._exit_while_disconnected(account)
         except Exception:  # noqa: BLE001（对象无校验方法/异常：无法确认引擎状态，保守不退出）
             log.warning("壳窗 close 校验：引擎状态校验异常，保守跳过退出")
             return False
         return True
+
+    async def _default_account(self):
+        """attach_engine 传入 EnginePool 池对象 → 取 default 账号引擎；未就绪返回 None。"""
+        eng = self._engine
+        if eng is None:
+            return None
+        try:
+            return await eng.get("default") if hasattr(eng, "get") else eng
+        except Exception:  # noqa: BLE001（引擎未就绪：按存活处理走退出兜底）
+            return None
+
+    def _exit_while_disconnected(self, account) -> bool:
+        """连接断开：浏览器进程没了=用户关窗（退出）；还活着或无法判定=崩溃（跳过退出）。"""
+        # 判定依据：按 profile 查浏览器进程，进程已经没了就是用户关窗。
+        try:
+            proc_alive = account.browser_process_alive()
+        except Exception:  # noqa: BLE001（判定不可用：保守维持旧行为）
+            proc_alive = None
+        if proc_alive is False:
+            log.info("壳窗 close 校验：浏览器进程已退出（用户关掉全部窗口），按用户关闭退出")
+            return True
+        log.warning("壳窗 close 校验：引擎连接已断开（崩溃），跳过退出")
+        return False
 
     async def _engine_connected_and_healthy(self) -> bool:
         """快速路径的强证据：引擎当前确实连着活着的浏览器，且不在重建期。
@@ -493,21 +502,23 @@ class WindowCoordinator:
         fast=True 是 0.1s 的快速路径：仅在「引擎仍连着一个活浏览器」这种强证据
         下立即退出（用户手动关主窗），把退出耗时从 3s+ 压到 ~1s；拿不到强证据
         就静默返回，交给 3s 兜底那次校验继续判定崩溃/重建。"""
-        if self._stop is not None and self._stop.is_set():
-            return
-        if self._shell_exit_fired:
-            return
-        if not await self._engine_alive_after_close():
-            return
-        if fast and not await self._engine_connected_and_healthy():
+        if not await self._should_fire_exit(fast):
             return
         self._shell_exit_fired = True
+        log.info("壳窗被关闭（引擎仍在正常连接），立即触发应用退出" if fast
+                 else "壳窗被关闭（引擎存活），触发应用退出")
         if self._on_shell_closed is not None:
-            if fast:
-                log.info("壳窗被关闭（引擎仍在正常连接），立即触发应用退出")
-            else:
-                log.info("壳窗被关闭（引擎存活），触发应用退出")
             self._on_shell_closed()
+
+    async def _should_fire_exit(self, fast: bool) -> bool:
+        """退出判定：已请求停止/已触发过/引擎不健康/快速路径缺强证据，一律不退出。"""
+        if self._stop is not None and self._stop.is_set():
+            return False
+        if self._shell_exit_fired:
+            return False
+        if not await self._engine_alive_after_close():
+            return False
+        return not (fast and not await self._engine_connected_and_healthy())
 
     # ---------------- 判活引用 ----------------
     @staticmethod

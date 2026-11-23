@@ -186,36 +186,43 @@ def _find_targets(markers: list[str]) -> dict[str, list[int]]:
 
 
 def _reap(markers: list[str], log_path: str = "") -> None:
-    """清理残留引擎进程：先找列表、逐个 kill、逐条落日志。"""
+    """清理残留引擎进程：先找列表、逐个 marker 清理、逐条落日志。"""
     hits = _find_targets(markers)
     for idx, m in enumerate(markers):
         if not m:
             continue
-        pids = hits.get(m, [])
-        if not pids:
-            _log(log_path, "reap", f"marker[{idx}] 无命中（{m}）")
-            continue
-        ok, fail = 0, []
-        for pid in pids:
-            try:
-                if sys.platform == "win32":
-                    import psutil  # noqa: PLC0415（仅 Windows）
+        _reap_marker(idx, m, hits.get(m, []), log_path)
 
-                    psutil.Process(pid).kill()
-                else:
-                    os.kill(pid, 9)
-                ok += 1
-            except ProcessLookupError:
-                ok += 1  # 已自行退出，同样算清理完成
-            except Exception as e:  # noqa: BLE001
-                fail.append(f"{pid}:{e.__class__.__name__}")
-        _log(
-            log_path,
-            "reap",
-            f"marker[{idx}] 命中 {len(pids)} killed={ok} "
-            f"pids={','.join(str(p) for p in pids)} 失败={fail or '无'}",
-        )
 
+def _reap_marker(idx: int, marker: str, pids: list, log_path: str) -> None:
+    if not pids:
+        _log(log_path, "reap", f"marker[{idx}] 无命中（{marker}）")
+        return
+    ok, fail = 0, []
+    for pid in pids:
+        try:
+            _kill_pid(pid)
+            ok += 1
+        except ProcessLookupError:
+            ok += 1  # 已自行退出，同样算清理完成
+        except Exception as e:  # noqa: BLE001
+            fail.append(f"{pid}:{e.__class__.__name__}")
+    _log(
+        log_path,
+        "reap",
+        f"marker[{idx}] 命中 {len(pids)} killed={ok} "
+        f"pids={','.join(str(p) for p in pids)} 失败={fail or '无'}",
+    )
+
+
+def _kill_pid(pid: int) -> None:
+    """Windows 用 psutil、其他平台 SIGKILL；平台差异只在这一处。"""
+    if sys.platform == "win32":
+        import psutil  # noqa: PLC0415（仅 Windows）
+
+        psutil.Process(pid).kill()
+        return
+    os.kill(pid, 9)
 
 def _child_main(read_fd: int, markers: list[str], log_path: str) -> None:
     """子进程主体：等父进程死 → 清理 → 退出。永不返回。"""

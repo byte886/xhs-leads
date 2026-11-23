@@ -377,30 +377,40 @@ async def _pick_filter_point(page, val: str):
     取到的 y 会远超 innerHeight，鼠标事件落到视口外 —— 表现为「筛选没生效」却查不出
     原因（Windows 连续第二次采集出现过）。越界时先把页面滚回筛选栏再重取一次。
     """
-    pt = None
-    for _ in range(4):
-        pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
-        if pt:
-            break
-        await asyncio.sleep(0.8)
+    pt = await _poll_filter_point(page, val)
     if not pt:
         return None
     await asyncio.sleep(0.8)
     pt = await page.evaluate(_FILTER_TAG_POINT_JS, val) or pt
     vp = await page.evaluate(_VIEWPORT_JS)
-    if not (0 <= pt["x"] <= vp["w"] and 0 <= pt["y"] <= vp["h"]):
-        log.info("筛选选项 %s 坐标 (%s,%s) 超出视口 %sx%s，滚回筛选栏后重取",
-                 val, pt["x"], pt["y"], vp["w"], vp["h"])
-        await page.evaluate(_FILTER_SCROLL_BACK_JS)
-        await asyncio.sleep(0.7)
+    if _in_viewport(pt, vp):
+        return pt
+    log.info("筛选选项 %s 坐标 (%s,%s) 超出视口 %sx%s，滚回筛选栏后重取",
+             val, pt["x"], pt["y"], vp["w"], vp["h"])
+    await page.evaluate(_FILTER_SCROLL_BACK_JS)
+    await asyncio.sleep(0.7)
+    pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
+    if not pt:
+        return None
+    vp = await page.evaluate(_VIEWPORT_JS)
+    if _in_viewport(pt, vp):
+        return pt
+    log.info("筛选选项 %s 仍超出视口 (%sx%s)，放弃该项", val, vp["w"], vp["h"])
+    return None
+
+
+async def _poll_filter_point(page, val: str, tries: int = 4):
+    """等选项渲染：每 0.8s 取一次坐标，取不到返回 None。"""
+    for _ in range(tries):
         pt = await page.evaluate(_FILTER_TAG_POINT_JS, val)
-        if not pt:
-            return None
-        vp = await page.evaluate(_VIEWPORT_JS)
-        if not (0 <= pt["x"] <= vp["w"] and 0 <= pt["y"] <= vp["h"]):
-            log.info("筛选选项 %s 仍超出视口 (%sx%s)，放弃该项", val, vp["w"], vp["h"])
-            return None
-    return pt
+        if pt:
+            return pt
+        await asyncio.sleep(0.8)
+    return None
+
+
+def _in_viewport(pt: dict, vp: dict) -> bool:
+    return 0 <= pt["x"] <= vp["w"] and 0 <= pt["y"] <= vp["h"]
 
 
 async def _close_filter_panel(page) -> None:
@@ -721,15 +731,28 @@ async def _open_login_page(page, timeout_s: float = 30) -> bool:
             url = page.url or ""
         except Exception:  # noqa: BLE001（页面已毁：交给上层重试）
             return False
-        if "captcha" in url or "website-login" in url:
-            # 平台把 /login 直接跳人机验证时会一直停在这里，等满 30s 再报「限流」
-            # 会让用户以为是自己操作问题。立即结束并说清要去做什么。
-            log.warning("登录页停在人机验证：%s（需人工在采集窗完成验证后重试）",
-                        url[:120])
-            return False
-        if "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url:
+        verdict = _login_verdict(url)
+        if verdict == "ok":
             return True
+        if verdict == "blocked":
+            return False
     return False
+
+
+def _login_verdict(url: str) -> str:
+    """登录页当前状态：ok=已进浏览页 / blocked=停在验证或登录页 / wait=还在跳转。
+
+    平台把 /login 直接跳人机验证时会一直停在这里，等满 30s 再报「限流」会让用户
+    以为是自己操作问题 —— 所以这里立即给出 blocked。
+    """
+    if url == "":
+        return "blocked"
+    if "captcha" in url or "website-login" in url:
+        log.warning("登录页停在人机验证：%s（需人工在采集窗完成验证后重试）", url[:120])
+        return "blocked"
+    if "xiaohongshu.com" in url and "/login" not in url and "captcha" not in url:
+        return "ok"
+    return "wait"
 
 
 # 保证「后端 login_status」与「采集侧未登录拦截」不会口径分裂）。
@@ -1323,8 +1346,13 @@ def _page_position(page) -> str:
         url = page.url or ""
     except Exception:  # noqa: BLE001
         return "other"
+    return _url_position(url)
+
+
+def _url_position(url: str) -> str:
+    """URL → 位置标签。error 必须排在 detail 之前：redirectPath 里带着 /explore/xx。"""
     if "website-login/error" in url or "error_code=300013" in url:
-        return "error"          # 必须排在 /explore/ 之前：redirectPath 里带着 /explore/xx
+        return "error"
     if "/user/profile/" in url:
         return "author"
     if "search_result" in url:
