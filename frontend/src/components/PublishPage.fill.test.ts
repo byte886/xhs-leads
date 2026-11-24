@@ -29,10 +29,12 @@ describe('PublishPage 填入就绪判定', () => {
     await (w.vm as any).openFor({ feed_id: 'f1', title: '标题', desc: '正文内容' })
     await flush()
     expect(btn(w).attributes('disabled')).toBeDefined()
-    expect(w.find('.fill-hint').text()).toContain('正在加载')
+    expect(btn(w).text()).toBe('加载中…')
+    expect(btn(w).attributes('title')).toContain('正在加载')
     release({ title: '标题', desc: '正文内容', images_local: ['/images/a.jpg'] })
     await flush()
     expect(btn(w).attributes('disabled')).toBeUndefined()
+    expect(btn(w).text()).toBe('填入小红书发布页')
     expect(w.find('.fill-hint').exists()).toBe(false)
   })
 
@@ -42,7 +44,7 @@ describe('PublishPage 填入就绪判定', () => {
     await (w.vm as any).openFor({ feed_id: 'f2', title: '标题', desc: '正文内容' })
     await flush()
     expect(btn(w).attributes('disabled')).toBeDefined()
-    expect(w.find('.fill-hint').text()).toContain('图片')
+    expect(btn(w).text()).toBe('缺图片')
   })
 
   it('标题或正文为空也不可用', async () => {
@@ -51,8 +53,8 @@ describe('PublishPage 填入就绪判定', () => {
     await (w.vm as any).openFor({ feed_id: 'f3', title: '', desc: '' })
     await flush()
     expect(btn(w).attributes('disabled')).toBeDefined()
-    expect(w.find('.fill-hint').text()).toContain('标题')
-    expect(w.find('.fill-hint').text()).toContain('正文')
+    expect(btn(w).text()).toBe('缺标题、正文')
+    expect(btn(w).attributes('title')).toContain('标题')
   })
 
   it('载荷自带完整图片时立即可用（不等待后台克隆）', async () => {

@@ -192,6 +192,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
 .pub-btns button { padding: 11px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; }
 .btn-back, .btn-draft { border: 1px solid var(--line); background: var(--panel); }
 .btn-pub { background: var(--red); color: #fff; margin-left: auto; }
+.btn-pub:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ---- 基础按钮体系：此前全局没有 .btn，主操作只是裸文字，看不出可点 ----
    三档：默认（墨边底线）/ primary（唯一 accent 填充）/ danger（砖红，避开品牌红） */

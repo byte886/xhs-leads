@@ -124,6 +124,14 @@ const fillHint = computed(() => {
   return ''
 })
 
+/** 按钮上的短提示：就绪前用按钮文字说状态，不额外占位挤压排版 */
+const fillLabel = computed(() => {
+  if (filling.value) return '正在填入…'
+  if (clonePending.value) return '加载中…'
+  if (missingParts.value.length) return `缺${missingParts.value.join('、')}`
+  return '填入小红书发布页'
+})
+
 function removeImg(i: number) {
   images.value.splice(i, 1)
 }
@@ -328,8 +336,7 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
           <b>原视频已下载</b>（{{ videoFile }}）——发布时在小红书发布页手动选择该本地视频文件上传即可（与正常发视频笔记一致，无需额外上传通道）。
         </div>
         <div class="pub-btns">
-          <button class="btn-pub" :disabled="filling || !canFill" :title="fillHint" @click="fillXhs">{{ filling ? '正在填入…' : '填入小红书发布页' }}</button>
-          <span v-if="fillHint" class="fill-hint">{{ fillHint }}</span>
+          <button class="btn-pub" :disabled="filling || !canFill" :title="fillHint" @click="fillXhs">{{ fillLabel }}</button>
         </div>
       </template>
     </div>
