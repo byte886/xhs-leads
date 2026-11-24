@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// FlowBar：3 个平级功能选项卡（采集 / 客户库 / 设置；档案页保留但暂不露出）
+// FlowBar：2 个平级功能选项卡（采集 / 设置；客户库走「采集客户」弹层，档案页暂不露出）
 // 它们是并列的功能入口，不是先后步骤——所以用分段选项卡呈现，不带序号、不带箭头。
 // 登录态 / AI Key 状态徽标已移除：这些状态在「设置」页查看。
 import { appState, setTab } from '../store'
@@ -7,7 +7,6 @@ import type { Tab } from '../store'
 
 const tabs: { id: Tab; label: string }[] = [
   { id: 'collect', label: '采集' },
-  { id: 'clients', label: '客户库' },
   { id: 'settings', label: '设置' },
 ]
 </script>

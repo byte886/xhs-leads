@@ -8,7 +8,6 @@ import CollectPanel from './components/CollectPanel.vue'
 import WorkArea from './components/WorkArea.vue'
 import PublishPage from './components/PublishPage.vue'
 import ClientsPanel from './components/ClientsPanel.vue'
-import ClientsLibrary from './components/ClientsLibrary.vue'
 import ProfilePanel from './components/ProfilePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -326,13 +325,6 @@ onMounted(async () => {
             <ClientsPanel ref="clientsRef" :feed-id="clientsFeedId" />
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- 客户库 Tab：跨天/跨会话累积的互动用户总览（不带 feedId 看全库） -->
-    <div v-show="appState.tab === 'clients'" class="work">
-      <div style="max-width:1100px;margin:0 auto">
-        <ClientsLibrary />
       </div>
     </div>
 

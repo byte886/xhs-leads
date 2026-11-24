@@ -3,15 +3,44 @@
 // 采集完成/新增线索后由 App.vue 调 refresh() 重新拉取
 import { computed, onMounted, ref } from 'vue'
 import type { ClientUser } from '../types'
-import { apiClientsList, apiContactOpen } from '../api'
+import { apiClientsClear, apiClientsList, apiContactOpen } from '../api'
 import { toast } from '../store'
 
-// 两种用法：卡片右键弹层传 feedId（只看这一篇）；「客户库」Tab 不传（看跨会话累积的全库）
+// 用法：卡片右键「采集客户」弹层传 feedId；弹层内可切「本篇 / 全部（跨次累积）」两种口径
 const props = defineProps<{ feedId?: string }>()
-const isGlobal = computed(() => !props.feedId)
 
 const clients = ref<ClientUser[]>([])
 const clTab = ref<'all' | 'high'>('all')
+/** 弹层内的查看口径：本篇（默认，按 feed_id 过滤）/ 全部（全库累积） */
+const scope = ref<'note' | 'all'>('note')
+const isGlobal = computed(() => !props.feedId || scope.value === 'all')
+
+/** 清空客户库：破坏性动作，两次点击确认（4 秒内未再点自动撤销） */
+const clearing = ref(false)
+const clearArmed = ref(false)
+let disarmTimer: ReturnType<typeof setTimeout> | null = null
+
+async function onClear() {
+  if (clearing.value) return
+  if (!clearArmed.value) {
+    clearArmed.value = true
+    if (disarmTimer) clearTimeout(disarmTimer)
+    disarmTimer = setTimeout(() => { clearArmed.value = false }, 4000)
+    return
+  }
+  if (disarmTimer) { clearTimeout(disarmTimer); disarmTimer = null }
+  clearArmed.value = false
+  clearing.value = true
+  try {
+    const r = await apiClientsClear()
+    toast(`已清空客户库 ${r.removed} 条`)
+    await loadClients()
+  } catch {
+    toast('清空客户库失败')
+  } finally {
+    clearing.value = false
+  }
+}
 
 
 
@@ -31,7 +60,7 @@ async function loadClients() {
   try {
     let intent = ''
     if (clTab.value === 'high') intent = 'high'
-    const res = await apiClientsList(props.feedId || '', intent)
+    const res = await apiClientsList(isGlobal.value ? '' : (props.feedId || ''), intent)
     // 一人可有多条评论，逐条展示；「XX关注」这类动作记录老数据里可能还在，逐条挡掉
     clients.value = (res.clients || [])
       .map((c) => ({
@@ -56,6 +85,13 @@ onMounted(() => { refresh() })
 
 async function setClTab(tab: 'all' | 'high') {
   clTab.value = tab
+  await loadClients()
+}
+
+async function setScope(s: 'note' | 'all') {
+  if (scope.value === s) return
+  scope.value = s
+  clearArmed.value = false
   await loadClients()
 }
 
@@ -116,6 +152,14 @@ defineExpose({ refresh, count })
 
 <template>
   <div>
+    <div v-if="props.feedId" class="cl-scope">
+      <button class="cl-scope-btn" :class="{ on: scope === 'note' }" @click="setScope('note')">本篇</button>
+      <button class="cl-scope-btn" :class="{ on: scope === 'all' }" @click="setScope('all')">全部（跨次累积）</button>
+      <span v-if="scope === 'all'" class="cl-scope-hint">按人去重 · 一人取最高意向</span>
+      <button v-if="scope === 'all'" class="cl-clear" :class="{ armed: clearArmed }" :disabled="clearing" @click="onClear">
+        {{ clearing ? '清空中…' : clearArmed ? '再点一次确认清空' : '清空客户库' }}
+      </button>
+    </div>
     <div class="cl-empty-wrap" v-if="!clients.length">
       <div class="big">{{ isGlobal ? '客户库还没有客户' : '这篇笔记还没有采集到客户' }}</div>
       <p v-if="isGlobal">在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级累积到这里（跨次采集按人去重）</p>
@@ -202,6 +246,39 @@ defineExpose({ refresh, count })
 </template>
 
 <style scoped>
+.cl-scope {
+  /* 弹层里滚动列表时口径条跟着吸顶，避免滚下去后找不到「本篇/全部」与清空入口。
+     负 margin/top 抵消 .publish-body 的 18px 内边距，贴合可视区顶部。 */
+  position: sticky; top: -18px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  margin: -18px -22px 10px; padding: 12px 22px 9px;
+  background: #fff; border-bottom: 1px solid var(--line, #ececec);
+}
+.cl-scope-btn {
+  border: 1px solid var(--line, #ececec);
+  background: var(--bg-card, #fff);
+  color: var(--ink-2, #888);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cl-scope-btn.on { border-color: #e0b36b; color: #b08a4d; font-weight: 600; background: #fff8ef; }
+.cl-scope-hint { font-size: 11.5px; color: var(--ink-3, #999); }
+.cl-clear {
+  margin-left: auto;
+  border: 1px solid var(--line, #ececec);
+  background: var(--bg-card, #fff);
+  color: var(--ink-2, #888);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cl-clear:hover:not(:disabled) { border-color: #e3b1b1; color: #b35454; }
+.cl-clear.armed { border-color: #d9534f; color: #d9534f; font-weight: 600; background: #fdf1f1; }
+.cl-clear:disabled { opacity: .6; cursor: default; }
 .cl-empty-wrap { padding: 60px 0; text-align: center; }
 .cl-empty-wrap .big { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
 .cl-empty-wrap p { font-size: 13px; color: var(--ink-2, #888); }

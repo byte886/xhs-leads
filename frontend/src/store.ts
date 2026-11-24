@@ -29,7 +29,7 @@ function saveParams(p: SearchParams) {
 
 /** 工作流 5-Tab：采集 → 创作 → 客户 → 档案 → 设置
  *  档案独立成 Tab：它是内容资产（谁在说话、卖什么、什么价），不是软件配置。 */
-export type Tab = 'collect' | 'clients' | 'profiles' | 'settings'
+export type Tab = 'collect' | 'profiles' | 'settings'
 
 /** 全局共享观察状态（顶部状态条：登录 / AI Key） */
 export interface SysStatus {
