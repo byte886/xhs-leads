@@ -278,7 +278,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ring); bord
     height: auto; min-height: 132px; max-height: none; flex: none;
     overflow: visible;
   }
-  .work { flex: none; min-height: 0; overflow: visible; }
+  /* 只让「采集页」里的结果区跟随 workbench 一起滚；顶层 Tab 页（客户库/设置/档案）
+     仍是 .work 直接挂在 .app-shell 下，必须保留自己的滚动条（客户库 100+ 行，
+     640px 窄窗下不滚就整页被 .app-shell 的 overflow:hidden 裁掉）。 */
+  .workbench > .work { flex: none; min-height: 0; overflow: visible; }
   .publish { padding: 16px; }
 }
 
