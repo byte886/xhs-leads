@@ -16,6 +16,9 @@ const videoFile = ref('')  // 视频克隆：原视频本地路径（/videos/...
 const videoUrl = ref('')   // 原视频远端地址（仅展示用）
 const filling = ref(false)
 const loading = ref(false)
+// 克隆完整载荷（标题/正文/图片）是否还在拉取中：拉取期间「填入小红书发布页」不可用，
+// 避免点了才报「至少要有一张图片」这类可以提前拦掉的错误。
+const clonePending = ref(false)
 // AI 改写前置门：未配置「生成文章」模型时按钮灰态并给原因，不靠点了再报错。
 // null = 尚未取到配置（此时不拦，避免慢请求误伤正常流程）。
 const aiReady = ref<boolean | null>(null)
@@ -57,6 +60,7 @@ type CloneTarget = Note | { feed_id: string; title: string; desc: string; images
 
 async function openFor(note: CloneTarget) {
   loading.value = true
+  clonePending.value = true
   feedId.value = note.feed_id || ''
   videoFile.value = ''
   videoUrl.value = ''
@@ -67,6 +71,7 @@ async function openFor(note: CloneTarget) {
       title.value = note.title || ''
       body.value = note.desc || ''
       images.value = dedupe(note.images)
+      clonePending.value = false
     } else {
       // 秒开：先用列表已有数据（标题/正文/封面占位），后台拉克隆载荷补图，不阻塞编辑
       title.value = note.title || ''
@@ -87,6 +92,10 @@ async function openFor(note: CloneTarget) {
         .catch(() => {
           /* 后台补图失败则保留占位封面，不打断编辑 */
         })
+        .finally(() => {
+          // 无论成功失败都解锁：失败时按已拿到的字段判断是否齐全
+          clonePending.value = false
+        })
       return
     }
   } catch (e) {
@@ -97,6 +106,23 @@ async function openFor(note: CloneTarget) {
 }
 
 defineExpose({ openFor })
+
+/** 填入前必须齐的三样：标题、正文、图片（视频克隆可用本地视频替代图片） */
+const missingParts = computed(() => {
+  const miss: string[] = []
+  if (!title.value.trim()) miss.push('标题')
+  if (!body.value.trim()) miss.push('正文')
+  if (!images.value.length && !videoFile.value) miss.push('图片')
+  return miss
+})
+
+const canFill = computed(() => !clonePending.value && missingParts.value.length === 0)
+
+const fillHint = computed(() => {
+  if (clonePending.value) return '正在加载标题、正文和图片…'
+  if (missingParts.value.length) return `还缺${missingParts.value.join('、')}，齐全后才可填入`
+  return ''
+})
 
 function removeImg(i: number) {
   images.value.splice(i, 1)
@@ -302,7 +328,8 @@ function onWizardApply(v: { title: string; body: string; images: string[] }) {
           <b>原视频已下载</b>（{{ videoFile }}）——发布时在小红书发布页手动选择该本地视频文件上传即可（与正常发视频笔记一致，无需额外上传通道）。
         </div>
         <div class="pub-btns">
-          <button class="btn-pub" :disabled="filling" @click="fillXhs">{{ filling ? '正在填入…' : '填入小红书发布页' }}</button>
+          <button class="btn-pub" :disabled="filling || !canFill" :title="fillHint" @click="fillXhs">{{ filling ? '正在填入…' : '填入小红书发布页' }}</button>
+          <span v-if="fillHint" class="fill-hint">{{ fillHint }}</span>
         </div>
       </template>
     </div>
