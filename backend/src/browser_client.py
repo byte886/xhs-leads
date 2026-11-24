@@ -10,6 +10,7 @@
 - headless 登录判定（无窗口）保留独立逻辑，不占用账号引擎。
 """
 import asyncio
+import contextlib
 import os
 import random
 import re
@@ -2187,15 +2188,31 @@ class FillXhsError(RuntimeError):
 
 _CREATOR_PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
 _FILL_TITLE_SEL = 'input.d-text[placeholder*="填写标题"]'
-_FILL_BODY_SEL = "div.tiptap.ProseMirror"
-_FILL_IMAGE_INPUT = 'input.upload-input[type="file"]'
+_FILL_BODY_SEL = "div.tiptap, div.ProseMirror"
+# 2026-11-24 真机复测：平台改版后图片上传输入不再带 upload-input 类，
+# 只剩无 class 的 input[type=file][accept=".jpg,.jpeg,.png,.webp"]，按 accept 兜底匹配。
+_FILL_IMAGE_INPUT = 'input[type="file"][accept*=".jpg"], input[type="file"][accept*="image"]'
 
-# 发布页默认停在「上传视频」，点 tab 切到「上传图文」；已在图文时点不到、无副作用
+# 发布页默认停在「上传视频」，点 tab 切到「上传图文」；已在图文时点不到、无副作用。
+# 2026-11-24 复测：`.creator-tab` 仍在，但 DOM 里同时存在一份离屏副本（坐标 -9000+），
+# 直接点第一个会命中隐藏节点、点了没反应；必须先按可见性过滤再点。
 _SWITCH_IMAGE_TAB_JS = """() => {
-  for (const e of [...document.querySelectorAll('.creator-tab')]) {
-    if ((e.innerText || '').trim() === '上传图文') { e.click(); return true; }
+  const visible = (e) => {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.x > -100 && r.y > -100;
+  };
+  const tabs = [...document.querySelectorAll('.creator-tab')]
+    .filter((e) => (e.innerText || '').trim() === '上传图文' && visible(e));
+  let node = tabs[0];
+  if (!node) {
+    node = [...document.querySelectorAll('*')].filter(
+      (e) => e.children.length === 0 && (e.innerText || '').trim() === '上传图文' && visible(e)
+    )[0];
   }
-  return false;
+  if (!node) return false;
+  const btn = node.closest('.creator-tab, button, [role=tab], li, a') || node;
+  btn.click();
+  return true;
 }"""
 
 
@@ -2222,45 +2239,90 @@ async def _ensure_publish_page(account_id: str = "default"):
 async def _fill_images(creator, files: list[str]) -> None:
     if not files:
         return
-    await cdp_call(creator.locator(_FILL_IMAGE_INPUT).set_input_files(files),
-                   timeout=CDP_NAV, label="fill.images")
+    # 页面上可能有两个 accept 相同的上传入口（图文/长文各一个），取可见的第一个
+    inputs = creator.locator(_FILL_IMAGE_INPUT)
+    n = await inputs.count()
+    target = None
+    for i in range(n):
+        cand = inputs.nth(i)
+        with contextlib.suppress(Exception):
+            if await cand.is_visible():
+                target = cand
+        if target is not None:
+            break
+    if target is None and n:
+        target = inputs.first
+    if target is None:
+        raise FillXhsError("发布页上没有找到图片上传入口")
+    await cdp_call(target.set_input_files(files), timeout=CDP_NAV, label="fill.images")
     await asyncio.sleep(3)
 
 
 async def _fill_text(creator, title: str, body: str) -> None:
     await creator.fill(_FILL_TITLE_SEL, (title or "").strip()[:20])
     if body:
-        await cdp_call(creator.click(_FILL_BODY_SEL), timeout=CDP_EVAL, label="fill.body_click")
+        editor = creator.locator(_FILL_BODY_SEL).first
+        await cdp_call(editor.click(), timeout=CDP_EVAL, label="fill.body_click")
         await creator.keyboard.insert_text(body[:1000])
+
+
+async def _switch_image_tab(creator, timeout_s: float = 15.0) -> bool:
+    """切到「上传图文」，返回是否已进到图文编辑页。
+
+    新开的发布页要先加载出 tab 才点得到，所以这里按 0.8s 步进重试，
+    直到标题框/图片入口出现或超时（已在图文页会立刻返回 True）。
+    """
+    async def _has_editor() -> bool:
+        try:
+            return await creator.locator(_FILL_TITLE_SEL).count() > 0 or \
+                await creator.locator(_FILL_IMAGE_INPUT).count() > 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_s:
+        if await _has_editor():
+            return True
+        # 页面还在加载时 evaluate 可能抛，忽略后下一轮重试
+        with contextlib.suppress(Exception):
+            await creator.evaluate(_SWITCH_IMAGE_TAB_JS)
+        await asyncio.sleep(0.8)
+    return await _has_editor()
 
 
 async def fill_write_page(title: str, body: str, images: list[str],
                           account_id: str = "default") -> str:
     """把标题/正文/标签/图片填进创作者中心发布页，**不点「发布」**。
 
-    真机验证（2026-11-13）：发布页 = creator.xiaohongshu.com/publish/publish，
-    标题 `input.d-text[placeholder*="填写标题"]`、正文 tiptap `div.tiptap.ProseMirror`、
-    图片 `input.upload-input[type=file]`（可多选）。可见范围/发布账号由平台自己管，不在此设置。
+    真机验证（2026-11-13，2026-11-24 复测）：发布页 = creator.xiaohongshu.com/publish/publish，
+    标题 `input.d-text[placeholder*="填写标题"]`、正文 tiptap `div.tiptap`、
+    图片 `input[type=file][accept*=jpg]`（可多选；旧 `input.upload-input` 已随平台改版失效）。
+    可见范围/发布账号由平台自己管，不在此设置。
     """
     creator = await _ensure_publish_page(account_id)
     await asyncio.sleep(2)
-    # 等页面侧栏 tab 渲染出来再切「上传图文」（刚打开时 tab 还没出来）
-    try:
-        await creator.wait_for_selector(".creator-tab", timeout=12000)
-    except Exception as exc:  # noqa: BLE001
-        raise FillXhsError("发布页没加载出来（可能未登录或被风控拦截）") from exc
-    try:
-        await creator.evaluate(_SWITCH_IMAGE_TAB_JS)
-    except Exception:  # noqa: BLE001  # 已在图文页，tab 点不到
-        pass
+    # 先切「上传图文」：新开的发布页默认停在「上传视频」，此时标题框/图片入口都还不存在，
+    # 所以必须先切 tab，再等编辑区（顺序反了会一直等不到）。
+    switched = await _switch_image_tab(creator)
     await asyncio.sleep(1.5)
+    log.info("fill_xhs: switched=%s url=%s", switched, creator.url)
+    # 等编辑区渲染出来（标题框或图片上传入口出现即说明进到图文编辑页）
+    # 等编辑区结构就位：图片上传入口是隐藏 input（不可见），标题框要等图片传完才出现，
+    # 所以这里只能等「挂载」而不是「可见」，否则会一直等到超时。
+    try:
+        await creator.wait_for_selector(_FILL_TITLE_SEL + ", " + _FILL_IMAGE_INPUT,
+                                        state="attached", timeout=20000)
+    except Exception as exc:
+        msg = ("没能切到「上传图文」（可能页面改版或被风控拦截）" if not switched
+               else "发布页没加载出来（可能未登录或被风控拦截）")
+        raise FillXhsError(msg) from exc
     if not images:
         raise FillXhsError("图文笔记至少要有一张图片：请先补图再填入")
     await _fill_images(creator, images)
     # 标题/正文编辑区在上传图片之后才出现，这里等它渲染
     try:
         await creator.wait_for_selector(_FILL_TITLE_SEL, timeout=15000)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise FillXhsError("图片上传后没出现标题编辑区（可能上传失败或被风控拦截）") from exc
     await _fill_text(creator, title, body)
     return "已把标题/正文/标签/图片填进小红书发布页，请确认后手动点「发布」"
