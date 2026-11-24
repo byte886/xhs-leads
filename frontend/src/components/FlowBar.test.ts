@@ -1,4 +1,4 @@
-// FlowBar 组件测试（@vue/test-utils）：2 个平级功能选项卡
+// FlowBar 组件测试（@vue/test-utils）：3 个平级功能选项卡
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import FlowBar from './FlowBar.vue'
@@ -9,11 +9,12 @@ beforeEach(() => {
 })
 
 describe('FlowBar', () => {
-  it('渲染 2 个功能 Tab（采集/设置）', () => {
+  it('渲染 3 个功能 Tab（采集/客户库/设置）', () => {
     const w = mount(FlowBar)
     const labels = w.findAll('.tab').map(b => b.text())
-    expect(labels).toHaveLength(2)
+    expect(labels).toHaveLength(3)
     expect(labels.join()).toContain('采集')
+    expect(labels.join()).toContain('客户库')
     expect(labels.join()).toContain('设置')
   })
 
@@ -29,6 +30,8 @@ describe('FlowBar', () => {
     const w = mount(FlowBar)
     const tabs = w.findAll('.tab')
     await tabs[1].trigger('click')
+    expect(appState.tab).toBe('clients')
+    await tabs[2].trigger('click')
     expect(appState.tab).toBe('settings')
   })
 

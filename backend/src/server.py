@@ -77,16 +77,19 @@ def _mark_collect_done(account_id: str = "default") -> None:
 
 
 def _reset_collection_data() -> int:
-    """清空采集存储数据（笔记 + 客户 + 采集下载的本地图片）。
+    """清空「本批采集」数据：笔记 + 采集条件上下文 + 采集下载的本地图片。
 
-    语义（z8p 调整）：应用重启时清空一次；前端点「开始采集」前调 /api/collect_clear 清一次。
+    **客户库不清**（clients 表跨会话累积，见 /api/clients_clear 的显式清空入口）——
+    客户是逐条评论沉淀下来的线索资产，重开应用/换关键词重采都不该把它抹掉；
+    同一篇笔记重采时按 (uid, feed_id, comment) 去重合并，人数口径按 uid 收敛。
+
+    语义：应用重启时清空一次；前端点「开始采集」前调 /api/collect_clear 清一次。
     本函数只被这两处显式调用，不再由 collect_start 隐式触发。
     user_ 前缀（发布页「追加图片」上传资产）属用户主动操作产物，保留。
     返回删除的图片文件数。
     """
     con = _db()
     con.execute("DELETE FROM notes")
-    con.execute("DELETE FROM clients")
     con.execute("DELETE FROM collect_ctx")
     con.commit()
     removed = 0
@@ -103,7 +106,7 @@ def _reset_collection_data() -> int:
 
 @app.on_event("startup")
 async def _startup_cleanup():
-    """启动时清理：残留任务 tab + 采集存储数据。best-effort 不阻塞启动。
+    """启动时清理：残留任务 tab + 本批采集数据（客户库保留）。best-effort 不阻塞启动。
 
     仅清理「已运行」引擎的残留 tab；引擎未启动时跳过——启动清理不应有
     拉起引擎的副作用（打包态冷启动慢，dev 态回归也依赖本钩子不拉引擎）。
@@ -1389,7 +1392,9 @@ async def _collect_worker(state: dict, req, account_id: str) -> None:
 
 @app.post("/api/collect_clear")
 def collect_clear():
-    """清空本批采集数据（笔记 + 客户 + 采集图片），独立于开始采集。
+    """清空本批采集数据（笔记 + 采集条件 + 采集图片），独立于开始采集。
+
+    客户库（clients 表）不清：它跨会话累积，要清走 POST /api/clients_clear。
 
     拆出来的原因：清空是破坏性动作，不该藏在「开始采集」里顺手做——
     外部脚本或别的入口调 collect_start 时不应被动清库。
@@ -2307,6 +2312,30 @@ def clients_list(feed_id: str = "", intent: str = ""):
         d["comments"] = [c for c in raw.split(chr(31)) if c]
         out.append(d)
     return {"total": len(out), "clients": out}
+
+
+class ClientsClearReq(BaseModel):
+    feed_id: str = ""
+
+
+@app.post("/api/clients_clear")
+def clients_clear(req: ClientsClearReq | None = None):
+    """显式清空客户库（跨会话累积的唯一清空入口）。
+
+    带 feed_id 只清某篇笔记的客户，不带则清空全库。
+    客户数据默认跨天/跨会话累积，所以不做自动清理，避免误伤历史线索。
+    """
+    feed_id = (req.feed_id if req else "").strip()
+    con = _db()
+    try:
+        if feed_id:
+            cur = con.execute("DELETE FROM clients WHERE feed_id = ?", (feed_id,))
+        else:
+            cur = con.execute("DELETE FROM clients")
+        con.commit()
+        return {"ok": True, "removed": cur.rowcount or 0}
+    finally:
+        con.close()
 
 
 class ContactOpenReq(BaseModel):

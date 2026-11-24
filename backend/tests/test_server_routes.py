@@ -747,7 +747,8 @@ class TestCollectClients:
 class TestCollectClear:
     """z8p：清库从 collect_start 拆成独立接口——collect_start 不再隐式删数据。"""
 
-    def test_clear_removes_notes_and_clients(self, client, tmp_path):
+    def test_clear_removes_notes_keeps_clients(self, client, tmp_path):
+        """客户库跨会话累积：清本批采集数据不能连带抹掉客户线索。"""
         con = sqlite3.connect(tmp_path / "test.db")
         con.row_factory = sqlite3.Row
         server._init_tables(con)
@@ -762,7 +763,7 @@ class TestCollectClear:
 
         con = sqlite3.connect(tmp_path / "test.db")
         assert con.execute("SELECT COUNT(*) FROM notes").fetchone()[0] == 0
-        assert con.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 1
         con.close()
 
     def test_clear_keeps_user_uploaded_images(self, client, tmp_path):

@@ -6,8 +6,9 @@ import type { ClientUser } from '../types'
 import { apiClientsList, apiContactOpen } from '../api'
 import { toast } from '../store'
 
-// 备注是采到哪篇笔记的客户（弹层按篇过滤，不再显示全库历史）
+// 两种用法：卡片右键弹层传 feedId（只看这一篇）；「客户库」Tab 不传（看跨会话累积的全库）
 const props = defineProps<{ feedId?: string }>()
+const isGlobal = computed(() => !props.feedId)
 
 const clients = ref<ClientUser[]>([])
 const clTab = ref<'all' | 'high'>('all')
@@ -116,8 +117,9 @@ defineExpose({ refresh, count })
 <template>
   <div>
     <div class="cl-empty-wrap" v-if="!clients.length">
-      <div class="big">这篇笔记还没有采集到客户</div>
-      <p>在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级列在这里</p>
+      <div class="big">{{ isGlobal ? '客户库还没有客户' : '这篇笔记还没有采集到客户' }}</div>
+      <p v-if="isGlobal">在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级累积到这里（跨次采集按人去重）</p>
+      <p v-else>在采集页卡片上右键点「采集客户（本篇评论区）」，抓到的互动用户会按意向分级列在这里</p>
     </div>
     <template v-else>
       <!-- O1-5 获客指引：怎么办 + 风险在哪（不做话术生成） -->
